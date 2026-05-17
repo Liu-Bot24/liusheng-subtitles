@@ -1,0 +1,40 @@
+{
+  "manifest_version": 3,
+  "name": "浮光译影",
+  "description": "为网页视频提供实时翻译字幕和预加载字幕。",
+  "version": "0.1.0",
+  "action": {
+    "default_title": "浮光译影",
+    "default_popup": "src/popup/popup.html"
+  },
+  "background": {
+    "service_worker": "src/background/service-worker.js",
+    "type": "module"
+  },
+  "permissions": [
+    "activeTab",
+    "offscreen",
+    "scripting",
+    "storage",
+    "tabCapture",
+    "tabs",
+    "webNavigation",
+    "webRequest"
+  ],
+  "host_permissions": [
+    "<all_urls>",
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["src/content/subtitle-overlay.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ]
+}

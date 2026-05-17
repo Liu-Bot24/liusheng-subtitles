@@ -17,11 +17,22 @@ ENV/
 # Local configuration & secrets
 config.ini
 .env
+.env.*
+helper/config.json
 
 # Runtime artifacts
 *.log
 *.tmp
-浮光译影字幕/
+cache/
+logs/
+tmp/
+dist/
+build/
+*.zip
+DEVELOPMENT_LOG.md
+
+# JavaScript
+node_modules/
 
 # OS noise
 .DS_Store
