@@ -1,118 +1,649 @@
 (() => {
+  if (typeof window.__fuguangSubtitleOverlayCleanup === "function") {
+    window.__fuguangSubtitleOverlayCleanup();
+  }
+
   const MESSAGE = {
-    PAGE_MEDIA_FOUND: "FUGUANG_PAGE_MEDIA_FOUND",
-    SET_CAPTION: "FUGUANG_SET_CAPTION",
-    CLEAR_CAPTION: "FUGUANG_CLEAR_CAPTION",
+    DETACH_PRELOAD_VTT: "FUGUANG_DETACH_PRELOAD_VTT",
     ATTACH_VTT: "FUGUANG_ATTACH_VTT",
-    GET_VIDEO_STATE: "FUGUANG_GET_VIDEO_STATE"
+    GET_VIDEO_STATE: "FUGUANG_GET_VIDEO_STATE",
+    SEEK_MEDIA: "FUGUANG_SEEK_MEDIA"
   };
 
   const OVERLAY_ID = "fuguang-caption-overlay";
-  let lastMediaUrl = "";
-  let clearTimer = 0;
+  const STYLE_ID = "fuguang-caption-style";
+  const POSITION_STORAGE_KEY = "captionPosition";
+  const LEGACY_TOP_RATIO_KEY = "captionTopRatio";
+  const SETTINGS_DEFAULTS = {
+    subtitleFontSize: 28,
+    subtitleBackgroundOpacity: 78,
+    subtitleOverlayEnabled: true
+  };
+  const DEFAULT_POSITION = { x: 0.5, y: 0.72 };
+  const MIN_POSITION_RATIO = 0.04;
+  const MAX_POSITION_RATIO = 0.96;
+  const SEEK_REFRESH_DELAYS = [120, 450, 1200];
+  let captionPosition = { ...DEFAULT_POSITION };
+  let captionSettings = { ...SETTINGS_DEFAULTS };
+  let isDragging = false;
+  let dragOffsetX = 0;
+  let dragOffsetY = 0;
+  let savePositionTimer = 0;
+  let activeVttController = null;
+  let lastPrimaryMedia = null;
+  const pendingCaptionTimers = new Set();
 
-  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-    if (message?.type === MESSAGE.SET_CAPTION) {
-      setCaption(message.text, message.mode);
-      sendResponse({ ok: true });
-      return false;
-    }
-    if (message?.type === MESSAGE.CLEAR_CAPTION) {
+  try {
+    chrome.runtime.onMessage.addListener(handleRuntimeMessage);
+    window.__fuguangSubtitleOverlayCleanup = cleanup;
+  } catch {
+    return;
+  }
+
+  function handleRuntimeMessage(message, _sender, sendResponse) {
+    if (message?.type === MESSAGE.DETACH_PRELOAD_VTT) {
+      detachActiveVttController();
       clearCaption();
       sendResponse({ ok: true });
       return false;
     }
     if (message?.type === MESSAGE.ATTACH_VTT) {
-      attachVtt(message.vtt, message.label || "浮光译影");
-      sendResponse({ ok: true });
+      sendResponse({ ok: attachVtt(message.vtt, message.label || "浮光译影") });
       return false;
     }
     if (message?.type === MESSAGE.GET_VIDEO_STATE) {
-      sendResponse({ ok: true, state: getVideoState() });
+      const state = getVideoState();
+      sendResponse({ ok: Boolean(state), state });
+      return false;
+    }
+    if (message?.type === MESSAGE.SEEK_MEDIA) {
+      sendResponse({ ok: seekMedia(message.time) });
       return false;
     }
     return false;
-  });
+  }
 
-  reportPageMedia();
-  setInterval(reportPageMedia, 2000);
+  loadCaptionSettings();
+  loadCaptionPosition();
+  try {
+    chrome.storage.onChanged.addListener(handleStorageChange);
+  } catch {
+    // Old content scripts may remain briefly after extension reload.
+  }
+  document.addEventListener("fullscreenchange", moveOverlayToCurrentMount);
 
-  function setCaption(text, mode = "realtime") {
+  function cleanup() {
+    try {
+      chrome.runtime.onMessage.removeListener(handleRuntimeMessage);
+      chrome.storage.onChanged.removeListener(handleStorageChange);
+    } catch {
+      // Old content script contexts can be invalidated during extension reload.
+    }
+    detachActiveVttController();
+    clearCaption();
+    document.removeEventListener("fullscreenchange", moveOverlayToCurrentMount);
+    document.removeEventListener("pointermove", dragCaption);
+    document.removeEventListener("pointerup", endDrag);
+    document.removeEventListener("pointercancel", endDrag);
+    document.removeEventListener("mousemove", dragCaption);
+    document.removeEventListener("mouseup", endDrag);
+    const overlay = document.getElementById(OVERLAY_ID);
+    const dragHandle = overlay?.querySelector("[data-fuguang-drag-handle]");
+    overlay?.removeEventListener("pointerdown", startDrag);
+    overlay?.removeEventListener("mousedown", startDrag);
+    overlay?.removeEventListener("dblclick", jumpToCurrentCue);
+    dragHandle?.removeEventListener("pointerdown", startDrag);
+    dragHandle?.removeEventListener("mousedown", startDrag);
+    window.removeEventListener("resize", repositionOverlay);
+    window.clearTimeout(savePositionTimer);
+    if (window.__fuguangSubtitleOverlayCleanup === cleanup) {
+      delete window.__fuguangSubtitleOverlayCleanup;
+    }
+  }
+
+  function renderCaption(text, mode = "preload", cueStart = null) {
+    if (!captionSettings.subtitleOverlayEnabled) {
+      clearCaption();
+      return;
+    }
     const overlay = ensureOverlay();
-    overlay.textContent = text;
+    const textNode = overlay.querySelector("[data-fuguang-caption-text]");
+    textNode.textContent = text;
     overlay.dataset.mode = mode;
+    const start = Number(cueStart);
+    if (Number.isFinite(start)) {
+      overlay.dataset.cueStart = String(start);
+      overlay.title = "双击跳转到这句字幕";
+    } else {
+      delete overlay.dataset.cueStart;
+      overlay.removeAttribute("title");
+    }
     overlay.hidden = false;
-    window.clearTimeout(clearTimer);
-    clearTimer = window.setTimeout(() => {
-      overlay.hidden = true;
-    }, 9000);
   }
 
   function clearCaption() {
     const overlay = document.getElementById(OVERLAY_ID);
     if (overlay) {
       overlay.hidden = true;
-      overlay.textContent = "";
+      const textNode = overlay.querySelector("[data-fuguang-caption-text]");
+      if (textNode) {
+        textNode.textContent = "";
+      }
+      delete overlay.dataset.cueStart;
+      overlay.removeAttribute("title");
     }
   }
 
   function ensureOverlay() {
     let overlay = document.getElementById(OVERLAY_ID);
     if (overlay) {
+      ensureStyle();
+      bindOverlayEvents(overlay);
+      moveOverlayToCurrentMount();
+      applyCaptionPosition(overlay);
       return overlay;
     }
+    ensureStyle();
     overlay = document.createElement("div");
     overlay.id = OVERLAY_ID;
     overlay.hidden = true;
-    Object.assign(overlay.style, {
-      position: "fixed",
-      left: "50%",
-      bottom: "8vh",
-      transform: "translateX(-50%)",
-      maxWidth: "min(88vw, 980px)",
-      padding: "10px 18px",
-      borderRadius: "6px",
-      background: "rgba(0, 0, 0, 0.72)",
-      color: "#fff",
-      fontSize: "clamp(18px, 2.2vw, 34px)",
-      lineHeight: "1.35",
-      textAlign: "center",
-      textShadow: "0 1px 2px rgba(0, 0, 0, 0.8)",
-      zIndex: "2147483647",
-      pointerEvents: "none",
-      whiteSpace: "pre-wrap"
-    });
-    document.documentElement.appendChild(overlay);
+    overlay.setAttribute("role", "status");
+    overlay.setAttribute("aria-live", "polite");
+    overlay.innerHTML = `
+      <div class="fuguang-caption-drag-handle" data-fuguang-drag-handle aria-hidden="true">
+        <span></span>
+      </div>
+      <div class="fuguang-caption-text" data-fuguang-caption-text></div>
+    `;
+    applyCaptionPosition(overlay);
+    bindOverlayEvents(overlay);
+    getOverlayMount().appendChild(overlay);
     return overlay;
   }
 
-  function attachVtt(vtt, label) {
-    const video = findPrimaryVideo();
-    if (!video || !vtt) {
+  function bindOverlayEvents(overlay) {
+    const dragHandle = overlay.querySelector("[data-fuguang-drag-handle]");
+    overlay.removeEventListener("pointerdown", startDrag);
+    overlay.removeEventListener("mousedown", startDrag);
+    overlay.removeEventListener("dblclick", jumpToCurrentCue);
+    dragHandle?.removeEventListener("pointerdown", startDrag);
+    dragHandle?.removeEventListener("mousedown", startDrag);
+    overlay.addEventListener("pointerdown", startDrag);
+    overlay.addEventListener("mousedown", startDrag);
+    dragHandle?.addEventListener("pointerdown", startDrag);
+    dragHandle?.addEventListener("mousedown", startDrag);
+    overlay.addEventListener("dblclick", jumpToCurrentCue);
+    window.removeEventListener("resize", repositionOverlay);
+    window.addEventListener("resize", repositionOverlay);
+  }
+
+  function repositionOverlay() {
+    const overlay = document.getElementById(OVERLAY_ID);
+    if (overlay) {
+      applyCaptionPosition(overlay);
+    }
+  }
+
+  function ensureStyle() {
+    if (document.getElementById(STYLE_ID)) {
       return;
     }
-    const existing = video.querySelector("track[data-fuguang-track]");
-    if (existing) {
-      existing.remove();
-    }
-    const blob = new Blob([vtt], { type: "text/vtt" });
-    const track = document.createElement("track");
-    track.kind = "subtitles";
-    track.label = label;
-    track.srclang = "zh";
-    track.default = true;
-    track.dataset.fuguangTrack = "true";
-    track.src = URL.createObjectURL(blob);
-    video.appendChild(track);
-    track.addEventListener("load", () => {
-      for (const textTrack of video.textTracks) {
-        textTrack.mode = textTrack.label === label ? "showing" : textTrack.mode;
+    const style = document.createElement("style");
+    style.id = STYLE_ID;
+    style.textContent = `
+      #${OVERLAY_ID} {
+        align-items: center;
+        background: rgba(22, 22, 24, var(--fuguang-caption-bg-opacity, 0.78));
+        border-radius: 5px;
+        box-sizing: border-box;
+        color: #ffffff;
+        cursor: grab;
+        display: flex;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+        font-size: var(--fuguang-caption-font-size, 28px);
+        font-weight: 400;
+        justify-content: center;
+        left: 50%;
+        letter-spacing: 0;
+        line-height: 1.25;
+        max-width: calc(100vw - 32px);
+        min-height: 58px;
+        padding: 9px 18px 11px;
+        pointer-events: auto;
+        position: fixed;
+        text-align: center;
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.75);
+        top: 72vh;
+        transform: translate(-50%, -50%);
+        transition: background-color 120ms ease, opacity 120ms ease;
+        user-select: none;
+        white-space: pre-wrap;
+        width: min(72vw, 980px);
+        z-index: 2147483647;
       }
+
+      #${OVERLAY_ID}[hidden] {
+        display: none;
+      }
+
+      #${OVERLAY_ID}:hover,
+      #${OVERLAY_ID}.is-dragging {
+        background: rgba(18, 18, 20, var(--fuguang-caption-bg-hover-opacity, 0.86));
+      }
+
+      #${OVERLAY_ID}.is-dragging {
+        cursor: grabbing;
+      }
+
+      #${OVERLAY_ID} .fuguang-caption-text {
+        overflow-wrap: break-word;
+        word-break: normal;
+      }
+
+      #${OVERLAY_ID} .fuguang-caption-drag-handle {
+        align-items: center;
+        cursor: move;
+        display: flex;
+        height: 20px;
+        justify-content: center;
+        left: 0;
+        opacity: 0;
+        position: absolute;
+        right: 0;
+        top: -20px;
+        transition: opacity 120ms ease;
+      }
+
+      #${OVERLAY_ID}:hover .fuguang-caption-drag-handle,
+      #${OVERLAY_ID}.is-dragging .fuguang-caption-drag-handle {
+        opacity: 1;
+      }
+
+      #${OVERLAY_ID} .fuguang-caption-drag-handle span {
+        background: rgba(255, 255, 255, 0.86);
+        border-radius: 999px;
+        box-shadow: 0 1px 5px rgba(0, 0, 0, 0.35);
+        height: 4px;
+        width: 42px;
+      }
+
+      @media (max-width: 720px) {
+        #${OVERLAY_ID} {
+          font-size: min(var(--fuguang-caption-font-size, 28px), 32px);
+          min-height: 48px;
+          padding: 8px 14px 10px;
+          width: 88vw;
+        }
+      }
+    `;
+    document.documentElement.appendChild(style);
+  }
+
+  function startDrag(event) {
+    const overlay = document.getElementById(OVERLAY_ID);
+    if (!overlay || isDragging) {
+      return;
+    }
+    isDragging = true;
+    overlay.classList.add("is-dragging");
+    dragOffsetX = event.clientX - overlay.getBoundingClientRect().left - overlay.offsetWidth / 2;
+    dragOffsetY = event.clientY - overlay.getBoundingClientRect().top - overlay.offsetHeight / 2;
+    if (event.pointerId !== undefined) {
+      try {
+        overlay.setPointerCapture(event.pointerId);
+      } catch {
+        // Some synthetic pointer streams do not support capture; document listeners still handle dragging.
+      }
+      document.addEventListener("pointermove", dragCaption);
+      document.addEventListener("pointerup", endDrag);
+      document.addEventListener("pointercancel", endDrag);
+    } else {
+      document.addEventListener("mousemove", dragCaption);
+      document.addEventListener("mouseup", endDrag);
+    }
+    event.preventDefault();
+  }
+
+  function dragCaption(event) {
+    if (!isDragging) {
+      return;
+    }
+    const targetX = event.clientX - dragOffsetX;
+    const targetY = event.clientY - dragOffsetY;
+    captionPosition = clampPosition(
+      {
+        x: targetX / Math.max(1, window.innerWidth),
+        y: targetY / Math.max(1, window.innerHeight)
+      },
+      document.getElementById(OVERLAY_ID)
+    );
+    applyCaptionPosition(document.getElementById(OVERLAY_ID));
+    scheduleCaptionPositionSave();
+  }
+
+  function endDrag(event) {
+    const overlay = document.getElementById(OVERLAY_ID);
+    if (!overlay) {
+      return;
+    }
+    isDragging = false;
+    overlay.classList.remove("is-dragging");
+    if (event.pointerId !== undefined && overlay.hasPointerCapture(event.pointerId)) {
+      overlay.releasePointerCapture(event.pointerId);
+    }
+    document.removeEventListener("pointermove", dragCaption);
+    document.removeEventListener("pointerup", endDrag);
+    document.removeEventListener("pointercancel", endDrag);
+    document.removeEventListener("mousemove", dragCaption);
+    document.removeEventListener("mouseup", endDrag);
+    saveCaptionPosition();
+  }
+
+  function applyCaptionPosition(overlay) {
+    if (!overlay) {
+      return;
+    }
+    captionPosition = clampPosition(captionPosition, overlay);
+    overlay.style.left = `${captionPosition.x * 100}vw`;
+    overlay.style.top = `${captionPosition.y * 100}vh`;
+  }
+
+  async function loadCaptionPosition() {
+    try {
+      const data = await chrome.storage.sync.get({
+        [POSITION_STORAGE_KEY]: DEFAULT_POSITION,
+        [LEGACY_TOP_RATIO_KEY]: DEFAULT_POSITION.y
+      });
+      const stored = data[POSITION_STORAGE_KEY];
+      if (stored && typeof stored === "object") {
+        captionPosition = clampPosition(
+          {
+            x: Number(stored.x),
+            y: Number(stored.y)
+          },
+          document.getElementById(OVERLAY_ID)
+        );
+      } else {
+        captionPosition = clampPosition(
+          {
+            x: DEFAULT_POSITION.x,
+            y: Number(data[LEGACY_TOP_RATIO_KEY])
+          },
+          document.getElementById(OVERLAY_ID)
+        );
+      }
+      applyCaptionPosition(document.getElementById(OVERLAY_ID));
+    } catch {
+      captionPosition = { ...DEFAULT_POSITION };
+    }
+  }
+
+  function saveCaptionPosition() {
+    try {
+      chrome.storage.sync.set({ [POSITION_STORAGE_KEY]: captionPosition }).catch(() => {});
+    } catch {
+      // The page may still have an old content script after the extension is reloaded.
+    }
+  }
+
+  function scheduleCaptionPositionSave() {
+    window.clearTimeout(savePositionTimer);
+    savePositionTimer = window.setTimeout(saveCaptionPosition, 120);
+  }
+
+  function getOverlayMount() {
+    return document.fullscreenElement || document.documentElement;
+  }
+
+  function moveOverlayToCurrentMount() {
+    const overlay = document.getElementById(OVERLAY_ID);
+    const style = document.getElementById(STYLE_ID);
+    const mount = getOverlayMount();
+    if (style && style.parentElement !== document.documentElement) {
+      document.documentElement.appendChild(style);
+    }
+    if (overlay && overlay.parentElement !== mount) {
+      mount.appendChild(overlay);
+    }
+    applyCaptionPosition(overlay);
+  }
+
+  async function loadCaptionSettings() {
+    try {
+      const data = await chrome.storage.sync.get(SETTINGS_DEFAULTS);
+      captionSettings = normalizeCaptionSettings(data);
+      applyCaptionSettings();
+      if (!captionSettings.subtitleOverlayEnabled) {
+        detachActiveVttController();
+        clearCaption();
+      }
+    } catch {
+      captionSettings = { ...SETTINGS_DEFAULTS };
+    }
+  }
+
+  function handleStorageChange(changes, areaName) {
+    if (areaName !== "sync") {
+      return;
+    }
+    if (!changes.subtitleFontSize && !changes.subtitleBackgroundOpacity && !changes.subtitleOverlayEnabled) {
+      if (!changes[POSITION_STORAGE_KEY]) {
+        return;
+      }
+    }
+    if (changes[POSITION_STORAGE_KEY]?.newValue) {
+      const stored = changes[POSITION_STORAGE_KEY].newValue;
+      captionPosition = clampPosition(
+        {
+          x: Number(stored.x),
+          y: Number(stored.y)
+        },
+        document.getElementById(OVERLAY_ID)
+      );
+      applyCaptionPosition(document.getElementById(OVERLAY_ID));
+    }
+    captionSettings = normalizeCaptionSettings({
+      subtitleFontSize: changes.subtitleFontSize?.newValue ?? captionSettings.subtitleFontSize,
+      subtitleBackgroundOpacity: changes.subtitleBackgroundOpacity?.newValue ?? captionSettings.subtitleBackgroundOpacity,
+      subtitleOverlayEnabled: changes.subtitleOverlayEnabled?.newValue ?? captionSettings.subtitleOverlayEnabled
     });
+    applyCaptionSettings();
+    if (!captionSettings.subtitleOverlayEnabled) {
+      detachActiveVttController();
+      clearCaption();
+    } else {
+      activeVttController?.updateCaption?.();
+    }
+  }
+
+  function applyCaptionSettings() {
+    const root = document.documentElement;
+    const opacity = clampNumber(captionSettings.subtitleBackgroundOpacity, 0, 95) / 100;
+    root.style.setProperty("--fuguang-caption-font-size", `${clampNumber(captionSettings.subtitleFontSize, 18, 48)}px`);
+    root.style.setProperty("--fuguang-caption-bg-opacity", String(opacity));
+    root.style.setProperty("--fuguang-caption-bg-hover-opacity", String(Math.min(0.96, opacity + 0.08)));
+  }
+
+  function normalizeCaptionSettings(data) {
+    return {
+      subtitleFontSize: clampNumber(Number(data.subtitleFontSize), 18, 48),
+      subtitleBackgroundOpacity: clampNumber(Number(data.subtitleBackgroundOpacity), 0, 95),
+      subtitleOverlayEnabled: data.subtitleOverlayEnabled !== false
+    };
+  }
+
+  function clampPosition(position, overlay) {
+    const width = Math.max(1, window.innerWidth);
+    const height = Math.max(1, window.innerHeight);
+    const halfWidth = overlay ? overlay.offsetWidth / 2 / width : MIN_POSITION_RATIO;
+    const halfHeight = overlay ? overlay.offsetHeight / 2 / height : MIN_POSITION_RATIO;
+    return {
+      x: clampNumber(Number(position.x), Math.max(MIN_POSITION_RATIO, halfWidth), Math.min(MAX_POSITION_RATIO, 1 - halfWidth)),
+      y: clampNumber(Number(position.y), Math.max(MIN_POSITION_RATIO, halfHeight), Math.min(MAX_POSITION_RATIO, 1 - halfHeight))
+    };
+  }
+
+  function clampNumber(value, min, max) {
+    if (!Number.isFinite(value)) {
+      return min;
+    }
+    return Math.min(max, Math.max(min, value));
+  }
+
+  function attachVtt(vtt, label) {
+    if (!vtt || !captionSettings.subtitleOverlayEnabled) {
+      detachActiveVttController();
+      clearCaption();
+      return false;
+    }
+    detachActiveVttController();
+    clearCaption();
+    const cues = parseVtt(vtt);
+    if (!cues.length) {
+      return false;
+    }
+    const events = ["timeupdate", "seeked", "seeking", "play", "pause", "loadedmetadata", "durationchange"];
+    const controller = {
+      cues,
+      events,
+      media: null,
+      interval: 0,
+      updateCaption: null,
+      lastCue: null,
+      pendingSeekCue: null,
+      pendingSeekUntil: 0
+    };
+    const updateCaption = () => {
+      const media = bindControllerToMedia(controller);
+      if (!media) {
+        return;
+      }
+      const cue = findCueAt(cues, media.currentTime);
+      if (cue) {
+        controller.pendingSeekCue = null;
+        renderControllerCue(controller, cue);
+      } else if (controller.pendingSeekCue && performance.now() < controller.pendingSeekUntil) {
+        renderControllerCue(controller, controller.pendingSeekCue);
+      } else if (media.seeking && controller.lastCue) {
+        renderControllerCue(controller, controller.lastCue);
+      } else {
+        controller.lastCue = null;
+        clearCaption();
+      }
+    };
+    controller.updateCaption = updateCaption;
+    activeVttController = controller;
+    if (!bindControllerToMedia(controller)) {
+      detachActiveVttController();
+      return false;
+    }
+    controller.interval = window.setInterval(updateCaption, 500);
+    updateCaption();
+    return true;
+  }
+
+  function findCueAt(cues, time, tolerance = 0.2) {
+    const current = Number(time);
+    if (!Number.isFinite(current)) {
+      return null;
+    }
+    return cues.find(item => current >= item.start - tolerance && current <= item.end + tolerance) || null;
+  }
+
+  function renderControllerCue(controller, cue) {
+    controller.lastCue = cue;
+    renderCaption(cue.text, "preload", cue.start);
+  }
+
+  function bindControllerToMedia(controller) {
+    if (mediaStillUsable(controller.media)) {
+      return controller.media;
+    }
+    const next = findPrimaryVideo();
+    if (!next) {
+      return null;
+    }
+    if (next === controller.media) {
+      return controller.media;
+    }
+    if (controller.media) {
+      controller.events.forEach(event => controller.media.removeEventListener(event, controller.updateCaption));
+    }
+    controller.media = next;
+    controller.events.forEach(event => next.addEventListener(event, controller.updateCaption));
+    return next;
+  }
+
+  function detachActiveVttController() {
+    clearPendingCaptionTimers();
+    if (!activeVttController) {
+      return;
+    }
+    const { media, events, updateCaption, interval } = activeVttController;
+    if (media) {
+      events.forEach(event => media.removeEventListener(event, updateCaption));
+    }
+    window.clearInterval(interval);
+    activeVttController = null;
+  }
+
+  function jumpToCurrentCue(event) {
+    const overlay = document.getElementById(OVERLAY_ID);
+    const start = Number(overlay?.dataset?.cueStart);
+    if (!Number.isFinite(start)) {
+      return;
+    }
+    if (!seekMedia(start)) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+  }
+
+  function parseVtt(vtt) {
+    const lines = vtt.replace(/\r/g, "").split("\n");
+    const cues = [];
+    for (let index = 0; index < lines.length; index += 1) {
+      let line = lines[index].trim();
+      if (!line || line === "WEBVTT" || line.startsWith("NOTE") || line.startsWith("STYLE") || line.startsWith("REGION")) {
+        continue;
+      }
+      if (!line.includes("-->") && lines[index + 1]?.includes("-->")) {
+        index += 1;
+        line = lines[index].trim();
+      }
+      if (!line.includes("-->")) {
+        continue;
+      }
+      const [startText, endText] = line.split("-->").map(value => value.trim().split(/\s+/)[0]);
+      const start = parseTimestamp(startText);
+      const end = parseTimestamp(endText);
+      const textLines = [];
+      while (lines[index + 1] && lines[index + 1].trim()) {
+        index += 1;
+        textLines.push(lines[index].trim());
+      }
+      const text = textLines.join("\n").replace(/<[^>]+>/g, "").trim();
+      if (Number.isFinite(start) && Number.isFinite(end) && text) {
+        cues.push({ start, end, text });
+      }
+    }
+    return cues;
+  }
+
+  function parseTimestamp(value) {
+    const parts = value.replace(",", ".").split(":");
+    if (parts.length < 2 || parts.length > 3) {
+      return Number.NaN;
+    }
+    const seconds = Number(parts.pop());
+    const minutes = Number(parts.pop());
+    const hours = parts.length ? Number(parts.pop()) : 0;
+    return hours * 3600 + minutes * 60 + seconds;
   }
 
   function getVideoState() {
-    const media = findPrimaryVideo();
+    const media = mediaStillUsable(activeVttController?.media) ? activeVttController.media : findPrimaryVideo();
     if (!media) {
       return null;
     }
@@ -125,34 +656,128 @@
     };
   }
 
-  function reportPageMedia() {
-    const media = findPrimaryVideo();
-    const url = media?.currentSrc || media?.src || "";
-    if (!url || url === lastMediaUrl) {
-      return;
+  function seekMedia(time) {
+    if (activeVttController) {
+      bindControllerToMedia(activeVttController);
     }
-    lastMediaUrl = url;
-    chrome.runtime.sendMessage({
-      type: MESSAGE.PAGE_MEDIA_FOUND,
-      media: {
-        url,
-        kind: media.tagName.toLowerCase(),
-        title: document.title,
-        duration: Number.isFinite(media.duration) ? media.duration : null
+    const media = activeVttController?.media || findPrimaryVideo();
+    const target = Number(time);
+    if (!media || !Number.isFinite(target)) {
+      return false;
+    }
+    const targetCue = activeVttController ? findCueAt(activeVttController.cues, target, 0.5) : null;
+    if (activeVttController && targetCue) {
+      activeVttController.pendingSeekCue = targetCue;
+      activeVttController.pendingSeekUntil = performance.now() + 3000;
+    }
+    try {
+      media.currentTime = Math.max(0, target);
+      media.dispatchEvent(new Event("seeking", { bubbles: true }));
+      media.dispatchEvent(new Event("timeupdate", { bubbles: true }));
+      if (activeVttController && targetCue) {
+        renderControllerCue(activeVttController, targetCue);
       }
-    }).catch(() => {});
+      activeVttController?.updateCaption?.();
+      SEEK_REFRESH_DELAYS.forEach(scheduleCaptionRefresh);
+    } catch {
+      if (activeVttController) {
+        activeVttController.pendingSeekCue = null;
+        activeVttController.pendingSeekUntil = 0;
+      }
+      return false;
+    }
+    return true;
+  }
+
+  function scheduleCaptionRefresh(delay) {
+    const timer = window.setTimeout(() => {
+      pendingCaptionTimers.delete(timer);
+      if (captionSettings.subtitleOverlayEnabled) {
+        activeVttController?.updateCaption?.();
+      }
+    }, delay);
+    pendingCaptionTimers.add(timer);
+  }
+
+  function clearPendingCaptionTimers() {
+    for (const timer of pendingCaptionTimers) {
+      window.clearTimeout(timer);
+    }
+    pendingCaptionTimers.clear();
   }
 
   function findPrimaryVideo() {
-    const media = [...document.querySelectorAll("video, audio")];
+    const media = collectMediaElements(document).filter(mediaStillUsable);
     if (media.length === 0) {
+      lastPrimaryMedia = null;
       return null;
     }
-    return media
+    const scored = media
       .map(element => ({
         element,
-        area: (element.clientWidth || 0) * (element.clientHeight || 0)
+        score: mediaScore(element),
+        playing: element.paused === false && element.ended !== true
       }))
-      .sort((a, b) => b.area - a.area)[0].element;
+      .sort((a, b) => b.score - a.score);
+    const activelyPlaying = scored.find(candidate => candidate.playing)?.element;
+    if (activelyPlaying) {
+      lastPrimaryMedia = activelyPlaying;
+      return lastPrimaryMedia;
+    }
+    if (mediaStillUsable(lastPrimaryMedia) && media.includes(lastPrimaryMedia)) {
+      return lastPrimaryMedia;
+    }
+    lastPrimaryMedia = scored[0].element;
+    return lastPrimaryMedia;
+  }
+
+  function collectMediaElements(root, output = [], seen = new Set()) {
+    if (!root || seen.has(root)) {
+      return output;
+    }
+    seen.add(root);
+    if (root.matches?.("video, audio")) {
+      output.push(root);
+    }
+    root.querySelectorAll?.("video, audio").forEach(element => output.push(element));
+    root.querySelectorAll?.("*").forEach(element => {
+      if (element.shadowRoot) {
+        collectMediaElements(element.shadowRoot, output, seen);
+      }
+    });
+    return [...new Set(output)];
+  }
+
+  function mediaScore(element) {
+    const rect = element.getBoundingClientRect?.() || {};
+    const width = Number(rect.width || element.clientWidth || element.videoWidth || 0);
+    const height = Number(rect.height || element.clientHeight || element.videoHeight || 0);
+    const area = Math.max(0, width) * Math.max(0, height);
+    const hasDuration = Number.isFinite(element.duration) && element.duration > 0;
+    const hasSource = Boolean(element.currentSrc || element.src);
+    const style = window.getComputedStyle?.(element);
+    const visibleStyle = !style || (style.display !== "none" && style.visibility !== "hidden" && Number(style.opacity || 1) > 0.01);
+    const intersectsViewport =
+      Number(rect.bottom || 0) > 0 &&
+      Number(rect.right || 0) > 0 &&
+      Number(rect.top || 0) < window.innerHeight &&
+      Number(rect.left || 0) < window.innerWidth;
+    const visible = visibleStyle && width > 4 && height > 4 && intersectsViewport;
+    const playing = element.paused === false && element.ended !== true;
+    const tagBonus = element.tagName?.toLowerCase() === "video" ? 1_000_000 : 0;
+    const readiness = Number(element.readyState || 0) * 1_000;
+    return (
+      (visible ? 100_000_000 : 0) +
+      (playing ? 50_000_000 : 0) +
+      tagBonus +
+      area +
+      readiness +
+      (hasDuration ? 10_000 : 0) +
+      (hasSource ? 5_000 : 0)
+    );
+  }
+
+  function mediaStillUsable(media) {
+    return Boolean(media && media.isConnected && typeof media.currentTime === "number");
   }
 })();

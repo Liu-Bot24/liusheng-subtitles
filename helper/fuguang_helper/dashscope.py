@@ -27,7 +27,7 @@ class DashScopeRealtimeSession:
 
     def start(self) -> None:
         if not self._config.dashscope_api_key:
-            raise RuntimeError("DASHSCOPE_API_KEY is not configured.")
+            raise RuntimeError("实时翻译模型缺少 DASHSCOPE_API_KEY。请在 helper/.env 中配置后重启本机服务。")
         url = f"{BASE_WS_ENDPOINT}?model={self._config.dashscope_model}"
         self._ws = websocket.create_connection(
             url,
@@ -80,7 +80,7 @@ class DashScopeRealtimeSession:
 
     def _send_json(self, message: dict) -> None:
         if not self._ws:
-            raise RuntimeError("DashScope websocket is not connected.")
+            raise RuntimeError("实时翻译连接尚未建立。")
         self._ws.send(json.dumps(message))
 
     def _receive_loop(self) -> None:

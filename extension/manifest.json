@@ -1,11 +1,19 @@
 {
   "manifest_version": 3,
   "name": "浮光译影",
-  "description": "为网页视频提供实时翻译字幕和预加载字幕。",
+  "description": "为网页视频生成、导入和显示预加载字幕。",
   "version": "0.1.0",
   "action": {
-    "default_title": "浮光译影",
-    "default_popup": "src/popup/popup.html"
+    "default_title": "浮光译影"
+  },
+  "icons": {
+    "16": "assets/icon-16.png",
+    "32": "assets/icon-32.png",
+    "48": "assets/icon-48.png",
+    "128": "assets/icon-128.png"
+  },
+  "side_panel": {
+    "default_path": "src/sidepanel/sidepanel.html"
   },
   "background": {
     "service_worker": "src/background/service-worker.js",
@@ -14,10 +22,10 @@
   "permissions": [
     "activeTab",
     "offscreen",
+    "declarativeNetRequestWithHostAccess",
+    "sidePanel",
     "scripting",
     "storage",
-    "tabCapture",
-    "tabs",
     "webNavigation",
     "webRequest"
   ],
@@ -26,15 +34,33 @@
     "http://127.0.0.1/*",
     "http://localhost/*"
   ],
-  "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*"
-  },
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
-      "js": ["src/content/subtitle-overlay.js"],
-      "run_at": "document_idle",
-      "all_frames": false
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "src/content/subtitle-overlay.js",
+        "src/content/media-bridge.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": true
+    },
+    {
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "src/content/page-sniffer.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": true,
+      "world": "MAIN"
     }
-  ]
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; frame-src 'self' https://* http://127.0.0.1:* http://localhost:*; worker-src 'self'; connect-src 'self' https://* http://*:* ws://*:*"
+  }
 }

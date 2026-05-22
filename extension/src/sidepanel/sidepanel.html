@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>浮光译影侧边栏</title>
+    <link rel="stylesheet" href="sidepanel.css">
+  </head>
+  <body>
+    <main class="side-shell">
+      <header class="side-header">
+        <div>
+          <h1>浮光译影</h1>
+          <p id="pageTitle">当前标签页</p>
+        </div>
+        <span id="status" class="status">待机</span>
+      </header>
+
+      <nav class="tabs" aria-label="侧边栏标签">
+        <button id="tabTask" class="tab active" type="button">任务与字幕</button>
+        <button id="tabSettings" class="tab" type="button">设置</button>
+      </nav>
+
+      <section id="taskPanel" class="panel active">
+        <section class="candidate-section">
+          <div class="section-heading compact">
+            <h2>媒体源</h2>
+            <button id="refreshCandidates" type="button" class="secondary small-button">刷新源</button>
+          </div>
+          <div id="candidateSummary" class="job-empty">正在读取当前页面媒体源。</div>
+          <div id="candidateList" class="candidate-list"></div>
+        </section>
+        <p id="taskMessage" class="message" aria-live="polite" hidden></p>
+        <div class="panel-head">
+          <h2>预加载任务</h2>
+          <div class="panel-actions">
+            <button id="startPreload" type="button">开始</button>
+            <button id="retryPreload" type="button" class="secondary">重试失败</button>
+            <button id="retryTranslation" type="button" class="secondary">重翻译字幕</button>
+            <button id="cancelPreload" type="button" class="danger">停止</button>
+            <button id="clearAudioCache" type="button" class="secondary">清音频缓存</button>
+            <button id="refresh" type="button" class="secondary">刷新</button>
+          </div>
+        </div>
+        <section id="jobStatus" class="job-panel"></section>
+        <section class="subtitle-section">
+          <div class="section-heading compact subtitle-heading">
+            <h2>完整字幕</h2>
+            <div class="subtitle-actions">
+              <button id="subtitleOverlayToggle" type="button" class="secondary small-button" aria-pressed="true">浮层开</button>
+              <button id="subtitleModeToggle" type="button" class="secondary small-button" aria-pressed="false">双语</button>
+              <button id="exportSubtitle" type="button" class="secondary small-button">导出SRT</button>
+              <button id="importSubtitle" type="button" class="secondary small-button">导入</button>
+              <button id="clearSubtitleCache" type="button" class="secondary small-button">清字幕缓存</button>
+              <button id="toggleTaskDetails" type="button" class="secondary small-button" hidden>任务详情</button>
+            </div>
+          </div>
+          <input id="subtitleImportFile" type="file" accept="application/json,.json,.srt,text/vtt,.vtt,.ass,.ssa" hidden>
+          <div id="subtitleNotice" class="subtitle-notice" hidden></div>
+          <div id="subtitleList" class="subtitle-list">字幕生成后会显示在这里。</div>
+        </section>
+      </section>
+
+      <section id="settingsPanel" class="panel">
+        <h2>语音识别</h2>
+        <div class="profile-row">
+          <label>
+            <span>正在编辑</span>
+            <select id="asrProfileId"></select>
+          </label>
+          <div class="profile-actions">
+            <button id="addAsrProfile" type="button" class="secondary small-button">新增档案</button>
+            <button id="deleteAsrProfile" type="button" class="secondary small-button">删除档案</button>
+          </div>
+        </div>
+        <label>
+          <span>档案名称</span>
+          <input id="asrProfileName" type="text" spellcheck="false">
+        </label>
+        <label>
+          <span>接口地址</span>
+          <input id="asrBaseUrl" type="url" spellcheck="false">
+        </label>
+        <label>
+          <span>模型名称</span>
+          <input id="asrModel" type="text" spellcheck="false">
+        </label>
+        <label>
+          <span>API 密钥</span>
+          <input id="asrApiKey" type="password" spellcheck="false" autocomplete="off">
+        </label>
+        <p id="asrApiKeyHint" class="settings-hint"></p>
+
+        <h2>翻译模型</h2>
+        <div class="profile-row">
+          <label>
+            <span>正在编辑</span>
+            <select id="llmProfileId"></select>
+          </label>
+          <div class="profile-actions">
+            <button id="addLlmProfile" type="button" class="secondary small-button">新增档案</button>
+            <button id="deleteLlmProfile" type="button" class="secondary small-button">删除档案</button>
+          </div>
+        </div>
+        <label>
+          <span>档案名称</span>
+          <input id="llmProfileName" type="text" spellcheck="false">
+        </label>
+        <label>
+          <span>接口格式</span>
+          <select id="llmProviderType">
+            <option value="openai">OpenAI 格式</option>
+            <option value="anthropic">Anthropic 格式</option>
+          </select>
+        </label>
+        <label>
+          <span>接口地址</span>
+          <input id="llmBaseUrl" type="url" spellcheck="false">
+        </label>
+        <label>
+          <span>模型名称</span>
+          <input id="llmModel" type="text" spellcheck="false">
+        </label>
+        <label>
+          <span>API 密钥</span>
+          <input id="llmApiKey" type="password" spellcheck="false" autocomplete="off">
+        </label>
+        <p id="llmApiKeyHint" class="settings-hint"></p>
+        <div class="settings-grid">
+          <label>
+            <span>目标语言</span>
+            <select id="targetLanguage">
+              <option value="zh-CN">中文（简体）</option>
+              <option value="en">英文</option>
+              <option value="ja">日语</option>
+              <option value="fr">法语</option>
+              <option value="ko">韩语</option>
+              <option value="de">德语</option>
+              <option value="ru">俄语</option>
+            </select>
+          </label>
+          <label>
+            <span>ASR 并发</span>
+            <input id="asrWorkers" type="number" min="1" max="8">
+          </label>
+          <label>
+            <span>翻译并发</span>
+            <input id="translationWorkers" type="number" min="1" max="6">
+          </label>
+          <label>
+            <span>翻译分段时长（分钟）</span>
+            <input id="chunkMinutes" type="number" min="1" max="60" step="1">
+          </label>
+        </div>
+        <h2>字幕样式</h2>
+        <div class="settings-grid">
+          <label>
+            <span>文字大小（像素）</span>
+            <input id="subtitleFontSize" type="number" min="18" max="48">
+          </label>
+          <label>
+            <span>背景透明度 %</span>
+            <input id="subtitleBackgroundOpacity" type="number" min="0" max="95">
+          </label>
+        </div>
+        <button id="saveSettings" type="button">保存设置</button>
+        <p id="message" class="message"></p>
+      </section>
+    </main>
+    <script src="subtitle-format.js"></script>
+    <script src="sidepanel.js"></script>
+  </body>
+</html>
