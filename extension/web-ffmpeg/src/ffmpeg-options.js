@@ -71,7 +71,7 @@ export function uniqueVirtualFileName(value, usedNames, fallback = "input.bin") 
   return candidate;
 }
 
-export function buildExtractAudioArgs({ inputName, outputName, segmentSeconds = 0 }) {
+export function buildExtractAudioArgs({ inputName, outputName, segmentSeconds = 0, detectSpeech = false }) {
   const args = [
     "-i",
     inputName,
@@ -82,6 +82,7 @@ export function buildExtractAudioArgs({ inputName, outputName, segmentSeconds = 
     "1",
     "-ar",
     "16000",
+    ...(detectSpeech ? ["-af", "silencedetect=n=-45dB:d=0.4"] : []),
     "-b:a",
     "64k"
   ];

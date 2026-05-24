@@ -1,7 +1,15 @@
 (() => {
+  const LEGACY_OVERLAY_ID = "fuguang-caption-overlay";
+  const LEGACY_STYLE_ID = "fuguang-caption-style";
+  const OVERLAY_ID = "fuguang-caption-overlay-v2";
+  const STYLE_ID = "fuguang-caption-style-v2";
+  const OWNER_DATA_KEY = "fuguangCaptionOwner";
+  const INSTANCE_TOKEN = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
   if (typeof window.__fuguangSubtitleOverlayCleanup === "function") {
     window.__fuguangSubtitleOverlayCleanup();
   }
+  removeStaleOverlayDom();
 
   const MESSAGE = {
     DETACH_PRELOAD_VTT: "FUGUANG_DETACH_PRELOAD_VTT",
@@ -10,8 +18,6 @@
     SEEK_MEDIA: "FUGUANG_SEEK_MEDIA"
   };
 
-  const OVERLAY_ID = "fuguang-caption-overlay";
-  const STYLE_ID = "fuguang-caption-style";
   const POSITION_STORAGE_KEY = "captionPosition";
   const LEGACY_TOP_RATIO_KEY = "captionTopRatio";
   const SETTINGS_DEFAULTS = {
@@ -36,6 +42,7 @@
   try {
     chrome.runtime.onMessage.addListener(handleRuntimeMessage);
     window.__fuguangSubtitleOverlayCleanup = cleanup;
+    document.documentElement.dataset[OWNER_DATA_KEY] = INSTANCE_TOKEN;
   } catch {
     return;
   }
@@ -48,7 +55,7 @@
       return false;
     }
     if (message?.type === MESSAGE.ATTACH_VTT) {
-      sendResponse({ ok: attachVtt(message.vtt, message.label || "浮光译影") });
+      sendResponse({ ok: attachVtt(message.vtt, message.label || "浮光译影", message.signature || "") });
       return false;
     }
     if (message?.type === MESSAGE.GET_VIDEO_STATE) {
@@ -80,7 +87,7 @@
       // Old content script contexts can be invalidated during extension reload.
     }
     detachActiveVttController();
-    clearCaption();
+    clearCaption({ force: true });
     document.removeEventListener("fullscreenchange", moveOverlayToCurrentMount);
     document.removeEventListener("pointermove", dragCaption);
     document.removeEventListener("pointerup", endDrag);
@@ -99,9 +106,15 @@
     if (window.__fuguangSubtitleOverlayCleanup === cleanup) {
       delete window.__fuguangSubtitleOverlayCleanup;
     }
+    if (isActiveOwner()) {
+      delete document.documentElement.dataset[OWNER_DATA_KEY];
+    }
   }
 
   function renderCaption(text, mode = "preload", cueStart = null) {
+    if (!isActiveOwner()) {
+      return;
+    }
     if (!captionSettings.subtitleOverlayEnabled) {
       clearCaption();
       return;
@@ -121,7 +134,10 @@
     overlay.hidden = false;
   }
 
-  function clearCaption() {
+  function clearCaption(options = {}) {
+    if (!options.force && !isActiveOwner()) {
+      return;
+    }
     const overlay = document.getElementById(OVERLAY_ID);
     if (overlay) {
       overlay.hidden = true;
@@ -135,6 +151,9 @@
   }
 
   function ensureOverlay() {
+    if (!isActiveOwner()) {
+      return null;
+    }
     let overlay = document.getElementById(OVERLAY_ID);
     if (overlay) {
       ensureStyle();
@@ -275,8 +294,26 @@
           width: 88vw;
         }
       }
+
+      #${LEGACY_OVERLAY_ID} {
+        display: none !important;
+        opacity: 0 !important;
+        pointer-events: none !important;
+        visibility: hidden !important;
+      }
     `;
     document.documentElement.appendChild(style);
+  }
+
+  function removeStaleOverlayDom() {
+    document.getElementById(OVERLAY_ID)?.remove();
+    document.getElementById(STYLE_ID)?.remove();
+    document.getElementById(LEGACY_OVERLAY_ID)?.remove();
+    document.getElementById(LEGACY_STYLE_ID)?.remove();
+  }
+
+  function isActiveOwner() {
+    return document.documentElement.dataset?.[OWNER_DATA_KEY] === INSTANCE_TOKEN;
   }
 
   function startDrag(event) {
@@ -490,19 +527,20 @@
     return Math.min(max, Math.max(min, value));
   }
 
-  function attachVtt(vtt, label) {
+  function attachVtt(vtt, label, signature = "") {
     if (!vtt || !captionSettings.subtitleOverlayEnabled) {
       detachActiveVttController();
       clearCaption();
       return false;
     }
-    detachActiveVttController();
-    clearCaption();
     const cues = parseVtt(vtt);
     if (!cues.length) {
+      detachActiveVttController();
+      clearCaption();
       return false;
     }
-    const events = ["timeupdate", "seeked", "seeking", "play", "pause", "loadedmetadata", "durationchange"];
+    detachActiveVttController();
+    const events = ["timeupdate", "seeked", "seeking", "play", "pause", "loadedmetadata", "durationchange", "ratechange", "resize"];
     const controller = {
       cues,
       events,
@@ -511,18 +549,22 @@
       updateCaption: null,
       lastCue: null,
       pendingSeekCue: null,
-      pendingSeekUntil: 0
+      pendingSeekUntil: 0,
+      signature: String(signature || "")
     };
     const updateCaption = () => {
       const media = bindControllerToMedia(controller);
       if (!media) {
+        controller.lastCue = null;
+        clearCaption();
         return;
       }
+      const hasPendingSeekCue = controller.pendingSeekCue && performance.now() < controller.pendingSeekUntil;
       const cue = findCueAt(cues, media.currentTime);
       if (cue) {
         controller.pendingSeekCue = null;
         renderControllerCue(controller, cue);
-      } else if (controller.pendingSeekCue && performance.now() < controller.pendingSeekUntil) {
+      } else if (hasPendingSeekCue) {
         renderControllerCue(controller, controller.pendingSeekCue);
       } else if (media.seeking && controller.lastCue) {
         renderControllerCue(controller, controller.lastCue);
@@ -533,8 +575,10 @@
     };
     controller.updateCaption = updateCaption;
     activeVttController = controller;
-    if (!bindControllerToMedia(controller)) {
+    const media = bindControllerToMedia(controller);
+    if (!media) {
       detachActiveVttController();
+      clearCaption();
       return false;
     }
     controller.interval = window.setInterval(updateCaption, 500);
@@ -542,12 +586,26 @@
     return true;
   }
 
-  function findCueAt(cues, time, tolerance = 0.2) {
+  function findCueAt(cues, time) {
     const current = Number(time);
     if (!Number.isFinite(current)) {
       return null;
     }
-    return cues.find(item => current >= item.start - tolerance && current <= item.end + tolerance) || null;
+    let bestCue = null;
+    cues.forEach((item, index) => {
+      const start = Number(item.start);
+      const end = Number(item.end);
+      if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+        return;
+      }
+      if (!(current >= start && (current < end || (index === cues.length - 1 && current <= end)))) {
+        return;
+      }
+      if (!bestCue || start >= Number(bestCue.start)) {
+        bestCue = item;
+      }
+    });
+    return bestCue;
   }
 
   function renderControllerCue(controller, cue) {
@@ -556,10 +614,7 @@
   }
 
   function bindControllerToMedia(controller) {
-    if (mediaStillUsable(controller.media)) {
-      return controller.media;
-    }
-    const next = findPrimaryVideo();
+    const next = findPrimaryVideo(controller.media);
     if (!next) {
       return null;
     }
@@ -643,7 +698,8 @@
   }
 
   function getVideoState() {
-    const media = mediaStillUsable(activeVttController?.media) ? activeVttController.media : findPrimaryVideo();
+    activeVttController?.updateCaption?.();
+    const media = activeVttController ? bindControllerToMedia(activeVttController) : findPrimaryVideo();
     if (!media) {
       return null;
     }
@@ -652,7 +708,9 @@
       currentTime: media.currentTime,
       duration: media.duration,
       paused: media.paused,
-      playbackRate: media.playbackRate
+      playbackRate: media.playbackRate,
+      subtitleSignature: activeVttController?.signature || "",
+      subtitleCueCount: activeVttController?.cues?.length || 0
     };
   }
 
@@ -665,7 +723,7 @@
     if (!media || !Number.isFinite(target)) {
       return false;
     }
-    const targetCue = activeVttController ? findCueAt(activeVttController.cues, target, 0.5) : null;
+    const targetCue = activeVttController ? findCueAt(activeVttController.cues, target) : null;
     if (activeVttController && targetCue) {
       activeVttController.pendingSeekCue = targetCue;
       activeVttController.pendingSeekUntil = performance.now() + 3000;
@@ -706,7 +764,7 @@
     pendingCaptionTimers.clear();
   }
 
-  function findPrimaryVideo() {
+  function findPrimaryVideo(preferred = null) {
     const media = collectMediaElements(document).filter(mediaStillUsable);
     if (media.length === 0) {
       lastPrimaryMedia = null;
@@ -716,15 +774,43 @@
       .map(element => ({
         element,
         score: mediaScore(element),
+        visible: mediaIsVisible(element),
         playing: element.paused === false && element.ended !== true
       }))
       .sort((a, b) => b.score - a.score);
-    const activelyPlaying = scored.find(candidate => candidate.playing)?.element;
-    if (activelyPlaying) {
-      lastPrimaryMedia = activelyPlaying;
+    const preferredEntry = scored.find(candidate => candidate.element === preferred);
+    if (preferredEntry) {
+      const betterPlaying = scored.find(candidate =>
+        candidate.element !== preferredEntry.element
+        && candidate.playing
+        && (!preferredEntry.visible || candidate.score > preferredEntry.score)
+      );
+      if (betterPlaying) {
+        lastPrimaryMedia = betterPlaying.element;
+        return lastPrimaryMedia;
+      }
+      if (preferredEntry.visible || preferredEntry.playing) {
+        lastPrimaryMedia = preferredEntry.element;
+        return lastPrimaryMedia;
+      }
+    }
+    const lastEntry = scored.find(candidate => candidate.element === lastPrimaryMedia);
+    if (lastEntry?.visible || lastEntry?.playing) {
+      const betterPlaying = scored.find(candidate =>
+        candidate.element !== lastEntry.element
+        && candidate.playing
+        && candidate.visible
+        && candidate.score > lastEntry.score
+      );
+      if (betterPlaying) {
+        lastPrimaryMedia = betterPlaying.element;
+        return lastPrimaryMedia;
+      }
       return lastPrimaryMedia;
     }
-    if (mediaStillUsable(lastPrimaryMedia) && media.includes(lastPrimaryMedia)) {
+    const bestEntry = scored[0];
+    if (bestEntry.visible || bestEntry.playing) {
+      lastPrimaryMedia = bestEntry.element;
       return lastPrimaryMedia;
     }
     lastPrimaryMedia = scored[0].element;
@@ -755,20 +841,13 @@
     const area = Math.max(0, width) * Math.max(0, height);
     const hasDuration = Number.isFinite(element.duration) && element.duration > 0;
     const hasSource = Boolean(element.currentSrc || element.src);
-    const style = window.getComputedStyle?.(element);
-    const visibleStyle = !style || (style.display !== "none" && style.visibility !== "hidden" && Number(style.opacity || 1) > 0.01);
-    const intersectsViewport =
-      Number(rect.bottom || 0) > 0 &&
-      Number(rect.right || 0) > 0 &&
-      Number(rect.top || 0) < window.innerHeight &&
-      Number(rect.left || 0) < window.innerWidth;
-    const visible = visibleStyle && width > 4 && height > 4 && intersectsViewport;
+    const visible = mediaIsVisible(element);
     const playing = element.paused === false && element.ended !== true;
     const tagBonus = element.tagName?.toLowerCase() === "video" ? 1_000_000 : 0;
     const readiness = Number(element.readyState || 0) * 1_000;
     return (
       (visible ? 100_000_000 : 0) +
-      (playing ? 50_000_000 : 0) +
+      (playing ? 500_000 : 0) +
       tagBonus +
       area +
       readiness +
@@ -779,5 +858,19 @@
 
   function mediaStillUsable(media) {
     return Boolean(media && media.isConnected && typeof media.currentTime === "number");
+  }
+
+  function mediaIsVisible(element) {
+    const rect = element?.getBoundingClientRect?.() || {};
+    const width = Number(rect.width || element?.clientWidth || element?.videoWidth || 0);
+    const height = Number(rect.height || element?.clientHeight || element?.videoHeight || 0);
+    const style = window.getComputedStyle?.(element);
+    const visibleStyle = !style || (style.display !== "none" && style.visibility !== "hidden" && Number(style.opacity || 1) > 0.01);
+    const intersectsViewport =
+      Number(rect.bottom || 0) > 0 &&
+      Number(rect.right || 0) > 0 &&
+      Number(rect.top || 0) < window.innerHeight &&
+      Number(rect.left || 0) < window.innerWidth;
+    return visibleStyle && width > 4 && height > 4 && intersectsViewport;
   }
 })();

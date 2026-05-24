@@ -34,6 +34,22 @@
         <div class="panel-head">
           <h2>预加载任务</h2>
           <div class="panel-actions">
+            <label class="task-source-language">
+              <span>原音频语言</span>
+              <select id="sourceLanguage">
+                <option value="auto">自动识别</option>
+                <option value="zh">中文</option>
+                <option value="en">英语</option>
+                <option value="ja">日语</option>
+                <option value="ko">韩语</option>
+                <option value="fr">法语</option>
+                <option value="de">德语</option>
+                <option value="ru">俄语</option>
+                <option value="es">西语</option>
+                <option value="pt">葡语</option>
+                <option value="it">意语</option>
+              </select>
+            </label>
             <button id="startPreload" type="button">开始</button>
             <button id="retryPreload" type="button" class="secondary">重试失败</button>
             <button id="retryTranslation" type="button" class="secondary">重翻译字幕</button>
@@ -44,7 +60,7 @@
         </div>
         <section id="jobStatus" class="job-panel"></section>
         <section class="subtitle-section">
-          <div class="section-heading compact subtitle-heading">
+          <div class="section-heading compact">
             <h2>完整字幕</h2>
             <div class="subtitle-actions">
               <button id="subtitleOverlayToggle" type="button" class="secondary small-button" aria-pressed="true">浮层开</button>
@@ -84,6 +100,14 @@
         <label>
           <span>模型名称</span>
           <input id="asrModel" type="text" spellcheck="false">
+        </label>
+        <label>
+          <span>VAD 过滤</span>
+          <select id="asrVadFilter">
+            <option value="auto">自动</option>
+            <option value="on">强制开启（自建）</option>
+            <option value="off">关闭</option>
+          </select>
         </label>
         <label>
           <span>API 密钥</span>

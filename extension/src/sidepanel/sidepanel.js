@@ -19,6 +19,7 @@ const MESSAGE = {
 };
 
 const DEFAULTS = {
+  sourceLanguage: "auto",
   targetLanguage: "zh-CN",
   asrWorkers: 1,
   translationWorkers: 3,
@@ -28,7 +29,7 @@ const DEFAULTS = {
   subtitleOverlayEnabled: true,
   subtitleDisplayMode: "translated"
 };
-const MODEL_SETTINGS_VERSION = 3;
+const MODEL_SETTINGS_VERSION = 5;
 const LEGACY_MODEL_SYNC_KEYS = [
   "asrApiKey",
   "llmApiKey",
@@ -42,14 +43,22 @@ const LEGACY_MODEL_SYNC_KEYS = [
   "translationWorkers",
   "chunkMinutes"
 ];
+const SUBTITLE_SYNC_KEYS = [
+  "subtitleFontSize",
+  "subtitleOverlayEnabled",
+  "subtitleDisplayMode",
+  "subtitleBackgroundOpacity"
+];
 const SUBTITLE_CACHE_DB_NAME = "fuguang-subtitle-cache";
 const SUBTITLE_CACHE_DB_VERSION = 1;
+const SUBTITLE_CACHE_SCHEMA_VERSION = 3;
+const SUBTITLE_CACHE_LEGACY_SCHEMA_VERSION = 2;
 const SUBTITLE_CACHE_STORE = "subtitles";
 const SUBTITLE_CACHE_MAX_ENTRIES = 80;
 const SUBTITLE_CACHE_MAX_AGE_DAYS = 30;
 const SUBTITLE_USER_SCROLL_HOLD_MS = 8000;
 const DEFAULT_ASR_PROFILE_ID = "openai_whisper";
-const DEFAULT_LLM_PROFILE_ID = "llm_profile_1";
+const DEFAULT_LLM_PROFILE_ID = "llm";
 const TARGET_LANGUAGE_ALIASES = new Map([
   ["zh-cn", "zh-CN"],
   ["zh-hans", "zh-CN"],
@@ -78,6 +87,53 @@ const TARGET_LANGUAGE_ALIASES = new Map([
   ["russian", "ru"],
   ["俄语", "ru"]
 ]);
+const SOURCE_LANGUAGE_ALIASES = new Map([
+  ["auto", "auto"],
+  ["automatic", "auto"],
+  ["detect", "auto"],
+  ["default", "auto"],
+  ["自动", "auto"],
+  ["自动识别", "auto"],
+  ["zh-cn", "zh"],
+  ["zh-hans", "zh"],
+  ["zh", "zh"],
+  ["chinese", "zh"],
+  ["中文", "zh"],
+  ["简体中文", "zh"],
+  ["en", "en"],
+  ["english", "en"],
+  ["英语", "en"],
+  ["英文", "en"],
+  ["ja", "ja"],
+  ["jp", "ja"],
+  ["japanese", "ja"],
+  ["日语", "ja"],
+  ["ko", "ko"],
+  ["kr", "ko"],
+  ["korean", "ko"],
+  ["韩语", "ko"],
+  ["fr", "fr"],
+  ["french", "fr"],
+  ["法语", "fr"],
+  ["de", "de"],
+  ["german", "de"],
+  ["德语", "de"],
+  ["ru", "ru"],
+  ["russian", "ru"],
+  ["俄语", "ru"],
+  ["es", "es"],
+  ["spanish", "es"],
+  ["西语", "es"],
+  ["西班牙语", "es"],
+  ["pt", "pt"],
+  ["portuguese", "pt"],
+  ["葡语", "pt"],
+  ["葡萄牙语", "pt"],
+  ["it", "it"],
+  ["italian", "it"],
+  ["意语", "it"],
+  ["意大利语", "it"]
+]);
 const KNOWN_ASR_PROFILES = [
   {
     id: "openai_whisper",
@@ -85,6 +141,7 @@ const KNOWN_ASR_PROFILES = [
     providerType: "openai",
     baseUrl: "https://api.openai.com/v1",
     model: "whisper-1",
+    vadFilter: "auto",
     apiKey: ""
   },
   {
@@ -93,6 +150,7 @@ const KNOWN_ASR_PROFILES = [
     providerType: "groq",
     baseUrl: "https://api.groq.com/openai/v1",
     model: "whisper-large-v3-turbo",
+    vadFilter: "auto",
     apiKey: ""
   },
   {
@@ -101,6 +159,7 @@ const KNOWN_ASR_PROFILES = [
     providerType: "xai",
     baseUrl: "https://api.x.ai/v1",
     model: "grok-2-voice-1212",
+    vadFilter: "auto",
     apiKey: ""
   },
   {
@@ -109,6 +168,7 @@ const KNOWN_ASR_PROFILES = [
     providerType: "openai",
     baseUrl: "",
     model: "",
+    vadFilter: "auto",
     apiKey: ""
   }
 ];
@@ -190,6 +250,7 @@ const elements = {
   deleteAsrProfile: document.querySelector("#deleteAsrProfile"),
   asrBaseUrl: document.querySelector("#asrBaseUrl"),
   asrModel: document.querySelector("#asrModel"),
+  asrVadFilter: document.querySelector("#asrVadFilter"),
   asrApiKey: document.querySelector("#asrApiKey"),
   asrApiKeyHint: document.querySelector("#asrApiKeyHint"),
   llmProfileId: document.querySelector("#llmProfileId"),
@@ -201,6 +262,7 @@ const elements = {
   llmModel: document.querySelector("#llmModel"),
   llmApiKey: document.querySelector("#llmApiKey"),
   llmApiKeyHint: document.querySelector("#llmApiKeyHint"),
+  sourceLanguage: document.querySelector("#sourceLanguage"),
   targetLanguage: document.querySelector("#targetLanguage"),
   asrWorkers: document.querySelector("#asrWorkers"),
   translationWorkers: document.querySelector("#translationWorkers"),
@@ -216,6 +278,7 @@ let renderedSubtitleJobId = "";
 let pollTimer = 0;
 let candidates = [];
 let selectedCandidateKey = "";
+let selectedCandidatePinned = false;
 let asrProfiles = [];
 let llmProfiles = [];
 let currentAsrProfileId = "";
@@ -228,6 +291,8 @@ let currentTranscript = null;
 let currentSubtitleCacheEntry = null;
 let subtitleDisplayMode = DEFAULTS.subtitleDisplayMode;
 let subtitleOverlayEnabled = DEFAULTS.subtitleOverlayEnabled;
+let attachedSubtitleTabId = 0;
+let attachedSubtitleSignature = "";
 let renderedSubtitleSignature = "";
 let subtitleCueSource = "";
 let activeCueIndex = -1;
@@ -266,6 +331,7 @@ elements.clearSubtitleCache.addEventListener("click", () => clearCurrentSubtitle
 elements.subtitleImportFile.addEventListener("change", () => importSubtitleFile());
 elements.toggleTaskDetails.addEventListener("click", () => toggleTaskDetails());
 elements.saveSettings.addEventListener("click", () => saveSettings());
+elements.sourceLanguage.addEventListener("change", () => saveSourceLanguageSetting());
 elements.subtitleList.addEventListener("mouseenter", () => {
   subtitleListPointerInside = true;
 });
@@ -316,12 +382,17 @@ async function refreshActiveTab() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => []);
   const changed = Boolean(activeTab?.id && tab?.id && (tab.id !== activeTab.id || tab.url !== activeTab.url));
   if (tab?.id && (!activeTab?.id || changed)) {
+    const sameTabNavigated = Boolean(activeTab?.id && tab.id === activeTab.id && tab.url !== activeTab.url);
+    if (sameTabNavigated && (subtitleCues.length || attachedSubtitleTabId === activeTab.id)) {
+      await detachCurrentSubtitlesFromPage();
+    }
     activeTab = tab;
     if (changed) {
       currentJobId = "";
       currentJob = null;
       candidates = [];
       selectedCandidateKey = "";
+      selectedCandidatePinned = false;
       renderedCandidateSignature = "";
       lastActivatedTabKey = "";
       clearedSubtitleJobIds.clear();
@@ -351,19 +422,19 @@ function activeTabKey(tab) {
 
 async function loadSettings() {
   const [syncStored, localStored] = await Promise.all([
-    chrome.storage.sync.get(null),
+    chrome.storage.sync.get([...LEGACY_MODEL_SYNC_KEYS, ...SUBTITLE_SYNC_KEYS]),
     chrome.storage.local.get(null)
   ]);
-  const stored = { ...syncStored, ...localStored };
-  asrProfiles = normalizeStoredProfiles("asr", localStored.asrProfiles);
-  llmProfiles = normalizeStoredProfiles("llm", localStored.llmProfiles);
-  migrateLegacyFields(stored);
+  const useStoredProfiles = localStored.modelSettingsVersion === MODEL_SETTINGS_VERSION;
+  const subtitleSyncSettings = pickDefined(syncStored, SUBTITLE_SYNC_KEYS);
+  asrProfiles = normalizeStoredProfiles("asr", useStoredProfiles ? localStored.asrProfiles : []);
+  llmProfiles = normalizeStoredProfiles("llm", useStoredProfiles ? localStored.llmProfiles : []);
   renderProfileOptions(
     elements.asrProfileId,
     asrProfiles,
     normalizeSelectedProfileId(
       asrProfiles,
-      localStored.selectedAsrProfileId || legacyAsrProfileId(stored) || DEFAULT_ASR_PROFILE_ID,
+      localStored.selectedAsrProfileId || DEFAULT_ASR_PROFILE_ID,
       DEFAULT_ASR_PROFILE_ID
     )
   );
@@ -372,7 +443,7 @@ async function loadSettings() {
     llmProfiles,
     normalizeSelectedProfileId(
       llmProfiles,
-      localStored.selectedLlmProfileId || legacyLlmProfileId(stored) || DEFAULT_LLM_PROFILE_ID,
+      localStored.selectedLlmProfileId || DEFAULT_LLM_PROFILE_ID,
       DEFAULT_LLM_PROFILE_ID
     )
   );
@@ -380,18 +451,20 @@ async function loadSettings() {
   currentLlmProfileId = elements.llmProfileId.value;
   applyStoredSettings({
     ...DEFAULTS,
-    ...stored,
+    ...localStored,
+    ...subtitleSyncSettings,
     asrWorkers:
       localStored.modelSettingsVersion === MODEL_SETTINGS_VERSION
-        ? stored.asrWorkers || DEFAULTS.asrWorkers
+        ? localStored.asrWorkers || DEFAULTS.asrWorkers
         : DEFAULTS.asrWorkers
   });
   renderSelectedProfile("asr");
   renderSelectedProfile("llm");
-  await persistLegacySettingsIfNeeded(syncStored);
+  await clearLegacySyncSettingsIfNeeded(syncStored);
 }
 
 function applyStoredSettings(data) {
+  setSourceLanguageValue(data.sourceLanguage || DEFAULTS.sourceLanguage);
   setTargetLanguageValue(data.targetLanguage || DEFAULTS.targetLanguage);
   elements.asrWorkers.value = valueOrDefault(data.asrWorkers, DEFAULTS.asrWorkers);
   elements.translationWorkers.value = valueOrDefault(data.translationWorkers, DEFAULTS.translationWorkers);
@@ -421,92 +494,45 @@ function getTargetLanguageValue() {
   return normalizeTargetLanguageValue(elements.targetLanguage.value);
 }
 
-function migrateLegacyFields(stored) {
-  if (stored.asrApiKey || stored.asrBaseUrl || stored.asrModel) {
-    const target = ensureProfile("asr", legacyAsrProfileId(stored) || "openai_whisper");
-    if (target) {
-      target.baseUrl = stored.asrBaseUrl || target.baseUrl;
-      target.model = stored.asrModel || target.model;
-      target.apiKey = stored.asrApiKey || target.apiKey;
-    }
+function normalizeSourceLanguageValue(value) {
+  const text = String(value || "").trim();
+  if (!text) {
+    return DEFAULTS.sourceLanguage;
   }
-  if (stored.llmApiKey || stored.llmBaseUrl || stored.llmModel) {
-    const target = ensureProfile("llm", legacyLlmProfileId(stored) || DEFAULT_LLM_PROFILE_ID);
-    if (target) {
-      target.providerType = stored.llmProviderType || target.providerType;
-      target.baseUrl = stored.llmBaseUrl || target.baseUrl;
-      target.model = stored.llmModel || target.model;
-      target.apiKey = stored.llmApiKey || target.apiKey;
-    }
-  }
+  const key = text.toLowerCase().replace("_", "-");
+  return SOURCE_LANGUAGE_ALIASES.get(key) || DEFAULTS.sourceLanguage;
 }
 
-async function persistLegacySettingsIfNeeded(syncStored) {
+function setSourceLanguageValue(value) {
+  elements.sourceLanguage.value = normalizeSourceLanguageValue(value);
+}
+
+function getSourceLanguageValue() {
+  return normalizeSourceLanguageValue(elements.sourceLanguage.value);
+}
+
+async function clearLegacySyncSettingsIfNeeded(syncStored) {
   if (!LEGACY_MODEL_SYNC_KEYS.some(key => syncStored[key] !== undefined && syncStored[key] !== "")) {
     return;
   }
-  await chrome.storage.local.set({
-    modelSettingsVersion: MODEL_SETTINGS_VERSION,
-    selectedAsrProfileId: elements.asrProfileId.value || DEFAULT_ASR_PROFILE_ID,
-    selectedLlmProfileId: elements.llmProfileId.value || DEFAULT_LLM_PROFILE_ID,
-    asrProfiles: uniqueProfiles(asrProfiles),
-    llmProfiles: uniqueProfiles(llmProfiles),
-    targetLanguage: getTargetLanguageValue(),
-    asrWorkers: clampSetting(elements.asrWorkers.value, 1, 8, DEFAULTS.asrWorkers),
-    translationWorkers: clampSetting(elements.translationWorkers.value, 1, 6, DEFAULTS.translationWorkers),
-    chunkMinutes: Math.round(clampSetting(elements.chunkMinutes.value, 1, 60, DEFAULTS.chunkMinutes))
-  });
   await chrome.storage.sync.remove(LEGACY_MODEL_SYNC_KEYS).catch(() => {});
 }
 
-function legacyAsrProfileId(stored) {
-  if (!stored.asrApiKey && !stored.asrBaseUrl && !stored.asrModel) {
-    return "";
+function pickDefined(source, keys) {
+  const result = {};
+  for (const key of keys) {
+    if (source?.[key] !== undefined) {
+      result[key] = source[key];
+    }
   }
-  const text = `${stored.asrBaseUrl || ""} ${stored.asrModel || ""}`.toLowerCase();
-  if (text.includes("groq.com")) {
-    return "groq_whisper";
-  }
-  if (text.includes("api.x.ai") || text.includes("grok")) {
-    return "xai_grok";
-  }
-  return "openai_whisper";
-}
-
-function legacyLlmProfileId(stored) {
-  if (!stored.llmApiKey && !stored.llmBaseUrl && !stored.llmModel) {
-    return "";
-  }
-  const provider = String(stored.llmProviderType || "").toLowerCase();
-  const text = `${stored.llmBaseUrl || ""} ${stored.llmModel || ""}`.toLowerCase();
-  if (provider === "anthropic" || text.includes("anthropic")) {
-    return "anthropic";
-  }
-  if (text.includes("deepseek")) {
-    return text.includes("siliconflow") || text.includes("deepseek-ai/deepseek-v3.2")
-      ? "custom_llm"
-      : "openai_custom";
-  }
-  if (text.includes("hunyuan")) {
-    return "siliconflow_hunyuan_mt_7b";
-  }
-  if (text.includes("example") || text.includes("llm")) {
-    return "llm";
-  }
-  return "openai_custom";
+  return result;
 }
 
 function normalizeStoredProfiles(kind, storedProfiles) {
   const profilesById = new Map(defaultProfiles(kind).map(profile => [profile.id, profile]));
   for (const rawProfile of Array.isArray(storedProfiles) ? storedProfiles : []) {
-    if (isDeprecatedRawProfile(kind, rawProfile)) {
-      continue;
-    }
     const profile = normalizeProfile(rawProfile);
     if (!profile.id) {
-      continue;
-    }
-    if (isDeprecatedProfile(kind, profile)) {
       continue;
     }
     const knownProfile = profilesById.get(profile.id);
@@ -526,23 +552,25 @@ function normalizeProfile(rawProfile = {}) {
     providerType: normalizeProviderType(rawProfile.providerType || rawProfile.provider_type),
     baseUrl: String(rawProfile.baseUrl || rawProfile.base_url || "").trim(),
     model: String(rawProfile.model || "").trim(),
+    vadFilter: normalizeAsrVadFilterMode(rawProfile.vadFilter || rawProfile.vad_filter || rawProfile.vadFilterMode),
     apiKey: String(rawProfile.apiKey || rawProfile.api_key || "").trim()
   };
+}
+
+function normalizeAsrVadFilterMode(value) {
+  const normalized = String(value || "auto").trim().toLowerCase();
+  if (["on", "true", "1", "yes", "force", "enabled"].includes(normalized)) {
+    return "on";
+  }
+  if (["off", "false", "0", "no", "disabled"].includes(normalized)) {
+    return "off";
+  }
+  return "auto";
 }
 
 function normalizeProviderType(providerType) {
   const value = String(providerType || "").trim();
   return ["openai", "groq", "xai", "anthropic"].includes(value) ? value : "openai";
-}
-
-function isDeprecatedProfile(kind, profile) {
-  return kind === "asr" && (profile.id === "local_whisper" || profile.providerType === "local_whisper");
-}
-
-function isDeprecatedRawProfile(kind, rawProfile = {}) {
-  return kind === "asr" &&
-    (String(rawProfile.id || "").trim() === "local_whisper" ||
-      String(rawProfile.providerType || rawProfile.provider_type || "").trim() === "local_whisper");
 }
 
 function mergeProfileDefaults(defaultProfile, storedProfile) {
@@ -552,14 +580,12 @@ function mergeProfileDefaults(defaultProfile, storedProfile) {
     providerType: storedProfile.providerType || defaultProfile.providerType || "openai",
     baseUrl: storedProfile.baseUrl || defaultProfile.baseUrl || "",
     model: storedProfile.model || defaultProfile.model || "",
+    vadFilter: storedProfile.vadFilter || defaultProfile.vadFilter || "auto",
     apiKey: storedProfile.apiKey || defaultProfile.apiKey || ""
   };
 }
 
 function hasProfileContent(profile) {
-  if (profile.id === DEFAULT_LLM_PROFILE_ID && !profile.apiKey && !profile.baseUrl && !profile.model) {
-    return false;
-  }
   return Boolean(profile.apiKey || profile.baseUrl || profile.model || profile.name);
 }
 
@@ -594,21 +620,9 @@ function cloneProfile(profile) {
     providerType: profile.providerType || "openai",
     baseUrl: profile.baseUrl || "",
     model: profile.model || "",
+    vadFilter: profile.vadFilter || "auto",
     apiKey: profile.apiKey || ""
   };
-}
-
-function ensureProfile(kind, profileId) {
-  const profiles = kind === "asr" ? asrProfiles : llmProfiles;
-  let profile = profiles.find(item => item.id === profileId);
-  if (profile) {
-    return profile;
-  }
-  const knownProfile = knownProfileDefaults(kind).find(item => item.id === profileId);
-  profile = knownProfile ? cloneProfile(knownProfile) : createEmptyProfile(kind);
-  profile.id = knownProfile?.id || profileId || profile.id;
-  profiles.push(profile);
-  return profile;
 }
 
 function renderProfileOptions(select, profiles, selectedId) {
@@ -649,6 +663,7 @@ function renderSelectedProfile(kind) {
     elements.asrProfileName.value = profile.name || "";
     elements.asrBaseUrl.value = profile.baseUrl || "";
     elements.asrModel.value = profile.model || "";
+    elements.asrVadFilter.value = normalizeAsrVadFilterMode(profile.vadFilter);
     elements.asrApiKey.value = profile.apiKey || "";
     elements.asrBaseUrl.disabled = false;
     elements.asrApiKey.disabled = false;
@@ -658,7 +673,7 @@ function renderSelectedProfile(kind) {
     elements.asrApiKey.placeholder = "只保存在本机浏览器";
     elements.asrApiKeyHint.textContent = usesXaiAsr
         ? "xAI ASR 调用 /stt；模型名称仅用于配置标识，请求里不会发送 model 字段。API 密钥只保存在本机浏览器。"
-        : "API 密钥只保存在本机浏览器的扩展本地存储中。";
+        : "API 密钥只保存在本机浏览器。自动 VAD 对自建兼容接口只读取 openapi.json 判断 vad_filter 支持；不会探测 OpenAI、Groq 或 xAI。";
     return;
   }
   elements.llmProviderType.value = ["openai", "anthropic"].includes(profile.providerType) ? profile.providerType : "openai";
@@ -677,6 +692,7 @@ function saveProfileFields(kind, profileId) {
     profile.name = elements.asrProfileName.value.trim() || profile.name || profile.model || "未命名档案";
     profile.baseUrl = elements.asrBaseUrl.value.trim();
     profile.model = elements.asrModel.value.trim();
+    profile.vadFilter = normalizeAsrVadFilterMode(elements.asrVadFilter.value);
     profile.apiKey = elements.asrApiKey.value.trim();
     return;
   }
@@ -733,6 +749,7 @@ function createEmptyProfile(kind) {
     providerType: "openai",
     baseUrl: "",
     model: "",
+    vadFilter: "auto",
     apiKey: ""
   };
 }
@@ -770,6 +787,7 @@ async function saveSettings() {
     selectedLlmProfileId: elements.llmProfileId.value || DEFAULT_LLM_PROFILE_ID,
     asrProfiles: uniqueProfiles(asrProfiles),
     llmProfiles: uniqueProfiles(llmProfiles),
+    sourceLanguage: getSourceLanguageValue(),
     targetLanguage: getTargetLanguageValue(),
     asrWorkers: clampSetting(elements.asrWorkers.value, 1, 8, DEFAULTS.asrWorkers),
     translationWorkers: clampSetting(elements.translationWorkers.value, 1, 6, DEFAULTS.translationWorkers),
@@ -777,6 +795,12 @@ async function saveSettings() {
   });
   await chrome.storage.local.remove(["asrApiKey", "llmApiKey", "asrBaseUrl", "asrModel", "llmBaseUrl", "llmModel", "llmProviderType"]).catch(() => {});
   setMessage("设置已保存。新的预加载任务会使用当前 ASR 和翻译配置档。");
+}
+
+async function saveSourceLanguageSetting() {
+  await chrome.storage.local.set({
+    sourceLanguage: getSourceLanguageValue()
+  }).catch(() => {});
 }
 
 async function refreshStatus() {
@@ -816,6 +840,11 @@ async function refreshStatus() {
         await tryLoadCachedSubtitleForCurrentPage();
         return;
       }
+      elements.status.textContent = statusLabel({
+        ...response,
+        preload: jobResponse.job.status || response.preload,
+        preloadJob: jobResponse.job
+      });
       renderJob(jobResponse.job);
       if (
         jobResponse.job?.translation?.vttPath &&
@@ -845,22 +874,30 @@ async function startPreloadFromSidePanel() {
     return;
   }
   await refreshActiveTab();
-  await activateCurrentPage();
+  candidates = [];
+  renderedCandidateSignature = "";
+  renderCandidates(candidates);
+  const refreshed = await refreshCandidates({ silent: true });
+  if (!refreshed) {
+    return;
+  }
   const requestTabId = activeTab?.id;
   const requestTabUrl = activeTab?.url || "";
-  let selected = getSelectedCandidate();
-  if (!selected) {
-    await refreshCandidates({ silent: true, skipActivate: true });
-    selected = getSelectedCandidate();
-  }
+  const selected = getSelectedCandidate();
   if (!selected) {
     setMessage("还没有发现可抽取的媒体源。请确认页面里有视频，或播放/刷新页面后再试。");
     return;
   }
+  await saveSourceLanguageSetting();
   startRequestInFlight = true;
   updateActionButtons(currentJob);
   setMessage("正在提交当前页面的媒体源...");
   try {
+    await refreshActiveTab();
+    if (activeTab?.id !== requestTabId || (activeTab?.url || "") !== requestTabUrl) {
+      setMessage("当前标签页已经变化，已取消提交。请确认媒体源后再开始。");
+      return;
+    }
     const response = await send({
       type: MESSAGE.START_PRELOAD_AUTO,
       tabId: requestTabId,
@@ -895,7 +932,7 @@ async function refreshCandidates(options = {}) {
   await refreshActiveTab();
   if (!activeTab?.id) {
     setMessage("没有可用的当前标签页。");
-    return;
+    return false;
   }
   if (!options.skipActivate) {
     await activateCurrentPage();
@@ -903,7 +940,7 @@ async function refreshCandidates(options = {}) {
   const response = await send({ type: MESSAGE.GET_CANDIDATES, tabId: activeTab.id });
   if (!response.ok) {
     setMessage(response.error);
-    return;
+    return false;
   }
   candidates = response.candidates || [];
   ensureSelection();
@@ -911,6 +948,7 @@ async function refreshCandidates(options = {}) {
   if (!options.silent) {
     setMessage(candidates.length ? `已刷新 ${candidates.length} 个媒体源。` : "还没有发现可抽取的媒体源。");
   }
+  return true;
 }
 
 async function retryPreloadFromSidePanel() {
@@ -1080,6 +1118,7 @@ function renderJob(job) {
   const progress = job.progress || {};
   const extraction = progress.extraction || job.extract || progress;
   const translation = progress.translation || job.translation || {};
+  elements.status.textContent = statusLabel({ preload: job.status, preloadJob: job });
   updateActionButtons(job);
   updateTaskPanelFocus(job);
   updateElapsedTicker(job);
@@ -1095,8 +1134,9 @@ function renderJob(job) {
   subtitle.textContent = `任务 ${job.id} · ${shorten(job.sourceUrl || job.source || "", 88)}`;
   titleWrap.append(title, subtitle);
   const stage = document.createElement("span");
-  stage.className = "stage";
-  stage.textContent = stageLabel(job.stage || progress.stage || job.status);
+  const stageKey = job.stage || progress.stage || job.status;
+  stage.className = `stage stage-${stageClassName(stageKey)}`;
+  stage.textContent = stageLabel(stageKey);
   header.append(titleWrap, stage);
 
   const metrics = document.createElement("div");
@@ -1202,17 +1242,21 @@ function candidateListSignature(items) {
 
 function selectCandidate(key) {
   selectedCandidateKey = key;
+  selectedCandidatePinned = true;
   renderCandidates(candidates);
 }
 
 function ensureSelection() {
   if (!candidates.length) {
     selectedCandidateKey = "";
+    selectedCandidatePinned = false;
     return;
   }
+  const firstKey = candidateKey(candidates[0], 0);
   const exists = candidates.some((item, index) => candidateKey(item, index) === selectedCandidateKey);
-  if (!exists) {
-    selectedCandidateKey = candidateKey(candidates[0], 0);
+  if (!selectedCandidatePinned || !exists) {
+    selectedCandidateKey = firstKey;
+    selectedCandidatePinned = false;
   }
 }
 
@@ -1275,6 +1319,7 @@ async function renderSubtitles(jobId, job = null) {
   const needsTranscriptRetry = subtitleDisplayMode === "bilingual" && subtitleCues.length && subtitleCueSource !== "transcript";
   if (signature && renderedSubtitleSignature === signature && renderedSubtitleJobId === jobId && subtitleCues.length && !needsTranscriptRetry) {
     startSubtitleFollow();
+    await attachCurrentSubtitlesToPage();
     return;
   }
   const pendingKey = `${signature || jobId}:${needsTranscriptRetry ? "transcript" : "normal"}`;
@@ -1348,7 +1393,7 @@ function renderSubtitleCueList() {
     text.textContent = cue.text;
     textWrap.appendChild(text);
     item.title = "双击跳转到这句字幕";
-    item.addEventListener("dblclick", () => seekToCue(cue.start));
+    item.addEventListener("dblclick", () => seekToCue(cue.start, index));
     item.append(time, textWrap);
     elements.subtitleList.appendChild(item);
   }
@@ -1357,8 +1402,13 @@ function renderSubtitleCueList() {
 }
 
 function clearSubtitles(text, jobId = "") {
+  subtitleLoadRequestId += 1;
+  pendingSubtitlePromise = null;
+  pendingSubtitleSignature = "";
   renderedSubtitleJobId = jobId || "";
   renderedSubtitleSignature = "";
+  attachedSubtitleTabId = 0;
+  attachedSubtitleSignature = "";
   subtitleCues = [];
   subtitleCueSource = "";
   currentTranscript = null;
@@ -1370,7 +1420,7 @@ function clearSubtitles(text, jobId = "") {
   elements.subtitleList.textContent = text || "字幕生成后会显示在这里。";
 }
 
-async function seekToCue(start) {
+async function seekToCue(start, preferredIndex = null) {
   const time = Number(start);
   if (!activeTab?.id || !Number.isFinite(time)) {
     return;
@@ -1378,7 +1428,7 @@ async function seekToCue(start) {
   const response = await send({ type: MESSAGE.SEEK_MEDIA, tabId: activeTab.id, time });
   if (response.ok) {
     releaseSubtitleListAutoFollow();
-    const index = findCueIndexAt(time);
+    const index = Number.isInteger(preferredIndex) && preferredIndex >= 0 ? preferredIndex : findCueIndexAt(time);
     activeCueIndex = -1;
     setActiveCueIndex(index, { forceScroll: true });
   }
@@ -1409,7 +1459,11 @@ async function syncSubtitleHighlight() {
   try {
     const response = await send({ type: MESSAGE.GET_VIDEO_STATE, tabId: activeTab.id });
     const time = Number(response.state?.currentTime);
-    if (response.ok && response.state?.synthetic !== true && Number.isFinite(time)) {
+    if (
+      response.ok
+      && response.state?.synthetic !== true
+      && Number.isFinite(time)
+    ) {
       setActiveCueIndex(findCueIndexAt(time));
     }
   } finally {
@@ -1418,7 +1472,31 @@ async function syncSubtitleHighlight() {
 }
 
 function findCueIndexAt(time) {
-  return subtitleCues.findIndex(cue => time >= cue.start && time <= cue.end);
+  const current = Number(time);
+  if (!Number.isFinite(current)) {
+    return -1;
+  }
+  const startTolerance = 0.001;
+  let bestIndex = -1;
+  let bestStart = Number.NEGATIVE_INFINITY;
+  subtitleCues.forEach((cue, index) => {
+    const start = Number(cue.start);
+    const end = Number(cue.end);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+      return;
+    }
+    if (current + startTolerance < start) {
+      return;
+    }
+    if (!(current < end || (index === subtitleCues.length - 1 && current <= end + startTolerance))) {
+      return;
+    }
+    if (start >= bestStart) {
+      bestStart = start;
+      bestIndex = index;
+    }
+  });
+  return bestIndex;
 }
 
 function markSubtitleListUserControl() {
@@ -1519,6 +1597,10 @@ function subtitleNoticeText() {
   if (currentSubtitleCacheEntry) {
     return `已加载本地缓存：${currentSubtitleCacheEntry.title || "未命名字幕"}`;
   }
+  const sourcePreviewText = subtitleSourcePreviewNoticeText();
+  if (sourcePreviewText) {
+    return sourcePreviewText;
+  }
   if (subtitleDisplayMode === "bilingual") {
     if (subtitleCueSource !== "transcript") {
       return "双语需要读取字幕原文；当前只拿到 VTT 译文。请重新生成字幕或导入带原文的字幕文件。";
@@ -1526,6 +1608,24 @@ function subtitleNoticeText() {
     if (!subtitleCues.some(cue => cue.sourceText)) {
       return "这份字幕没有原文轨，只能显示译文。";
     }
+  }
+  return "";
+}
+
+function subtitleSourcePreviewNoticeText() {
+  if (subtitleCueSource !== "transcript" || !currentTranscript) {
+    return "";
+  }
+  const sourceCount = Array.isArray(currentTranscript.source) ? currentTranscript.source.length : 0;
+  const translatedCount = Array.isArray(currentTranscript.translated) ? currentTranscript.translated.length : 0;
+  if (!sourceCount) {
+    return "";
+  }
+  if (!translatedCount) {
+    return "正在显示 ASR 原文；译文完成后会自动替换。";
+  }
+  if (translatedCount < sourceCount) {
+    return "部分译文已完成；未完成部分先显示 ASR 原文。";
   }
   return "";
 }
@@ -1709,26 +1809,84 @@ function parseVtt(vtt) {
 function cuesFromTranscript(transcript) {
   const source = Array.isArray(transcript?.source) ? transcript.source : [];
   const translated = Array.isArray(transcript?.translated) ? transcript.translated : [];
-  const total = Math.max(source.length, translated.length);
   const cues = [];
-  for (let index = 0; index < total; index += 1) {
-    const sourceSegment = source[index] || {};
-    const translatedSegment = translated[index] || {};
+  for (const { sourceSegment, translatedSegment } of mergeTranscriptSegments(source, translated)) {
     const start = firstFiniteNumber(translatedSegment.start, sourceSegment.start);
     const end = firstFiniteNumber(translatedSegment.end, sourceSegment.end);
-    const text = cleanSubtitleText(translatedSegment.text || sourceSegment.text);
+    const translatedText = cleanSubtitleText(translatedSegment.text);
     const sourceText = cleanSubtitleText(sourceSegment.text);
+    const text = translatedText || sourceText;
     if (Number.isFinite(start) && Number.isFinite(end) && text) {
       cues.push({
         start,
         end,
         time: formatCueTime(start, end),
         text,
-        sourceText
+        sourceText: translatedText && sourceText && sourceText !== text ? sourceText : ""
       });
     }
   }
   return cues;
+}
+
+function mergeTranscriptSegments(source, translated) {
+  const sourceSegments = Array.isArray(source) ? source : [];
+  const translatedSegments = Array.isArray(translated) ? translated : [];
+  const useIdentity = sourceSegments.some(hasSegmentIdentity) || translatedSegments.some(hasSegmentIdentity);
+  if (!useIdentity) {
+    const total = Math.max(sourceSegments.length, translatedSegments.length);
+    return Array.from({ length: total }, (_, index) => ({
+      sourceSegment: sourceSegments[index] || {},
+      translatedSegment: translatedSegments[index] || {}
+    }));
+  }
+  const translatedByKey = new Map();
+  translatedSegments.forEach(segment => {
+    const key = segmentIdentityKey(segment);
+    if (key) {
+      translatedByKey.set(key, segment);
+    }
+  });
+  const usedKeys = new Set();
+  const merged = sourceSegments.map(segment => {
+    const key = segmentIdentityKey(segment);
+    const translatedSegment = key ? translatedByKey.get(key) : null;
+    if (key && translatedSegment) {
+      usedKeys.add(key);
+    }
+    return {
+      sourceSegment: segment,
+      translatedSegment: translatedSegment || {}
+    };
+  });
+  for (const segment of translatedSegments) {
+    const key = segmentIdentityKey(segment);
+    if (!key || usedKeys.has(key)) {
+      continue;
+    }
+    merged.push({
+      sourceSegment: {},
+      translatedSegment: segment
+    });
+  }
+  return merged.sort((left, right) => {
+    const leftStart = firstFiniteNumber(left.translatedSegment.start, left.sourceSegment.start);
+    const rightStart = firstFiniteNumber(right.translatedSegment.start, right.sourceSegment.start);
+    return leftStart - rightStart;
+  });
+}
+
+function hasSegmentIdentity(segment) {
+  return Boolean(segmentIdentityKey(segment));
+}
+
+function segmentIdentityKey(segment) {
+  const chunkIndex = Number(segment?.chunkIndex);
+  const segmentIndex = Number(segment?.segmentIndex);
+  if (Number.isFinite(chunkIndex) && Number.isFinite(segmentIndex)) {
+    return `${chunkIndex}:${segmentIndex}`;
+  }
+  return "";
 }
 
 function transcriptFromCues(cues) {
@@ -1785,19 +1943,62 @@ async function attachCurrentSubtitlesToPage() {
     return;
   }
   const vtt = cuesToVtt(subtitleCues);
+  const signature = subtitleAttachSignature(activeTab.id, vtt);
   const response = await send({ type: MESSAGE.ATTACH_VTT_TEXT, tabId: activeTab.id, vtt });
   if (!response.ok) {
     renderSubtitleNotice(response.error || "当前页面没有可挂载字幕的播放器。");
     return;
   }
+  attachedSubtitleTabId = activeTab.id;
+  attachedSubtitleSignature = signature;
   renderSubtitleNotice();
 }
 
+async function ensureCurrentSubtitlesAttachedToPage() {
+  if (!activeTab?.id || !subtitleCues.length) {
+    return;
+  }
+  if (!subtitleOverlayEnabled) {
+    await detachCurrentSubtitlesFromPage();
+    return;
+  }
+  const vtt = cuesToVtt(subtitleCues);
+  const signature = subtitleAttachSignature(activeTab.id, vtt);
+  if (attachedSubtitleTabId === activeTab.id && attachedSubtitleSignature === signature) {
+    const stateResponse = await send({ type: MESSAGE.GET_VIDEO_STATE, tabId: activeTab.id }).catch(() => null);
+    if (
+      stateResponse?.ok &&
+      stateResponse.state?.subtitleSignature === signature &&
+      Number(stateResponse.state?.subtitleCueCount || 0) > 0
+    ) {
+      return;
+    }
+  }
+  await attachCurrentSubtitlesToPage();
+}
+
 async function detachCurrentSubtitlesFromPage() {
+  attachedSubtitleTabId = 0;
+  attachedSubtitleSignature = "";
   if (!activeTab?.id) {
     return;
   }
   await send({ type: MESSAGE.DETACH_PRELOAD_VTT, tabId: activeTab.id }).catch(() => null);
+}
+
+function subtitleAttachSignature(tabId, vtt) {
+  const text = String(vtt || "");
+  // Must match background attachVttText(); the page reports that signature back.
+  return `manual:${vttContentSignature(text)}`;
+}
+
+function vttContentSignature(vtt) {
+  const text = String(vtt || "");
+  let hash = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    hash = ((hash << 5) - hash + text.charCodeAt(index)) | 0;
+  }
+  return `${text.length}:${Math.abs(hash)}`;
 }
 
 async function cacheCurrentSubtitles() {
@@ -1888,6 +2089,9 @@ async function clearCurrentSubtitleCache() {
     if (currentPageKey) {
       ids.add(currentPageKey);
     }
+    for (const matchingKey of await buildMatchingSubtitleCacheKeysForCurrentPage()) {
+      ids.add(matchingKey);
+    }
     if (cachedSubtitleLoadedKey) {
       ids.add(cachedSubtitleLoadedKey);
     }
@@ -1953,17 +2157,21 @@ async function suppressPreloadSubtitleState(jobId) {
 }
 
 async function tryLoadCachedSubtitleForCurrentPage() {
-  if (cacheAutoLoadInFlight || currentJobId || subtitleCues.length) {
+  if (cacheAutoLoadInFlight || currentJobId) {
+    return;
+  }
+  if (subtitleCues.length) {
+    startSubtitleFollow();
+    await ensureCurrentSubtitlesAttachedToPage();
     return;
   }
   cacheAutoLoadInFlight = true;
   try {
     await pruneSubtitleCache();
-    const key = await buildSubtitleCacheKeyForCurrentPage();
+    const { key, entry } = await getSubtitleCacheEntryForCurrentPage();
     if (!key) {
       return;
     }
-    const entry = await getSubtitleCacheEntry(key);
     if (!entry?.transcript) {
       return;
     }
@@ -1980,7 +2188,7 @@ async function tryLoadCachedSubtitleForCurrentPage() {
     renderedSubtitleSignature = `${key}:${cues.length}`;
     activeCueIndex = -1;
     renderSubtitleCueList();
-    await attachCurrentSubtitlesToPage();
+    await ensureCurrentSubtitlesAttachedToPage();
     startSubtitleFollow();
   } finally {
     cacheAutoLoadInFlight = false;
@@ -1988,10 +2196,11 @@ async function tryLoadCachedSubtitleForCurrentPage() {
 }
 
 async function buildSubtitleCacheEntry(transcript, importedPayload = {}) {
+  const context = currentSubtitleCacheContext(importedPayload);
   const selected = getSelectedCandidate();
-  const pageUrl = importedPayload.pageUrl || activeTab?.url || selected?.pageUrl || "";
+  const pageUrl = context.pageUrl;
   const title = importedPayload.title || elements.pageTitle.textContent || selected?.title || "";
-  const sourceUrl = importedPayload.sourceUrl || selected?.url || currentJob?.sourceUrl || "";
+  const sourceUrl = context.sourceUrl;
   const id = await buildSubtitleCacheKey({ pageUrl, sourceUrl });
   return {
     id,
@@ -2008,32 +2217,153 @@ async function buildSubtitleCacheEntry(transcript, importedPayload = {}) {
 }
 
 async function buildSubtitleCacheKeyForCurrentPage() {
-  const selected = getSelectedCandidate();
-  return buildSubtitleCacheKey({
-    pageUrl: activeTab?.url || selected?.pageUrl || "",
-    sourceUrl: selected?.url || currentJob?.sourceUrl || ""
-  });
+  return buildSubtitleCacheKey(currentSubtitleCacheContext());
 }
 
 async function buildSubtitleCacheKey({ pageUrl = "", sourceUrl = "" }) {
   const normalizedPage = normalizeCacheUrl(pageUrl);
   const normalizedSource = normalizeMediaCacheUrl(sourceUrl);
-  const seed = normalizedPage || normalizedSource;
+  const seed = subtitleCacheSeed(normalizedPage, normalizedSource);
   if (!seed) {
     return "";
   }
-  return `subtitle:${await sha256Text(seed)}`;
+  return `subtitle:v${SUBTITLE_CACHE_SCHEMA_VERSION}:${await sha256Text(seed)}`;
+}
+
+function currentSubtitleCacheContext(payload = {}) {
+  const selected = getSelectedCandidate();
+  return {
+    pageUrl: payload.pageUrl || activeTab?.url || selected?.pageUrl || "",
+    sourceUrl: payload.sourceUrl || selected?.url || currentJob?.sourceUrl || ""
+  };
+}
+
+function subtitleCacheSeed(normalizedPage, normalizedSource) {
+  if (normalizedPage && normalizedSource) {
+    return `page:${normalizedPage}\nsource:${normalizedSource}`;
+  }
+  if (normalizedPage) {
+    return `page:${normalizedPage}`;
+  }
+  if (normalizedSource) {
+    return `source:${normalizedSource}`;
+  }
+  return "";
+}
+
+async function getSubtitleCacheEntryForCurrentPage() {
+  const context = currentSubtitleCacheContext();
+  const key = await buildSubtitleCacheKey(context);
+  const entry = key ? await getSubtitleCacheEntry(key) : null;
+  if (entry) {
+    return { key, entry };
+  }
+  for (const legacyKey of await buildLegacySubtitleCacheKeys(context)) {
+    const legacyEntry = await getSubtitleCacheEntry(legacyKey);
+    if (subtitleCacheEntryMatchesContext(legacyEntry, context)) {
+      return { key: legacyKey, entry: legacyEntry };
+    }
+  }
+  const pageMatched = await findSubtitleCacheEntryByPageContext(context);
+  if (pageMatched) {
+    return pageMatched;
+  }
+  return { key, entry: null };
+}
+
+async function buildMatchingSubtitleCacheKeysForCurrentPage() {
+  const context = currentSubtitleCacheContext();
+  const keys = new Set();
+  for (const legacyKey of await buildLegacySubtitleCacheKeys(context)) {
+    const entry = await getSubtitleCacheEntry(legacyKey);
+    if (subtitleCacheEntryMatchesContext(entry, context)) {
+      keys.add(legacyKey);
+    }
+  }
+  for (const entry of await getSubtitleCacheEntriesMatchingPageContext(context)) {
+    if (entry?.id) {
+      keys.add(entry.id);
+    }
+  }
+  return [...keys];
+}
+
+async function buildLegacySubtitleCacheKeys({ pageUrl = "", sourceUrl = "" }) {
+  const normalizedPage = normalizeCacheUrl(pageUrl);
+  const normalizedSource = normalizeMediaCacheUrl(sourceUrl);
+  const seeds = [...new Set([normalizedPage, normalizedSource].filter(Boolean))];
+  const keys = [];
+  for (const seed of seeds) {
+    keys.push(`subtitle:v${SUBTITLE_CACHE_LEGACY_SCHEMA_VERSION}:${await sha256Text(seed)}`);
+  }
+  return keys;
+}
+
+function subtitleCacheEntryMatchesContext(entry, context) {
+  if (!entry?.transcript) {
+    return false;
+  }
+  const currentSource = normalizeMediaCacheUrl(context.sourceUrl);
+  const entrySource = normalizeMediaCacheUrl(entry.sourceUrl);
+  if (currentSource) {
+    return Boolean(entrySource && entrySource === currentSource);
+  }
+  const currentPage = normalizeCacheUrl(context.pageUrl);
+  const entryPage = normalizeCacheUrl(entry.pageUrl);
+  return Boolean(currentPage && entryPage === currentPage);
+}
+
+async function findSubtitleCacheEntryByPageContext(context) {
+  const [entry] = await getSubtitleCacheEntriesMatchingPageContext(context);
+  return entry?.id ? { key: entry.id, entry } : null;
+}
+
+async function getSubtitleCacheEntriesMatchingPageContext(context) {
+  const currentPage = normalizeCacheUrl(context.pageUrl);
+  if (!canUsePageOnlySubtitleCacheFallback(currentPage)) {
+    return [];
+  }
+  return (await getAllSubtitleCacheEntries())
+    .filter(entry => subtitleCacheEntryMatchesPageFallback(entry, currentPage))
+    .sort((left, right) => subtitleCacheEntryTime(right) - subtitleCacheEntryTime(left));
+}
+
+function subtitleCacheEntryMatchesPageFallback(entry, normalizedPage) {
+  return Boolean(
+    entry?.id &&
+    entry?.transcript &&
+    normalizedPage &&
+    normalizeCacheUrl(entry.pageUrl) === normalizedPage
+  );
+}
+
+function canUsePageOnlySubtitleCacheFallback(normalizedPage) {
+  if (!normalizedPage) {
+    return false;
+  }
+  try {
+    const url = new URL(normalizedPage);
+    return /(^|\.)bilibili\.com$/i.test(url.hostname) && /^\/video\/[A-Za-z0-9_-]+$/i.test(url.pathname);
+  } catch {
+    return false;
+  }
+}
+
+function subtitleCacheEntryTime(entry) {
+  return Date.parse(entry?.updatedAt || entry?.createdAt || "") || 0;
 }
 
 function normalizeCacheUrl(rawUrl) {
   try {
     const url = new URL(rawUrl);
     url.hash = "";
+    normalizeBilibiliPageCacheUrl(url);
     for (const key of [...url.searchParams.keys()]) {
       if (/^(utm_|spm_|vd_source$|from$|share_|fbclid$|gclid$)/i.test(key)) {
         url.searchParams.delete(key);
       }
     }
+    url.searchParams.sort();
     return url.toString();
   } catch {
     return String(rawUrl || "").trim();
@@ -2044,11 +2374,69 @@ function normalizeMediaCacheUrl(rawUrl) {
   try {
     const url = new URL(rawUrl);
     url.hash = "";
-    url.search = "";
+    const bilibiliIdentity = getBilibiliMediaCacheIdentity(url);
+    if (bilibiliIdentity) {
+      return `bilibili:${bilibiliIdentity}`;
+    }
+    for (const key of [...url.searchParams.keys()]) {
+      if (/^(utm_|spm_|vd_source$|from$|share_|fbclid$|gclid$|token$|access_?token$|auth(?:_key)?$|signature$|sign$|sig$|expires?$|expiration$|deadline$|timestamp$|ts$|nonce$|session(?:id)?$|sid$|x-amz-|x-oss-|x-goog-)/i.test(key)) {
+        url.searchParams.delete(key);
+      }
+    }
+    url.searchParams.sort();
     return url.toString();
   } catch {
     return String(rawUrl || "").trim();
   }
+}
+
+function normalizeBilibiliPageCacheUrl(url) {
+  if (!/(^|\.)bilibili\.com$/i.test(url.hostname)) {
+    return;
+  }
+  const match = url.pathname.match(/^\/video\/([A-Za-z0-9_-]+)\/?$/);
+  if (match) {
+    url.pathname = `/video/${match[1]}`;
+    const part = url.searchParams.get("p");
+    url.search = "";
+    if (part && /^\d+$/.test(part)) {
+      url.searchParams.set("p", part);
+    }
+  }
+}
+
+function getBilibiliMediaCacheIdentity(url) {
+  if (!isLikelyBilibiliMediaCacheUrl(url)) {
+    return "";
+  }
+  const filename = decodeURIComponent(url.pathname.split("/").pop() || "");
+  const filenameMatch = filename.match(/^(\d+-\d+)-\d+\.(?:m4s|mp4)$/i);
+  if (filenameMatch) {
+    return filenameMatch[1];
+  }
+  const pathMatch = url.pathname.match(/\/upgcxcode\/(?:[^/]+\/){0,4}(\d+)(?:\/|$)/i);
+  if (pathMatch) {
+    return pathMatch[1];
+  }
+  const path = canonicalMediaCachePathname(url.pathname || "");
+  return path ? `${url.hostname}${path}` : "";
+}
+
+function isLikelyBilibiliMediaCacheUrl(url) {
+  return (
+    /(?:^|\.)bilibili(?:video)?\.com$/i.test(url.hostname) ||
+    /(?:^|\.)bilivideo\.(?:com|cn)$/i.test(url.hostname) ||
+    /\/upgcxcode\//i.test(url.pathname)
+  );
+}
+
+function canonicalMediaCachePathname(pathname) {
+  return String(pathname || "")
+    .replace(/\/\d{3,5}x\d{3,5}(?=\/)/g, "/{resolution}")
+    .replace(/\/(?:\d{3,4}p|[1-9]\d{1,3}k|[48]k)(?=\/)/gi, "/{quality}")
+    .replace(/(?:^|[-_/])\d{3,4}p(?=[-_/.]|$)/gi, "-{quality}")
+    .replace(/(?:^|[-_/])(?:[1-9]\d{1,3}k|[48]k)(?=[-_/.])/gi, "-{quality}")
+    .replace(/-\d{5,6}(?=\.m4s$)/i, "-{track}");
 }
 
 async function sha256Text(text) {
@@ -2082,6 +2470,27 @@ async function getSubtitleCacheEntry(id) {
     request.onsuccess = () => resolve(request.result || null);
     request.onerror = () => reject(request.error || new Error("无法读取字幕缓存。"));
     transaction.oncomplete = () => db.close();
+  });
+}
+
+async function getAllSubtitleCacheEntries() {
+  const db = await openSubtitleCacheDb();
+  return new Promise((resolve, reject) => {
+    let entries = [];
+    const transaction = db.transaction(SUBTITLE_CACHE_STORE, "readonly");
+    const request = transaction.objectStore(SUBTITLE_CACHE_STORE).getAll();
+    request.onsuccess = () => {
+      entries = Array.isArray(request.result) ? request.result : [];
+    };
+    request.onerror = () => reject(request.error || new Error("无法读取字幕缓存。"));
+    transaction.oncomplete = () => {
+      db.close();
+      resolve(entries);
+    };
+    transaction.onerror = () => {
+      db.close();
+      reject(transaction.error || new Error("无法读取字幕缓存。"));
+    };
   });
 }
 
@@ -2186,7 +2595,17 @@ function subtitleSignature(jobId, job) {
   const segmentCount = Number(translation.segmentCount || 0);
   const chunksDone = Number(translation.chunksDone || progress.chunksDone || 0);
   const chunksFailed = Number(translation.chunksFailed || progress.chunksFailed || 0);
-  return `${jobId}:${segmentCount}:${chunksDone}:${chunksFailed}`;
+  const base = `${jobId}:${segmentCount}:${chunksDone}:${chunksFailed}`;
+  return translation.vttText ? `${base}:${textContentSignature(translation.vttText)}` : base;
+}
+
+function textContentSignature(value) {
+  const text = String(value || "");
+  let hash = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    hash = ((hash << 5) - hash + text.charCodeAt(index)) | 0;
+  }
+  return `${text.length}:${Math.abs(hash)}`;
 }
 
 function firstFiniteNumber(...values) {
@@ -2248,7 +2667,21 @@ function showTab(tab) {
 }
 
 function statusLabel(status) {
-  if (status.preload && status.preload !== "idle") {
+  const preloadStatus = status?.preloadJob?.status || status?.preload;
+  const preloadStage = status?.preloadJob?.stage;
+  if (preloadStage === "completed_with_warnings") {
+    return "完成，有警告";
+  }
+  if (preloadStatus === "done" || preloadStatus === "completed") {
+    return "字幕已完成";
+  }
+  if (preloadStatus === "error" || preloadStatus === "failed") {
+    return "任务失败";
+  }
+  if (preloadStatus === "cancelled") {
+    return "任务已停止";
+  }
+  if (preloadStatus && preloadStatus !== "idle") {
     return "预加载";
   }
   return "待机";
@@ -2276,6 +2709,9 @@ function formatSource(source) {
 }
 
 function jobTitle(job) {
+  if (job.stage === "completed_with_warnings") {
+    return "完成，有警告";
+  }
   if (job.status === "done" || job.status === "completed") {
     return "字幕已完成";
   }
@@ -2314,6 +2750,10 @@ function stageLabel(stage) {
     done: "完成",
     error: "失败"
   }[stage] || stage || "处理中";
+}
+
+function stageClassName(stage) {
+  return String(stage || "unknown").toLowerCase().replace(/[^a-z0-9_-]+/g, "-") || "unknown";
 }
 
 function chunkStageLabel(stage) {
@@ -2401,13 +2841,20 @@ function extractionActivityText(extraction) {
   if (!extraction) {
     return "-";
   }
+  const status = extraction.status || extraction.phase;
+  if (status === "done" || status === "completed") {
+    return "已完成";
+  }
+  if (status === "error" || status === "failed") {
+    return "失败";
+  }
   if (extraction.message) {
     return shorten(extraction.message, 34);
   }
   const done = Number(extraction.internalChunksDone || 0) || 0;
   const total = Number(extraction.internalChunksTotal || 0) || 0;
   if (total) {
-    return `内部音频切片 ${done}/${total}`;
+    return `内部媒体切片 ${done}/${total}`;
   }
   const downloaded = Number(extraction.downloadedSegments || 0) || 0;
   const segmentTotal = Number(extraction.totalSegments || 0) || 0;

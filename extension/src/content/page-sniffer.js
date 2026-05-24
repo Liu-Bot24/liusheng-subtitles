@@ -110,10 +110,11 @@
       return;
     }
     const key = `${ids.bvid}:${ids.cid}`;
-    if (window.__fuguangLastBilibiliPlayurlProbe === key) {
+    const lastProbe = window.__fuguangLastBilibiliPlayurlProbe || {};
+    if (lastProbe.key === key && lastProbe.ok) {
       return;
     }
-    window.__fuguangLastBilibiliPlayurlProbe = key;
+    window.__fuguangLastBilibiliPlayurlProbe = { key, ok: false, at: Date.now() };
     const params = new URLSearchParams({
       bvid: ids.bvid,
       cid: String(ids.cid),
@@ -134,6 +135,7 @@
       }
       const json = await response.json();
       postBilibiliPlayurlMedia(json?.data || json?.result || {});
+      window.__fuguangLastBilibiliPlayurlProbe = { key, ok: true, at: Date.now() };
     } catch {
       // Bilibili fallback is opportunistic; normal network sniffing remains active.
     }

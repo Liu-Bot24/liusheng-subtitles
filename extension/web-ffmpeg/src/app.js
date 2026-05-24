@@ -17,7 +17,10 @@ const state = {
   ffmpeg: null,
   loadPromise: null,
   currentClient: null,
+  currentTask: null,
   currentRequestId: "",
+  heartbeatTimer: null,
+  lastHeartbeatAt: 0,
   allowedOrigin: new URL(location.href).searchParams.get("allowedOrigin") || "",
   status: document.querySelector("#status"),
   log: document.querySelector("#log"),
@@ -75,15 +78,19 @@ async function loadFfmpeg(event = null, id = "") {
   state.status.textContent = "加载 FFmpeg...";
   state.loadPromise = (async () => {
     const ffmpeg = new FFmpeg();
-    ffmpeg.on("log", ({ message }) => appendLog(message));
+    ffmpeg.on("log", ({ message }) => {
+      appendLog(message);
+      sendFfmpegHeartbeat(message);
+    });
     ffmpeg.on("progress", progress => {
       const ratio = Number(progress.progress || 0);
+      const task = state.currentTask;
       post(null, {
         type: "progress",
-        id: state.currentRequestId || id,
+        id: task?.id || state.currentRequestId || id,
         stage: "ffmpeg",
         percent: Math.max(0, Math.min(100, Math.round(ratio * 1000) / 10)),
-        message: "FFmpeg 正在处理音频"
+        message: task?.message || "FFmpeg 正在处理音频"
       });
     });
     await ffmpeg.load({
@@ -106,13 +113,12 @@ async function extractAudio(event, message) {
     throw new Error("没有收到可处理的媒体文件。");
   }
 
-  const requestId = String(message.id || "");
-  activateRequest(requestId);
+  const requestId = beginFfmpegTask(event, message.id || "", "正在执行 FFmpeg 音频提取");
   let ffmpeg;
   try {
     ffmpeg = await loadFfmpeg(event, message.id || "");
   } catch (error) {
-    deactivateRequest(requestId);
+    endFfmpegTask(requestId);
     throw error;
   }
   const requestedInputName = String(message.inputName || "");
@@ -134,7 +140,7 @@ async function extractAudio(event, message) {
     `output.${outputFormat}`
   );
   const outputPattern = segmentSeconds ? segmentOutputPattern(outputName, outputFormat) : outputName;
-  const command = buildExtractAudioArgs({ inputName, outputName: outputPattern, segmentSeconds });
+  const command = buildExtractAudioArgs({ inputName, outputName: outputPattern, segmentSeconds, detectSpeech: true });
   const logStartIndex = state.ffmpegLogs.length;
   const cleanupTargets = new Set([outputName, outputPattern]);
 
@@ -177,9 +183,11 @@ async function extractAudio(event, message) {
       });
     }
 
+    const speechIntervals = speechIntervalsFromFfmpegLogs(state.ffmpegLogs.slice(logStartIndex), totalDuration);
+
     if (segmentSeconds) {
       postOperationProgress("read", 96, "正在读取音频分段输出");
-      const chunks = await readSegmentOutputs(ffmpeg, outputPattern, segmentSeconds, totalDuration);
+      const chunks = await readSegmentOutputs(ffmpeg, outputPattern, segmentSeconds, totalDuration, speechIntervals);
       for (const chunk of chunks) {
         cleanupTargets.add(chunk.file.name);
       }
@@ -220,18 +228,19 @@ async function extractAudio(event, message) {
 
     const buffer = output.buffer.slice(output.byteOffset, output.byteOffset + output.byteLength);
     state.status.textContent = "完成";
-    return {
-      file: {
-        name: outputName,
-        mime: "audio/mpeg",
-        buffer
-      },
-      bytes: buffer.byteLength
-    };
+      return {
+        file: {
+          name: outputName,
+          mime: "audio/mpeg",
+          buffer
+        },
+        bytes: buffer.byteLength,
+        speechIntervals
+      };
   } finally {
     postOperationProgress("cleanup", 99, "正在清理 Web FFmpeg 临时文件");
     await cleanup(ffmpeg, ...cleanupTargets);
-    deactivateRequest(requestId);
+    endFfmpegTask(requestId);
   }
 }
 
@@ -241,13 +250,12 @@ async function concatAudio(event, message) {
     throw new Error("没有收到可合并的音频文件。");
   }
 
-  const requestId = String(message.id || "");
-  activateRequest(requestId);
+  const requestId = beginFfmpegTask(event, message.id || "", "正在执行 FFmpeg 音频合并");
   let ffmpeg;
   try {
     ffmpeg = await loadFfmpeg(event, message.id || "");
   } catch (error) {
-    deactivateRequest(requestId);
+    endFfmpegTask(requestId);
     throw error;
   }
   const outputFormat = normalizeOutputFormat(message.options?.format);
@@ -327,8 +335,43 @@ async function concatAudio(event, message) {
   } finally {
     postOperationProgress("cleanup", 99, "正在清理 Web FFmpeg 临时文件");
     await cleanup(ffmpeg, ...cleanupTargets);
-    deactivateRequest(requestId);
+    endFfmpegTask(requestId);
   }
+}
+
+function beginFfmpegTask(event, id, message) {
+  const requestId = String(id || "");
+  activateRequest(requestId);
+  state.currentClient = {
+    source: event?.source || state.currentClient?.source,
+    origin: event?.origin || state.currentClient?.origin || "*"
+  };
+  state.currentTask = {
+    id: requestId,
+    message,
+    startedAt: Date.now()
+  };
+  state.lastHeartbeatAt = 0;
+  if (state.heartbeatTimer) {
+    clearInterval(state.heartbeatTimer);
+  }
+  sendFfmpegHeartbeat(message, true);
+  state.heartbeatTimer = setInterval(() => {
+    sendFfmpegHeartbeat(state.currentTask?.message || message, true);
+  }, 5000);
+  return requestId;
+}
+
+function endFfmpegTask(id) {
+  if (!id || state.currentTask?.id === id) {
+    if (state.heartbeatTimer) {
+      clearInterval(state.heartbeatTimer);
+      state.heartbeatTimer = null;
+    }
+    state.currentTask = null;
+    state.lastHeartbeatAt = 0;
+  }
+  deactivateRequest(id);
 }
 
 function activateRequest(id) {
@@ -342,6 +385,9 @@ function deactivateRequest(id) {
 }
 
 function postOperationProgress(stage, percent, message = "") {
+  if (state.currentTask && message) {
+    state.currentTask.message = message;
+  }
   post(null, {
     type: "progress",
     id: state.currentRequestId,
@@ -349,6 +395,32 @@ function postOperationProgress(stage, percent, message = "") {
     percent: Math.max(0, Math.min(100, Number(percent) || 0)),
     message
   });
+}
+
+function sendFfmpegHeartbeat(message = "", force = false) {
+  const task = state.currentTask;
+  if (!task?.id) {
+    return;
+  }
+  const now = Date.now();
+  if (!force && now - state.lastHeartbeatAt < 3000) {
+    return;
+  }
+  state.lastHeartbeatAt = now;
+  post(null, {
+    type: "progress",
+    id: task.id,
+    stage: "ffmpeg",
+    message: compactFfmpegProgressMessage(message || task.message || "FFmpeg 正在处理音频")
+  });
+}
+
+function compactFfmpegProgressMessage(message = "") {
+  const text = String(message || "").trim().replace(/\s+/g, " ");
+  if (!text) {
+    return "FFmpeg 正在处理音频";
+  }
+  return text.length > 120 ? `${text.slice(0, 117)}...` : text;
 }
 
 function normalizeInputFiles(message) {
@@ -380,7 +452,7 @@ function audioResultTransferList(result) {
     .filter(buffer => buffer instanceof ArrayBuffer);
 }
 
-async function readSegmentOutputs(ffmpeg, outputPattern, segmentSeconds, totalDuration) {
+async function readSegmentOutputs(ffmpeg, outputPattern, segmentSeconds, totalDuration, speechIntervals = null) {
   const pattern = segmentPatternParts(outputPattern);
   const entries = await ffmpeg.listDir(".");
   const names = entries
@@ -410,8 +482,61 @@ async function readSegmentOutputs(ffmpeg, outputPattern, segmentSeconds, totalDu
       },
       bytes: buffer.byteLength
     });
+    if (Array.isArray(speechIntervals)) {
+      chunks[chunks.length - 1].speechIntervals = intersectSpeechIntervals(speechIntervals, start, end);
+    }
   }
   return chunks;
+}
+
+function speechIntervalsFromFfmpegLogs(logs, duration = 0) {
+  const text = (logs || []).join("\n");
+  const silenceIntervals = [];
+  let pendingStart = null;
+  for (const match of text.matchAll(/silence_(start|end):\s*([0-9.]+)/g)) {
+    const value = Number(match[2]);
+    if (!Number.isFinite(value)) {
+      continue;
+    }
+    if (match[1] === "start") {
+      pendingStart = value;
+      continue;
+    }
+    const start = pendingStart === null ? 0 : pendingStart;
+    if (value > start) {
+      silenceIntervals.push({ start, end: value });
+    }
+    pendingStart = null;
+  }
+  const endTime = positiveNumber(duration) || Math.max(0, ...silenceIntervals.map(item => item.end), pendingStart || 0);
+  if (!silenceIntervals.length) {
+    return endTime > 0 ? [{ start: 0, end: endTime }] : null;
+  }
+  if (pendingStart !== null && endTime > pendingStart) {
+    silenceIntervals.push({ start: pendingStart, end: endTime });
+  }
+  const intervals = [];
+  let cursor = 0;
+  for (const silence of silenceIntervals.sort((a, b) => a.start - b.start || a.end - b.end)) {
+    if (silence.start > cursor + 0.05) {
+      intervals.push({ start: cursor, end: silence.start });
+    }
+    cursor = Math.max(cursor, silence.end);
+  }
+  if (endTime > cursor + 0.05) {
+    intervals.push({ start: cursor, end: endTime });
+  }
+  return intervals;
+}
+
+function intersectSpeechIntervals(intervals, start, end) {
+  return (intervals || [])
+    .map(interval => ({
+      start: Math.max(start, Number(interval.start)),
+      end: Math.min(end, Number(interval.end))
+    }))
+    .filter(interval => Number.isFinite(interval.start) && Number.isFinite(interval.end) && interval.end > interval.start)
+    .map(interval => ({ start: interval.start, end: interval.end }));
 }
 
 function segmentOutputPattern(outputName, outputFormat) {
@@ -470,8 +595,8 @@ function post(event, payload, transfer = []) {
 
 function appendLog(message) {
   state.ffmpegLogs.push(String(message || ""));
-  if (state.ffmpegLogs.length > 300) {
-    state.ffmpegLogs.splice(0, state.ffmpegLogs.length - 300);
+  if (state.ffmpegLogs.length > 2000) {
+    state.ffmpegLogs.splice(0, state.ffmpegLogs.length - 2000);
   }
   const line = document.createElement("div");
   line.textContent = String(message || "");
@@ -495,13 +620,4 @@ function buildFfmpegError(reason, { inputName, outputName, command, returnCode =
   return new Error(
     `FFmpeg 提取失败：${reason}。输入 ${inputName}，输出 ${outputName}，返回码 ${codeText}。命令：${commandText}${causeText}${logText}`
   );
-}
-
-async function toBlobURL(url, mimeType) {
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(`无法加载 FFmpeg 资源：${response.status} ${url}`);
-  }
-  const blob = new Blob([await response.arrayBuffer()], { type: mimeType });
-  return URL.createObjectURL(blob);
 }

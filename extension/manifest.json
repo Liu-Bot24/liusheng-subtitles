@@ -30,9 +30,7 @@
     "webRequest"
   ],
   "host_permissions": [
-    "<all_urls>",
-    "http://127.0.0.1/*",
-    "http://localhost/*"
+    "<all_urls>"
   ],
   "content_scripts": [
     {
@@ -61,6 +59,6 @@
     }
   ],
   "content_security_policy": {
-    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; frame-src 'self' https://* http://127.0.0.1:* http://localhost:*; worker-src 'self'; connect-src 'self' https://* http://*:* ws://*:*"
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; frame-src 'self'; worker-src 'self'; connect-src 'self' https://* http://*:*"
   }
 }

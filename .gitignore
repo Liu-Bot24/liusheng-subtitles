@@ -1,26 +1,16 @@
-# Python cache
-__pycache__/
-*.py[cod]
-*.pyo
-*.pyd
-
-# Virtual environments
-.venv/
-venv/
-ENV/
-
 # IDE files
 .vscode/
 .idea/
 *.code-workspace
+*.swp
+*.swo
+*.swx
 
 # Local configuration & secrets
 config.ini
 .env
 .env.*
 !.env.example
-!helper/.env.example
-helper/config.json
 
 # Runtime artifacts
 *.log

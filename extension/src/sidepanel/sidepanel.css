@@ -47,10 +47,21 @@ body {
 }
 
 .panel-actions {
+  align-items: end;
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
   justify-content: flex-end;
+}
+
+.task-source-language {
+  flex: 1 1 132px;
+  max-width: 170px;
+  min-width: 126px;
+}
+
+.task-source-language select {
+  min-height: 36px;
 }
 
 h1,
@@ -81,8 +92,7 @@ h2 {
 }
 
 .status,
-.stage,
-.chip {
+.stage {
   color: #4f5c54;
   font-size: 12px;
   line-height: 1.2;
@@ -108,10 +118,17 @@ h2 {
   width: 7px;
 }
 
-.chip {
-  background: #e8ede5;
-  border-radius: 4px;
-  padding: 4px 6px;
+.stage-failed::before,
+.stage-error::before {
+  background: #a23a2c;
+}
+
+.stage-cancelled::before {
+  background: #877568;
+}
+
+.stage-completed_with_warnings::before {
+  background: #b36b19;
 }
 
 .stage {
@@ -414,6 +431,10 @@ button:disabled {
   background: #e9f3ed;
 }
 
+.chunk.completed_with_warnings {
+  background: #fff4df;
+}
+
 .chunk.translation {
   background: #f6f2e9;
 }
@@ -511,19 +532,6 @@ label {
   gap: 5px;
 }
 
-.inline-toggle {
-  align-items: center;
-  display: flex;
-  gap: 8px;
-  justify-content: flex-start;
-}
-
-.inline-toggle input {
-  height: 16px;
-  margin: 0;
-  width: 16px;
-}
-
 label span {
   color: #4f5a51;
   font-size: 12px;
@@ -560,7 +568,6 @@ select {
 
   .tabs,
   button.secondary,
-  .chip,
   .metric {
     background: #263027;
     color: #eef2ec;
@@ -603,12 +610,6 @@ select {
     box-shadow: 0 0 0 2px rgba(77, 163, 139, 0.24);
   }
 
-  .job-empty,
-  .message,
-  .candidate-reason {
-    color: #ddb48b;
-  }
-
   .settings-hint {
     color: #b8c4bb;
   }
@@ -616,34 +617,6 @@ select {
   #taskMessage:not([hidden]) {
     background: #2a2118;
     border-color: #5d4630;
-  }
-
-  .chunk {
-    background: #243027;
-    color: #eef2ec;
-  }
-
-  .chunk.failed {
-    background: #3a2522;
-  }
-
-  .chunk.done,
-  .chunk.completed,
-  .chunk.translated,
-  .chunk.completed_with_warnings {
-    background: #203229;
-  }
-
-  .chunk.translation {
-    background: #332e22;
-  }
-
-  .chunk.asr {
-    background: #223139;
-  }
-
-  .chunk-error {
-    color: #ffb2a4;
   }
 
   .candidate-meta {
@@ -675,6 +648,11 @@ select {
   .chunk.completed_with_warnings {
     background: #173825;
     color: #eff8f1;
+  }
+
+  .chunk.completed_with_warnings {
+    background: #3a2e1f;
+    color: #fff0d6;
   }
 
   .chunk.translation {
