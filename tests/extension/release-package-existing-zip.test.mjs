@@ -30,6 +30,30 @@ try {
 
   assert.notEqual(result.status, 0, "existing release zip with helper/ should fail package audit");
   assert.match(`${result.stdout}\n${result.stderr}`, /helper packaged: helper\//);
+
+  fs.rmSync(packageRoot, { recursive: true, force: true });
+  fs.mkdirSync(packageRoot, { recursive: true });
+  fs.rmSync(zipPath, { force: true });
+  writeFile("manifest.json", "{}\n");
+  writeFile("src/background/service-worker.js", "\n");
+  writeFile("src/offscreen/offscreen.js", "\n");
+  writeFile("web-ffmpeg/index.html", "<!doctype html>\n");
+  writeFile("web-ffmpeg/vendor/@ffmpeg/core/ffmpeg-core.wasm", "");
+  writeFile("README.md", "unexpected root file must not be packaged\n");
+  childProcess.execFileSync("zip", ["-qr", zipPath, "."], { cwd: packageRoot });
+
+  const unexpectedRootResult = childProcess.spawnSync(
+    process.execPath,
+    ["tests/extension/release-package.test.mjs"],
+    {
+      cwd: repoRoot,
+      env: { ...process.env, FUGUANG_RELEASE_ZIP: zipPath },
+      encoding: "utf8"
+    }
+  );
+
+  assert.notEqual(unexpectedRootResult.status, 0, "existing release zip with an unexpected root entry should fail package audit");
+  assert.match(`${unexpectedRootResult.stdout}\n${unexpectedRootResult.stderr}`, /unexpected release zip entry: README\.md/);
 } finally {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 }

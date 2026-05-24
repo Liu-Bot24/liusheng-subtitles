@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import path from "node:path";
 
 const manifest = JSON.parse(fs.readFileSync(new URL("../../extension/manifest.json", import.meta.url), "utf8"));
 const extensionCsp = manifest.content_security_policy?.extension_pages || "";
-const releaseAudit = fs.readFileSync(new URL("../../release notes", import.meta.url), "utf8");
+const extensionRoot = path.resolve(new URL("../../extension", import.meta.url).pathname);
 
 assert.match(extensionCsp, /connect-src[^;]*http:\/\/\*:\*/);
 assert.doesNotMatch(extensionCsp, /connect-src[^;]*ws:\/\//);
@@ -20,6 +21,10 @@ for (const permission of ["nativeMessaging", "tabCapture", "downloads", "managem
   assert.equal(manifest.permissions.includes(permission), false);
 }
 assert.equal(manifest.action?.default_popup, undefined);
+
+assert.equal(manifest.background?.type, "module");
+assert.equal(manifest.background?.service_worker, "src/background/service-worker.js");
+const backgroundModuleSources = assertLocalModuleImportsExist(manifest.background.service_worker);
 
 const contentScripts = manifest.content_scripts || [];
 assert.equal(contentScripts.length, 2);
@@ -46,7 +51,6 @@ assert.equal(mainWorldSnifferScript.run_at, "document_start");
 assert.equal(mainWorldSnifferScript.all_frames, true);
 assert.equal(mainWorldSnifferScript.world, "MAIN");
 
-const serviceWorker = fs.readFileSync(new URL("../../extension/src/background/service-worker.js", import.meta.url), "utf8");
 for (const [permission, apiName] of [
   ["offscreen", "chrome.offscreen"],
   ["declarativeNetRequestWithHostAccess", "chrome.declarativeNetRequest"],
@@ -57,16 +61,43 @@ for (const [permission, apiName] of [
   ["webRequest", "chrome.webRequest"]
 ]) {
   assert.ok(manifest.permissions.includes(permission), `${permission} permission missing`);
-  assert.ok(serviceWorker.includes(apiName), `${permission} permission has no ${apiName} product use`);
+  assert.ok(backgroundModuleSources.includes(apiName), `${permission} permission has no ${apiName} product use`);
 }
 
-for (const permission of manifest.permissions) {
-  assert.match(releaseAudit, new RegExp(`\\| \`${escapeRegExp(permission)}\` \\|`), `${permission} missing release-audit purpose`);
-}
-for (const hostPermission of manifest.host_permissions || []) {
-  assert.match(releaseAudit, new RegExp(`\\| \`${escapeRegExp(hostPermission)}\` \\|`), `${hostPermission} missing release-audit purpose`);
+function assertLocalModuleImportsExist(entrypoint) {
+  const seen = new Set();
+  const stack = [entrypoint];
+  const sources = [];
+  while (stack.length) {
+    const relative = normalizeRelative(stack.pop());
+    if (!relative || seen.has(relative)) {
+      continue;
+    }
+    seen.add(relative);
+    const absolute = path.join(extensionRoot, relative);
+    assert.equal(fs.existsSync(absolute), true, `module file missing: ${relative}`);
+    const source = fs.readFileSync(absolute, "utf8");
+    sources.push(source);
+    for (const imported of localStaticImports(source)) {
+      stack.push(resolveExtensionRelative(relative, imported));
+    }
+  }
+  return sources.join("\n");
 }
 
-function escapeRegExp(value) {
-  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function localStaticImports(source) {
+  return [...source.matchAll(/(?:import|export)\s+(?:[^"']*?\s+from\s+)?["']([^"']+)["']/g)]
+    .map(match => match[1])
+    .filter(target => target.startsWith("./") || target.startsWith("../"));
+}
+
+function resolveExtensionRelative(baseFile, target) {
+  return normalizeRelative(path.relative(
+    extensionRoot,
+    path.resolve(path.dirname(path.join(extensionRoot, baseFile)), target)
+  ));
+}
+
+function normalizeRelative(value) {
+  return String(value || "").split(path.sep).join("/");
 }

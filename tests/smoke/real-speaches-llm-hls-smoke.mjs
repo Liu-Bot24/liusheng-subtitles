@@ -13,7 +13,13 @@ const speachesModel = process.env.SPEACHES_MODEL || "Systran/faster-whisper-larg
 const llmBaseUrl = normalizeBaseUrl(process.env.LLM_BASE_URL || "https://llm.example.invalid/v1");
 const llmModel = process.env.LLM_MODEL || "test-llm";
 const llmApiKey = process.env.LLM_API_KEY || "";
+const allowRealServices = process.env.FUGUANG_ALLOW_REAL_SERVICES === "1";
+const realSmokeVerbose = process.env.FUGUANG_REAL_SMOKE_VERBOSE === "1";
 const chromiumHeadless = process.env.FUGUANG_SMOKE_HEADLESS === "1";
+
+if (!allowRealServices) {
+  throw new Error("FUGUANG_ALLOW_REAL_SERVICES=1 is required before running real Speaches/LLM smoke.");
+}
 
 if (!llmApiKey) {
   throw new Error("LLM_API_KEY is required; do not put the key in this repository.");
@@ -237,26 +243,44 @@ async function assertSpeachesAvailable() {
 }
 
 function printResult(result) {
+  const sourceSegments = result.transcriptResponse?.transcript?.source || [];
+  const translatedSegments = result.transcriptResponse?.transcript?.translated || [];
+  const vtt = result.vttResponse?.vtt || "";
+  const historyTail = Array.isArray(result.historyTail) ? result.historyTail : [];
+  const errorText = result.latest?.job?.error || "";
   console.log(`REAL_HLS_SMOKE_STATUS=${result.latest?.job?.status}`);
   console.log(`REAL_HLS_SMOKE_STAGE=${result.latest?.job?.stage}`);
-  console.log(`REAL_HLS_SMOKE_ERROR=${result.latest?.job?.error || ""}`);
-  console.log(`REAL_HLS_SMOKE_SOURCE=${JSON.stringify(result.transcriptResponse?.transcript?.source || [])}`);
-  console.log(`REAL_HLS_SMOKE_TRANSLATED=${JSON.stringify(result.transcriptResponse?.transcript?.translated || [])}`);
-  console.log(`REAL_HLS_SMOKE_VTT=${JSON.stringify(result.vttResponse?.vtt || "")}`);
-  console.log(`REAL_HLS_SMOKE_HISTORY_TAIL=${JSON.stringify(result.historyTail)}`);
+  console.log(`REAL_HLS_SMOKE_ERROR=${errorText ? "[redacted; set FUGUANG_REAL_SMOKE_VERBOSE=1 for details]" : ""}`);
+  console.log(`REAL_HLS_SMOKE_SOURCE_COUNT=${sourceSegments.length}`);
+  console.log(`REAL_HLS_SMOKE_TRANSLATED_COUNT=${translatedSegments.length}`);
+  console.log(`REAL_HLS_SMOKE_VTT_BYTES=${Buffer.byteLength(String(vtt), "utf8")}`);
+  console.log(`REAL_HLS_SMOKE_HISTORY_TAIL_COUNT=${historyTail.length}`);
+  if (realSmokeVerbose) {
+    console.log(`REAL_HLS_SMOKE_ERROR_VERBOSE=${JSON.stringify(errorText)}`);
+    console.log(`REAL_HLS_SMOKE_SOURCE_VERBOSE=${JSON.stringify(sourceSegments)}`);
+    console.log(`REAL_HLS_SMOKE_TRANSLATED_VERBOSE=${JSON.stringify(translatedSegments)}`);
+    console.log(`REAL_HLS_SMOKE_VTT_VERBOSE=${JSON.stringify(vtt)}`);
+    console.log(`REAL_HLS_SMOKE_HISTORY_TAIL_VERBOSE=${JSON.stringify(historyTail)}`);
+  }
 }
 
 function assertCompletedResult(result) {
   if (result.latest?.job?.status !== "completed") {
     throw new Error(`HLS smoke did not complete: ${JSON.stringify(result.latest?.job)}`);
   }
-  const sourceText = JSON.stringify(result.transcriptResponse?.transcript?.source || []).toLowerCase();
+  const sourceSegments = result.transcriptResponse?.transcript?.source || [];
+  const sourceText = JSON.stringify(sourceSegments).toLowerCase();
   if (!sourceText.includes("hello") || !sourceText.includes("local segmented audio")) {
-    throw new Error(`HLS ASR transcript missing expected speech: ${sourceText}`);
+    throw new Error(
+      `HLS ASR transcript missing expected synthetic speech markers: source_segments=${sourceSegments.length}; source_chars=${sourceText.length}`
+    );
   }
-  const translatedText = JSON.stringify(result.transcriptResponse?.transcript?.translated || "");
+  const translatedSegments = result.transcriptResponse?.transcript?.translated || [];
+  const translatedText = JSON.stringify(translatedSegments);
   if (!/[\u4e00-\u9fff]/.test(translatedText)) {
-    throw new Error(`HLS translation missing Chinese output: ${translatedText}`);
+    throw new Error(
+      `HLS translation missing Chinese output: translated_segments=${translatedSegments.length}; translated_chars=${translatedText.length}`
+    );
   }
 }
 

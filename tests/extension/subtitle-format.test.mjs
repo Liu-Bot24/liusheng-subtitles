@@ -92,6 +92,29 @@ Dialogue: 0,0:01:02.50,0:01:05.00,Default,,0,0,0,,{\\i1}Hello\\NASS
   assert.equal(result.transcript.translated[0].text, "你好");
 }
 
+{
+  const result = parseSubtitleImportText(JSON.stringify({
+    format: "fuguang-subtitle",
+    transcript: {
+      source: [
+        { start: 0, end: 2, text: "source first", chunkIndex: 0, segmentIndex: 0 },
+        { start: 3, end: 5, text: "source second", chunkIndex: 1, segmentIndex: 0 }
+      ],
+      translated: [
+        { start: 3, end: 5, text: "translated second", chunkIndex: 1, segmentIndex: 0 }
+      ]
+    }
+  }), { filename: "fuguang.json" });
+
+  assert.deepEqual(plain(result.transcript.source), [
+    { start: 0, end: 2, text: "source first", chunkIndex: 0, segmentIndex: 0 },
+    { start: 3, end: 5, text: "source second", chunkIndex: 1, segmentIndex: 0 }
+  ]);
+  assert.deepEqual(plain(result.transcript.translated), [
+    { start: 3, end: 5, text: "translated second", chunkIndex: 1, segmentIndex: 0 }
+  ]);
+}
+
 assert.throws(
   () => parseSubtitleImportText("这只是普通文本，没有时间轴。", { filename: "note.txt" }),
   /无法识别字幕文件格式/

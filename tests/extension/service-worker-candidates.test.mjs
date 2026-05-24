@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import vm from "node:vm";
 
+const webNavigationCommittedListeners = [];
 const webNavigationHistoryListeners = [];
 const addListener = () => {};
 const chrome = {
@@ -33,7 +34,7 @@ const chrome = {
   },
   webNavigation: {
     getAllFrames: async () => [],
-    onCommitted: { addListener },
+    onCommitted: { addListener: listener => webNavigationCommittedListeners.push(listener) },
     onHistoryStateUpdated: { addListener: listener => webNavigationHistoryListeners.push(listener) },
     onTabReplaced: { addListener }
   },
@@ -111,7 +112,34 @@ const context = vm.createContext({
   clearInterval
 });
 
-const source = fs.readFileSync(new URL("../../extension/src/background/service-worker.js", import.meta.url), "utf8");
+const languageSource = fs.readFileSync(new URL("../../extension/src/background/browser-language.js", import.meta.url), "utf8")
+  .replace("export const FuguangBrowserLanguage =", "var FuguangBrowserLanguage =");
+const asrProviderSource = fs.readFileSync(new URL("../../extension/src/background/browser-asr-provider.js", import.meta.url), "utf8")
+  .replace('import { FuguangBrowserLanguage } from "./browser-language.js";\n\n', "")
+  .replace("export const FuguangBrowserAsrProvider =", "var FuguangBrowserAsrProvider =");
+const asrPostprocessSource = fs.readFileSync(new URL("../../extension/src/background/browser-asr-postprocess.js", import.meta.url), "utf8")
+  .replace("export const FuguangBrowserAsrPostprocess =", "var FuguangBrowserAsrPostprocess =");
+const mediaCandidatesSource = fs.readFileSync(new URL("../../extension/src/background/browser-media-candidates.js", import.meta.url), "utf8")
+  .replace("export const FuguangBrowserMediaCandidates =", "var FuguangBrowserMediaCandidates =");
+const modelProfilesSource = fs.readFileSync(new URL("../../extension/src/background/browser-model-profiles.js", import.meta.url), "utf8")
+  .replace('import { FuguangBrowserAsrProvider } from "./browser-asr-provider.js";\n\n', "")
+  .replace("export const FuguangBrowserModelProfiles =", "var FuguangBrowserModelProfiles =");
+const providerSource = fs.readFileSync(new URL("../../extension/src/background/browser-translation-provider.js", import.meta.url), "utf8")
+  .replace('import { FuguangBrowserLanguage } from "./browser-language.js";\n\n', "")
+  .replace("export const FuguangBrowserTranslationProvider =", "var FuguangBrowserTranslationProvider =");
+const pipelineSource = fs.readFileSync(new URL("../../extension/src/background/browser-translation-pipeline.js", import.meta.url), "utf8")
+  .replace('import { FuguangBrowserTranslationProvider } from "./browser-translation-provider.js";\n\n', "")
+  .replace("export const FuguangBrowserTranslationPipeline =", "var FuguangBrowserTranslationPipeline =");
+const mediaHeaderRulesSource = fs.readFileSync(new URL("../../extension/src/background/media-header-rules.js", import.meta.url), "utf8")
+  .replace("export const FuguangMediaHeaderRules =", "var FuguangMediaHeaderRules =");
+const source = fs.readFileSync(new URL("../../extension/src/background/service-worker.js", import.meta.url), "utf8")
+  .replace('import { FuguangBrowserAsrProvider } from "./browser-asr-provider.js";\n', "")
+  .replace('import { FuguangBrowserAsrPostprocess } from "./browser-asr-postprocess.js";\n', "")
+  .replace('import { FuguangBrowserLanguage } from "./browser-language.js";\n', "")
+  .replace('import { FuguangBrowserMediaCandidates } from "./browser-media-candidates.js";\n', "")
+  .replace('import { FuguangBrowserModelProfiles } from "./browser-model-profiles.js";\n', "")
+  .replace('import { FuguangBrowserTranslationPipeline } from "./browser-translation-pipeline.js";\n', "")
+  .replace('import { FuguangMediaHeaderRules } from "./media-header-rules.js";\n\n', "");
 
 {
   assert.equal(source.includes("FUGUANG_START_REALTIME"), false);
@@ -124,9 +152,59 @@ const source = fs.readFileSync(new URL("../../extension/src/background/service-w
   assert.equal(source.includes("tabCapture"), false);
   assert.equal(source.includes("FUGUANG_START_PRELOAD\""), false);
   assert.equal(source.includes("FUGUANG_WEB_FFMPEG_EXTRACT_AUDIO"), false);
+  assert.ok(
+    source.includes("后台任务状态已过期"),
+    "重翻译/重试失败识别分段的错误提示必须说明 MV3 后台任务状态可能已过期，避免误导用户以为 ASR 原文一定可复用"
+  );
 }
 
+vm.runInContext(languageSource, context, { filename: "browser-language.js" });
+Object.assign(context, context.FuguangBrowserLanguage);
+vm.runInContext(asrProviderSource, context, { filename: "browser-asr-provider.js" });
+Object.assign(context, context.FuguangBrowserAsrProvider);
+vm.runInContext(asrPostprocessSource, context, { filename: "browser-asr-postprocess.js" });
+Object.assign(context, context.FuguangBrowserAsrPostprocess);
+vm.runInContext(mediaCandidatesSource, context, { filename: "browser-media-candidates.js" });
+Object.assign(context, context.FuguangBrowserMediaCandidates);
+vm.runInContext(modelProfilesSource, context, { filename: "browser-model-profiles.js" });
+Object.assign(context, context.FuguangBrowserModelProfiles);
+vm.runInContext(providerSource, context, { filename: "browser-translation-provider.js" });
+Object.assign(context, context.FuguangBrowserTranslationProvider);
+vm.runInContext(pipelineSource, context, { filename: "browser-translation-pipeline.js" });
+Object.assign(context, context.FuguangBrowserTranslationPipeline);
+vm.runInContext(mediaHeaderRulesSource, context, { filename: "media-header-rules.js" });
 vm.runInContext(source, context, { filename: "service-worker.js" });
+
+{
+  assert.ok(webNavigationCommittedListeners.length > 0, "top-level committed listener should be registered");
+  const tabId = 119;
+  seedPage(tabId, { duration: 120 });
+  const state = context.getState(tabId);
+  state.subtitleFrameId = 3;
+  state.mediaFrameId = 3;
+  state.context = { frameId: 3 };
+  state.attachedVttSignature = "browser-committed-old";
+  state.manualVttSignature = "manual:committed-old";
+  const messages = [];
+  const originalGetAllFrames = chrome.webNavigation.getAllFrames;
+  const originalSendMessage = chrome.tabs.sendMessage;
+  chrome.webNavigation.getAllFrames = async () => [{ frameId: 0 }, { frameId: 3 }];
+  chrome.tabs.sendMessage = async (_tabId, message, options = {}) => {
+    messages.push({ type: message.type, frameId: options.frameId ?? null });
+    return { ok: true };
+  };
+
+  await webNavigationCommittedListeners[0]({ tabId, frameId: 0, url: "https://example.test/watch/committed-new" });
+
+  assert.deepEqual(messages.map(message => message.type), [
+    "FUGUANG_DETACH_PRELOAD_VTT",
+    "FUGUANG_DETACH_PRELOAD_VTT"
+  ]);
+  assert.equal(context.getState(tabId).attachedVttSignature, "");
+  assert.equal(context.getState(tabId).manualVttSignature, "");
+  chrome.webNavigation.getAllFrames = originalGetAllFrames;
+  chrome.tabs.sendMessage = originalSendMessage;
+}
 
 {
   assert.ok(webNavigationHistoryListeners.length > 0, "history-state listener should be registered");
@@ -186,6 +264,27 @@ vm.runInContext(source, context, { filename: "service-worker.js" });
 }
 
 {
+  const tabId = 118;
+  const messages = [];
+  const originalGetAllFrames = chrome.webNavigation.getAllFrames;
+  const originalSendMessage = chrome.tabs.sendMessage;
+  chrome.webNavigation.getAllFrames = async () => [{ frameId: 0 }, { frameId: 2 }];
+  chrome.tabs.sendMessage = async (_tabId, message, options = {}) => {
+    messages.push({ type: message.type, frameId: options.frameId ?? null });
+    return { ok: true };
+  };
+
+  await webNavigationHistoryListeners[0]({ tabId, frameId: 0, url: "https://example.test/watch/fresh" });
+
+  assert.deepEqual(messages.map(message => message.type), [
+    "FUGUANG_DETACH_PRELOAD_VTT",
+    "FUGUANG_DETACH_PRELOAD_VTT"
+  ]);
+  chrome.webNavigation.getAllFrames = originalGetAllFrames;
+  chrome.tabs.sendMessage = originalSendMessage;
+}
+
+{
   const tabId = 115;
   seedPage(tabId, { duration: 120 });
   const state = context.getState(tabId);
@@ -231,6 +330,16 @@ vm.runInContext(source, context, { filename: "service-worker.js" });
   assert.match(vtt, /00:00:00\.000 --> 00:00:02\.000\nsource first/);
   assert.match(vtt, /00:00:03\.000 --> 00:00:05\.000\nsource second\ntranslated second/);
   assert.doesNotMatch(vtt, /source first\ntranslated second/);
+  const previewVtt = context.transcriptToBilingualVtt({
+    source: [
+      { start: 0, end: 2, text: "source first", chunkIndex: 0, segmentIndex: 0 },
+      { start: 3, end: 5, text: "source second", chunkIndex: 1, segmentIndex: 0 }
+    ],
+    translated: [
+      { start: 3, end: 5, text: "translated second", chunkIndex: 1, segmentIndex: 0 }
+    ]
+  }, { allowSourcePreview: true });
+  assert.match(previewVtt, /00:00:00\.000 --> 00:00:02\.000\nsource first/);
 }
 
 {
@@ -508,6 +617,30 @@ vm.runInContext(source, context, { filename: "service-worker.js" });
   assert.equal(xaiNestedWordSegments[0].end, 120.5);
   assert.equal(xaiNestedWordSegments[0].text, "你好");
 
+  const originalFetch = context.fetch;
+  context.fetch = async () => ({
+    ok: true,
+    json: async () => ({
+      results: [{ start: 0, end: 1, text: "segment-only" }]
+    })
+  });
+  try {
+    await assert.rejects(
+      () => context.transcribeBrowserAudioChunk(
+        {
+          index: 0,
+          start: 30,
+          end: 60,
+          file: { name: "xai.mp3", mime: "audio/mpeg", buffer: new ArrayBuffer(1) }
+        },
+        { providerType: "xai", baseUrl: "https://api.x.ai/v1", apiKey: "test", timeoutMs: 1000 }
+      ),
+      /xAI.*word.*时间戳|word.*时间戳.*xAI/
+    );
+  } finally {
+    context.fetch = originalFetch;
+  }
+
   const nestedWordBoundaries = context.normalizeAsrSegments({
     segments: [{
       start: 43.159,
@@ -543,6 +676,9 @@ vm.runInContext(source, context, { filename: "service-worker.js" });
   assert.throws(() => context.normalizeAsrSegments({
     words: [{ word: "hello without timestamp" }]
   }, 0, 30), /时间戳/);
+  assert.throws(() => context.normalizeAsrSegments({
+    text: "text only without timestamp"
+  }, 0, 30), /时间戳/);
 
   const ownedBoundarySegments = context.filterAsrSegmentsByChunkOwnership([
     { start: 28.2, end: 30.2, text: "跨界句" },
@@ -569,6 +705,12 @@ vm.runInContext(source, context, { filename: "service-worker.js" });
     { start: 58.4, end: 61.4, text: "长句跨右边界" }
   ], { start: 52, end: 68, coreStart: 30, coreEnd: 60 });
   assert.equal(JSON.stringify(longBoundarySegments), JSON.stringify([{ start: 58.4, end: 60, text: "长句跨右边界" }]));
+
+  const noOverlapBoundarySegments = context.filterAsrSegmentsByChunkOwnership([
+    { start: 0.2, end: 1.6, text: "核心短句" },
+    { start: 60, end: 61, text: "无重叠越界幻觉" }
+  ], { start: 0, end: 2, coreStart: 0, coreEnd: 2 });
+  assert.deepEqual(noOverlapBoundarySegments.map(segment => segment.text), ["核心短句"]);
 
   assert.equal(context.filterAsrSegmentsBySpeechActivity([
     { start: 0, end: 29.98, text: "由 Amara.org 社群提供的字幕" }
@@ -785,6 +927,59 @@ vm.runInContext(source, context, { filename: "service-worker.js" });
 
 {
   const originalFetch = context.fetch;
+  const requests = [];
+  const resolvers = [];
+  context.fetch = async (_url, init = {}) => {
+    const payload = JSON.parse(init.body);
+    const userMessage = payload.messages.find(message => message.role === "user");
+    const request = JSON.parse(userMessage.content);
+    const segments = request.segments || [];
+    requests.push(segments.map(segment => segment.text));
+    return await new Promise(resolve => {
+      resolvers.push(() => resolve({
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: JSON.stringify({
+                items: segments.map((segment, index) => ({ i: index, text: `译文-${segment.text}` }))
+              })
+            }
+          }]
+        })
+      }));
+    });
+  };
+  const translationPromise = context.translateBrowserSegments(
+    Array.from({ length: 61 }, (_, index) => ({
+      start: index,
+      end: index + 0.5,
+      text: `parallel-${index}`,
+      chunkIndex: 0,
+      segmentIndex: index
+    })),
+    {
+      providerType: "openai",
+      baseUrl: "https://llm.example/v1",
+      model: "test-model",
+      apiKey: "test-key"
+    },
+    "zh-CN",
+    {},
+    { batchWorkers: 2 }
+  );
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(requests.length, 2, "second translation batch should start before the first one resolves");
+  resolvers.forEach(resolve => resolve());
+  const translated = await translationPromise;
+  assert.equal(translated.length, 61);
+  assert.equal(translated[0].text, "译文-parallel-0");
+  assert.equal(translated[60].text, "译文-parallel-60");
+  context.fetch = originalFetch;
+}
+
+{
+  const originalFetch = context.fetch;
   let calls = 0;
   context.fetch = async () => {
     calls += 1;
@@ -814,7 +1009,597 @@ vm.runInContext(source, context, { filename: "service-worker.js" });
     ),
     /自动拆分/
   );
-  assert.ok(calls <= 3, `automatic split retry used ${calls} LLM calls`);
+  assert.ok(calls <= 8, `automatic split retry used ${calls} LLM calls`);
+  context.fetch = originalFetch;
+}
+
+{
+  const originalFetch = context.fetch;
+  const requestedSizes = [];
+  context.fetch = async (_url, init = {}) => {
+    const payload = JSON.parse(init.body);
+    const userMessage = payload.messages.find(message => message.role === "user");
+    const request = JSON.parse(userMessage.content);
+    const segments = request.segments || [];
+    requestedSizes.push(segments.length);
+    if (requestedSizes.length === 1) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: "not json" } }]
+        })
+      };
+    }
+    return {
+      ok: true,
+      json: async () => ({
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              items: segments.map((segment, index) => ({ i: index, text: `译文-${segment.text}` }))
+            })
+          }
+        }]
+      })
+    };
+  };
+  const translated = await context.translateBrowserSegmentsBatch(
+    [
+      { start: 0, end: 1, text: "a", chunkIndex: 0, segmentIndex: 0 },
+      { start: 1, end: 2, text: "b", chunkIndex: 0, segmentIndex: 1 },
+      { start: 2, end: 3, text: "c", chunkIndex: 0, segmentIndex: 2 }
+    ],
+    {
+      providerType: "openai",
+      baseUrl: "https://llm.example/v1",
+      model: "test-model",
+      apiKey: "test-key"
+    },
+    "zh-CN",
+    {}
+  );
+  assert.deepEqual(requestedSizes, [3, 3]);
+  assert.equal(JSON.stringify(translated.map(segment => segment.text)), JSON.stringify(["译文-a", "译文-b", "译文-c"]));
+  context.fetch = originalFetch;
+}
+
+{
+  const originalFetch = context.fetch;
+  const requestedSizes = [];
+  context.fetch = async (_url, init = {}) => {
+    const payload = JSON.parse(init.body);
+    const userMessage = payload.messages.find(message => message.role === "user");
+    const request = JSON.parse(userMessage.content);
+    const segments = request.segments || [];
+    requestedSizes.push(segments.length);
+    const items = requestedSizes.length === 1
+      ? segments.map((segment, index) => ({ i: index + 10, text: `错位-${segment.text}` }))
+      : segments.map((segment, index) => ({ i: index, text: `译文-${segment.text}` }));
+    return {
+      ok: true,
+      json: async () => ({
+        choices: [{
+          message: {
+            content: JSON.stringify({ items })
+          }
+        }]
+      })
+    };
+  };
+  const translated = await context.translateBrowserSegmentsBatch(
+    [
+      { start: 0, end: 1, text: "a", chunkIndex: 0, segmentIndex: 0 },
+      { start: 1, end: 2, text: "b", chunkIndex: 0, segmentIndex: 1 },
+      { start: 2, end: 3, text: "c", chunkIndex: 0, segmentIndex: 2 }
+    ],
+    {
+      providerType: "openai",
+      baseUrl: "https://llm.example/v1",
+      model: "test-model",
+      apiKey: "test-key"
+    },
+    "zh-CN",
+    {}
+  );
+  assert.deepEqual(requestedSizes, [3, 3]);
+  assert.equal(JSON.stringify(translated.map(segment => segment.text)), JSON.stringify(["译文-a", "译文-b", "译文-c"]));
+  context.fetch = originalFetch;
+}
+
+{
+  const originalFetch = context.fetch;
+  const requestedSizes = [];
+  context.fetch = async (_url, init = {}) => {
+    const payload = JSON.parse(init.body);
+    const userMessage = payload.messages.find(message => message.role === "user");
+    const request = JSON.parse(userMessage.content);
+    const segments = request.segments || [];
+    requestedSizes.push(segments.length);
+    if (segments.length > 1 || segments[0]?.text === "bad") {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: "not json" } }]
+        })
+      };
+    }
+    return {
+      ok: true,
+      json: async () => ({
+        choices: [{
+          message: {
+            content: JSON.stringify({ items: [{ i: 0, text: `译文-${segments[0].text}` }] })
+          }
+        }]
+      })
+    };
+  };
+  const translated = await context.translateBrowserSegmentsBatch(
+    [
+      { start: 0, end: 1, text: "a", chunkIndex: 0, segmentIndex: 0 },
+      { start: 1, end: 2, text: "bad", chunkIndex: 0, segmentIndex: 1 },
+      { start: 2, end: 3, text: "c", chunkIndex: 0, segmentIndex: 2 },
+      { start: 3, end: 4, text: "d", chunkIndex: 0, segmentIndex: 3 }
+    ],
+    {
+      providerType: "openai",
+      baseUrl: "https://llm.example/v1",
+      model: "test-model",
+      apiKey: "test-key"
+    },
+    "zh-CN",
+    {}
+  );
+  assert.equal(JSON.stringify(translated.map(segment => segment.text)), JSON.stringify(["译文-a", "译文-c", "译文-d"]));
+  assert.equal(translated.some(segment => segment.text === "bad"), false);
+  assert.ok(requestedSizes.some(size => size === 1), `expected fallback to retry single subtitles, got ${requestedSizes.join(",")}`);
+  const failures = context.browserTranslationFailures(translated);
+  assert.equal(failures.length, 1);
+  assert.equal(failures[0].source.text, "bad");
+  context.fetch = originalFetch;
+}
+
+{
+  const originalFetch = context.fetch;
+  context.fetch = async (_url, init = {}) => {
+    const payload = JSON.parse(init.body);
+    const userMessage = payload.messages.find(message => message.role === "user");
+    const request = JSON.parse(userMessage.content);
+    const segments = request.segments || [];
+    if (segments.length > 1 || segments[0]?.text.startsWith("bad")) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: "not json" } }]
+        })
+      };
+    }
+    return {
+      ok: true,
+      json: async () => ({
+        choices: [{
+          message: {
+            content: JSON.stringify({ items: [{ i: 0, text: `译文-${segments[0].text}` }] })
+          }
+        }]
+      })
+    };
+  };
+  const translated = await context.translateBrowserSegmentsBatch(
+    [
+      { start: 0, end: 1, text: "bad-a", chunkIndex: 0, segmentIndex: 0 },
+      { start: 1, end: 2, text: "bad-b", chunkIndex: 0, segmentIndex: 1 },
+      { start: 2, end: 3, text: "ok-c", chunkIndex: 0, segmentIndex: 2 },
+      { start: 3, end: 4, text: "ok-d", chunkIndex: 0, segmentIndex: 3 }
+    ],
+    {
+      providerType: "openai",
+      baseUrl: "https://llm.example/v1",
+      model: "test-model",
+      apiKey: "test-key"
+    },
+    "zh-CN",
+    {}
+  );
+  assert.equal(JSON.stringify(translated.map(segment => segment.text)), JSON.stringify(["译文-ok-c", "译文-ok-d"]));
+  const failures = context.browserTranslationFailures(translated);
+  assert.equal(JSON.stringify(failures.map(failure => failure.source.text)), JSON.stringify(["bad-a", "bad-b"]));
+  context.fetch = originalFetch;
+}
+
+{
+  const originalFetch = context.fetch;
+  const requestedSizes = [];
+  context.fetch = async (_url, init = {}) => {
+    const payload = JSON.parse(init.body);
+    const userMessage = payload.messages.find(message => message.role === "user");
+    const request = JSON.parse(userMessage.content);
+    const segments = request.segments || [];
+    requestedSizes.push(segments.length);
+    if (segments.length > 1 || segments.some(segment => segment.text === "blocked")) {
+      return {
+        ok: false,
+        status: 403,
+        json: async () => ({
+          error: { message: "Forbidden: content safety policy violation" }
+        })
+      };
+    }
+    return {
+      ok: true,
+      json: async () => ({
+        choices: [{
+          message: {
+            content: JSON.stringify({ items: [{ i: 0, text: `译文-${segments[0].text}` }] })
+          }
+        }]
+      })
+    };
+  };
+  const translated = await context.translateBrowserSegmentsBatch(
+    [
+      { start: 0, end: 1, text: "ok-a", chunkIndex: 0, segmentIndex: 0 },
+      { start: 1, end: 2, text: "blocked", chunkIndex: 0, segmentIndex: 1 },
+      { start: 2, end: 3, text: "ok-c", chunkIndex: 0, segmentIndex: 2 }
+    ],
+    {
+      providerType: "openai",
+      baseUrl: "https://llm.example/v1",
+      model: "test-model",
+      apiKey: "test-key"
+    },
+    "zh-CN",
+    {}
+  );
+  assert.equal(JSON.stringify(translated.map(segment => segment.text)), JSON.stringify(["译文-ok-a", "译文-ok-c"]));
+  assert.ok(requestedSizes.some(size => size === 1), `expected content policy fallback to retry single subtitles, got ${requestedSizes.join(",")}`);
+  const failures = context.browserTranslationFailures(translated);
+  assert.equal(JSON.stringify(failures.map(failure => failure.source.text)), JSON.stringify(["blocked"]));
+  context.fetch = originalFetch;
+}
+
+{
+  const originalFetch = context.fetch;
+  context.fetch = async () => ({
+    ok: false,
+    status: 403,
+    json: async () => ({
+      error: { message: "Forbidden: content safety policy violation" }
+    })
+  });
+  const translated = await context.translateBrowserSegments(
+    [{ start: 1, end: 2, text: "blocked only", chunkIndex: 0, segmentIndex: 0 }],
+    {
+      providerType: "openai",
+      baseUrl: "https://llm.example/v1",
+      model: "test-model",
+      apiKey: "test-key"
+    },
+    "zh-CN",
+    {}
+  );
+  assert.equal(translated.length, 0);
+  assert.equal(JSON.stringify(context.browserTranslationFailures(translated).map(failure => failure.source.text)), JSON.stringify(["blocked only"]));
+  context.fetch = originalFetch;
+}
+
+{
+  const originalFetch = context.fetch;
+  const splitRequests = [];
+  const splitResolvers = [];
+  context.fetch = async (_url, init = {}) => {
+    const payload = JSON.parse(init.body);
+    const userMessage = payload.messages.find(message => message.role === "user");
+    const request = JSON.parse(userMessage.content);
+    const segments = request.segments || [];
+    if (segments.length === 4) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: "not json" } }]
+        })
+      };
+    }
+    splitRequests.push(segments.map(segment => segment.text));
+    return await new Promise(resolve => {
+      splitResolvers.push(() => resolve({
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: JSON.stringify({
+                items: segments.map((segment, index) => ({ i: index, text: `译文-${segment.text}` }))
+              })
+            }
+          }]
+        })
+      }));
+    });
+  };
+  const translationPromise = context.translateBrowserSegmentsBatch(
+    [
+      { start: 0, end: 1, text: "split-a", chunkIndex: 0, segmentIndex: 0 },
+      { start: 1, end: 2, text: "split-b", chunkIndex: 0, segmentIndex: 1 },
+      { start: 2, end: 3, text: "split-c", chunkIndex: 0, segmentIndex: 2 },
+      { start: 3, end: 4, text: "split-d", chunkIndex: 0, segmentIndex: 3 }
+    ],
+    {
+      providerType: "openai",
+      baseUrl: "https://llm.example/v1",
+      model: "test-model",
+      apiKey: "test-key"
+    },
+    "zh-CN",
+    {},
+    { splitWorkers: 2 }
+  );
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(splitRequests.length, 2, "split fallback halves should start concurrently");
+  splitResolvers.forEach(resolve => resolve());
+  const translated = await translationPromise;
+  assert.equal(JSON.stringify(translated.map(segment => segment.text)), JSON.stringify([
+    "译文-split-a",
+    "译文-split-b",
+    "译文-split-c",
+    "译文-split-d"
+  ]));
+  context.fetch = originalFetch;
+}
+
+{
+  const originalFetch = context.fetch;
+  let calls = 0;
+  context.fetch = async () => {
+    calls += 1;
+    return {
+      ok: false,
+      status: 403,
+      json: async () => ({
+        error: { message: "Forbidden: invalid API key" }
+      })
+    };
+  };
+  await assert.rejects(
+    () => context.translateBrowserSegmentsBatch(
+      [
+        { start: 0, end: 1, text: "a", chunkIndex: 0, segmentIndex: 0 },
+        { start: 1, end: 2, text: "b", chunkIndex: 0, segmentIndex: 1 }
+      ],
+      {
+        providerType: "openai",
+        baseUrl: "https://llm.example/v1",
+        model: "test-model",
+        apiKey: "test-key"
+      },
+      "zh-CN",
+      {}
+    ),
+    /invalid api key/i
+  );
+  assert.equal(calls, 1);
+  context.fetch = originalFetch;
+}
+
+{
+  const originalFetch = context.fetch;
+  context.fetch = async (_url, init = {}) => {
+    const payload = JSON.parse(init.body);
+    const userMessage = payload.messages.find(message => message.role === "user");
+    const request = JSON.parse(userMessage.content);
+    const segments = request.segments || [];
+    if (segments.length > 1 || segments[0]?.text.startsWith("bad")) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: "not json" } }]
+        })
+      };
+    }
+    return {
+      ok: true,
+      json: async () => ({
+        choices: [{
+          message: {
+            content: JSON.stringify({ items: [{ i: 0, text: `译文-${segments[0].text}` }] })
+          }
+        }]
+      })
+    };
+  };
+  const sourceSegments = [
+    ...Array.from({ length: 60 }, (_, index) => ({
+      start: index,
+      end: index + 0.5,
+      text: `bad-${index}`,
+      chunkIndex: 0,
+      segmentIndex: index
+    })),
+    { start: 60, end: 61, text: "ok-final", chunkIndex: 0, segmentIndex: 60 }
+  ];
+  const translated = await context.translateBrowserSegments(
+    sourceSegments,
+    {
+      providerType: "openai",
+      baseUrl: "https://llm.example/v1",
+      model: "test-model",
+      apiKey: "test-key"
+    },
+    "zh-CN",
+    {}
+  );
+  assert.equal(JSON.stringify(translated.map(segment => segment.text)), JSON.stringify(["译文-ok-final"]));
+  assert.equal(context.browserTranslationFailures(translated).length, 60);
+  context.fetch = originalFetch;
+}
+
+{
+  const originalFetch = context.fetch;
+  let calls = 0;
+  context.fetch = async () => {
+    calls += 1;
+    return {
+      ok: true,
+      json: async () => ({
+        choices: [{ message: { content: "not json" } }]
+      })
+    };
+  };
+  await assert.rejects(
+    () => context.translateBrowserSegmentsBatch(
+      Array.from({ length: 60 }, (_, index) => ({
+        start: index,
+        end: index + 0.5,
+        text: `bad-${index}`,
+        chunkIndex: 0,
+        segmentIndex: index
+      })),
+      {
+        providerType: "openai",
+        baseUrl: "https://llm.example/v1",
+        model: "test-model",
+        apiKey: "test-key"
+      },
+      "zh-CN",
+      {}
+    ),
+    /没有得到可用译文/
+  );
+  assert.ok(calls <= 120, `60-line split fallback used ${calls} LLM calls`);
+  context.fetch = originalFetch;
+}
+
+{
+  const originalFetch = context.fetch;
+  let calls = 0;
+  context.fetch = async (_url, init = {}) => {
+    calls += 1;
+    const body = JSON.parse(init.body);
+    if (Object.hasOwn(body, "response_format")) {
+      return {
+        ok: false,
+        status: 400,
+        json: async () => ({ error: { message: "response_format is not supported by this compatible endpoint" } })
+      };
+    }
+    return {
+      ok: true,
+      json: async () => ({
+        choices: [{ message: { content: "not json" } }]
+      })
+    };
+  };
+  await assert.rejects(
+    () => context.translateBrowserSegmentsBatch(
+      Array.from({ length: 60 }, (_, index) => ({
+        start: index,
+        end: index + 0.5,
+        text: `response-format-bad-${index}`,
+        chunkIndex: 0,
+        segmentIndex: index
+      })),
+      {
+        providerType: "openai",
+        baseUrl: "https://llm-response-format-budget.example/v1",
+        model: "test-model",
+        apiKey: "test-key"
+      },
+      "zh-CN",
+      {}
+    ),
+    /没有得到可用译文/
+  );
+  assert.ok(calls <= 121, `response_format fallback plus 60-line split used ${calls} HTTP calls`);
+  context.fetch = originalFetch;
+}
+
+{
+  const originalFetch = context.fetch;
+  context.fetch = async () => ({
+    ok: true,
+    json: async () => ({
+      choices: [{ message: { content: JSON.stringify({ items: [{ i: 0, text: "" }] }) } }]
+    })
+  });
+  await assert.rejects(
+    () => context.translateBrowserSegmentsBatch(
+      [{ start: 0, end: 1, text: "hello" }],
+      {
+        providerType: "openai",
+        baseUrl: "https://llm.example/v1",
+        model: "test-model",
+        apiKey: "test-key"
+      },
+      "zh-CN",
+      {}
+    ),
+    /空译文/
+  );
+  context.fetch = originalFetch;
+}
+
+{
+  const originalFetch = context.fetch;
+  context.fetch = async () => ({
+    ok: true,
+    json: async () => ({
+      choices: [{ message: { content: JSON.stringify({ items: [{ i: 1, text: "错位译文" }] }) } }]
+    })
+  });
+  await assert.rejects(
+    () => context.translateBrowserSegmentsBatch(
+      [{ start: 0, end: 1, text: "hello" }],
+      {
+        providerType: "openai",
+        baseUrl: "https://llm.example/v1",
+        model: "test-model",
+        apiKey: "test-key"
+      },
+      "zh-CN",
+      {}
+    ),
+    /索引/
+  );
+  context.fetch = originalFetch;
+}
+
+{
+  const originalFetch = context.fetch;
+  let calls = 0;
+  const requestedTexts = [];
+  context.fetch = async (_url, init = {}) => {
+    calls += 1;
+    const payload = JSON.parse(init.body);
+    const userMessage = payload.messages.find(message => message.role === "user");
+    const request = JSON.parse(userMessage.content);
+    const segments = request.segments || [];
+    requestedTexts.push(segments.map(segment => segment.text));
+    const items = segments.length > 1
+      ? [{ i: 0, text: "第一句译文" }]
+      : segments.map(segment => ({ i: 0, text: `译文-${segment.text}` }));
+    return {
+      ok: true,
+      json: async () => ({
+        choices: [{ message: { content: JSON.stringify({ items }) } }]
+      })
+    };
+  };
+  const translated = await context.translateBrowserSegmentsBatch(
+    [
+      { start: 0, end: 1, text: "a" },
+      { start: 1, end: 2, text: "b" }
+    ],
+    {
+      providerType: "openai",
+      baseUrl: "https://llm.example/v1",
+      model: "test-model",
+      apiKey: "test-key"
+    },
+    "zh-CN",
+    {}
+  );
+  assert.equal(calls, 2);
+  assert.deepEqual(requestedTexts, [["a", "b"], ["b"]]);
+  assert.equal(JSON.stringify(translated.map(segment => segment.text)), JSON.stringify(["第一句译文", "译文-b"]));
   context.fetch = originalFetch;
 }
 
@@ -941,6 +1726,15 @@ function add(tabId, candidate) {
   });
   assert.equal(record.job.extract.progress, 25);
   assert.equal(record.job.extract.readySeconds, 180);
+
+  record.job.stage = "translation";
+  context.applyBrowserExtractionProgress(record, {
+    phase: "download",
+    percent: 40,
+    readySeconds: 360,
+    message: "后续抽取进度不应覆盖更晚的处理阶段"
+  });
+  assert.equal(record.job.stage, "translation");
 }
 
 {
@@ -1126,6 +1920,72 @@ function add(tabId, candidate) {
 }
 
 {
+  const tabId = 120;
+  seedPage(tabId, { title: "Bilibili ASR candidate", url: "https://www.bilibili.com/video/BV17DLP6UEPw", duration: 600 });
+  add(tabId, {
+    url: "https://upos-sz.example.bilivideo.com/upgcxcode/80/97/1455429780/1455429780-1-30232.m4s",
+    kind: "audio",
+    ext: "m4s",
+    source: "bilibili-playurl",
+    contentType: "audio/mp4",
+    duration: 600,
+    bandwidth: 125_995
+  });
+  add(tabId, {
+    url: "https://upos-sz.example.bilivideo.com/upgcxcode/80/97/1455429780/1455429780-1-100078.m4s",
+    kind: "video",
+    ext: "m4s",
+    source: "bilibili-playurl",
+    contentType: "video/mp4",
+    videoWidth: 1920,
+    videoHeight: 1080,
+    duration: 600,
+    bandwidth: 8_000_000
+  });
+
+  const [candidate] = context.getDisplayCandidates(tabId);
+  assert.equal(candidate.role, "audio");
+  assert.match(candidate.url, /30232\.m4s/);
+  assert.equal(candidate.hiddenCount, 1);
+  assert.equal(candidate.variantStats.audio, 1);
+  assert.equal(candidate.variantStats.video, 1);
+}
+
+{
+  const tabId = 121;
+  seedPage(tabId, { title: "Generic DASH ASR candidate", url: "https://example.test/watch/generic-dash", duration: 600 });
+  add(tabId, {
+    url: "https://cdn.example.test/dash/movie-30232.m4s",
+    kind: "audio",
+    role: "audio",
+    ext: "m4s",
+    source: "request",
+    contentType: "audio/mp4",
+    duration: 600,
+    bandwidth: 132_000
+  });
+  add(tabId, {
+    url: "https://cdn.example.test/dash/movie-100078.m4s",
+    kind: "video",
+    role: "video",
+    ext: "m4s",
+    source: "request",
+    contentType: "video/mp4",
+    videoWidth: 1920,
+    videoHeight: 1080,
+    duration: 600,
+    bandwidth: 8_000_000
+  });
+
+  const [candidate] = context.getDisplayCandidates(tabId);
+  assert.equal(candidate.role, "audio");
+  assert.match(candidate.url, /30232\.m4s/);
+  assert.equal(candidate.hiddenCount, 1);
+  assert.equal(candidate.variantStats.audio, 1);
+  assert.equal(candidate.variantStats.video, 1);
+}
+
+{
   const tabId = 105;
   seedPage(tabId, { title: "HLS quality variants", url: "https://example.test/watch/hls", duration: 0 });
   add(tabId, {
@@ -1149,6 +2009,50 @@ function add(tabId, candidate) {
 }
 
 {
+  const compactedHeaders = context.compactRequestHeaders([
+    { name: "Authorization", value: "Bearer request-token" },
+    { name: "Cookie", value: "sid=request-secret" },
+    { name: "Referer", value: "https://example.test/watch" },
+    { name: "Origin", value: "https://example.test" },
+    { name: "User-Agent", value: "Chrome" }
+  ]);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(compactedHeaders)), {
+    authorization: "Bearer request-token"
+  });
+  assert.equal(JSON.stringify(compactedHeaders).includes("request-secret"), false);
+}
+
+{
+  const tabId = 108;
+  seedPage(tabId, { duration: 600 });
+  add(tabId, {
+    url: "https://secure-cdn.example.test/media/audio-128k.m4a",
+    kind: "audio",
+    ext: "m4a",
+    contentType: "audio/mp4",
+    duration: 600,
+    initiator: "https://example.test/watch/secure",
+    requestHeaders: {
+      authorization: "Bearer display-secret",
+      cookie: "sid=display-secret",
+      referer: "https://example.test/watch/secure",
+      origin: "https://example.test",
+      "user-agent": "Chrome"
+    }
+  });
+
+  const [candidate] = context.getDisplayCandidates(tabId);
+  assert.equal(candidate.requestHeaders, undefined);
+  assert.equal(JSON.stringify(candidate).includes("display-secret"), false);
+  const internalCandidate = context.resolvePreloadCandidateForStart(context.getState(tabId), candidate);
+  assert.deepEqual(JSON.parse(JSON.stringify(internalCandidate.requestHeaders)), {
+    authorization: "Bearer display-secret"
+  });
+  assert.equal(JSON.stringify(internalCandidate.requestHeaders).includes("sid=display-secret"), false);
+}
+
+{
   const rules = context.buildMediaHeaderRules(
     "https://cdn.example.test/media/audio.m4a",
     "https://example.test/watch/1"
@@ -1160,6 +2064,54 @@ function add(tabId, candidate) {
     { header: "origin", operation: "set", value: "https://example.test" }
   ]);
   assert.equal(context.buildMediaHeaderRules("https://cdn.example.test/a.m4a", "chrome://extensions").length, 0);
+}
+
+{
+  const rules = context.buildMediaHeaderRules([
+    "https://cdn.example.test/hls/master.m3u8",
+    "https://audio-cdn.example.test/hls/variant.m3u8",
+    "https://key-cdn.example.test/hls/key.bin"
+  ], "https://example.test/watch/1");
+  assert.equal(rules.length, 1);
+  assert.deepEqual(JSON.parse(JSON.stringify(rules[0].condition.requestDomains)), [
+    "audio-cdn.example.test",
+    "cdn.example.test",
+    "key-cdn.example.test"
+  ]);
+}
+
+{
+  const updates = [];
+  const originalUpdateSessionRules = chrome.declarativeNetRequest.updateSessionRules;
+  chrome.declarativeNetRequest.updateSessionRules = async payload => {
+    updates.push(JSON.parse(JSON.stringify(payload)));
+  };
+
+  try {
+    await context.withMediaRequestHeaderRules(
+      "https://cdn.example.test/hls/master.m3u8",
+      "https://example.test/watch/1",
+      async () => {
+        await context.updateMediaRequestHeaderRuleDomains("browser-cross-domain-hls", [
+          "https://audio-cdn.example.test/hls/variant.m3u8",
+          "https://segment-cdn.example.test/hls/seg-000.ts"
+        ]);
+      },
+      "browser-cross-domain-hls"
+    );
+  } finally {
+    chrome.declarativeNetRequest.updateSessionRules = originalUpdateSessionRules;
+  }
+
+  assert.equal(updates.length, 3);
+  assert.deepEqual(updates[0].addRules[0].condition.requestDomains, ["cdn.example.test"]);
+  assert.deepEqual(updates[1].removeRuleIds, updates[0].removeRuleIds);
+  assert.deepEqual(updates[1].addRules[0].condition.requestDomains, [
+    "audio-cdn.example.test",
+    "cdn.example.test",
+    "segment-cdn.example.test"
+  ]);
+  assert.deepEqual(updates[2], { removeRuleIds: updates[0].removeRuleIds });
 }
 
 {
@@ -1516,6 +2468,53 @@ function add(tabId, candidate) {
 
 {
   const record = {
+    tabId: 719,
+    startedAt: Date.now() - 1000,
+    metadata: { duration: 1800 },
+    modelConfig: { chunkSeconds: 900, asrWorkers: 1, workers: 1 },
+    job: {
+      id: "browser-first-window-translation-races-next-extract",
+      status: "running",
+      stage: "extracting",
+      extract: { status: "running", progress: 35, elapsedSeconds: 0 },
+      translation: { chunkStatuses: [], chunksTotal: 0, chunksDone: 0 }
+    },
+    sourceSegmentsByChunk: new Map(),
+    translatedSegmentsByChunk: new Map()
+  };
+  const chunk = {
+    logical: true,
+    index: 0,
+    start: 0,
+    end: 900,
+    coreStart: 0,
+    coreEnd: 900,
+    duration: 900,
+    file: {
+      name: "logical-first-window.mp3",
+      mime: "audio/mpeg",
+      cacheUrl: "https://fuguang.local/audio/logical-first-window.mp3",
+      bytes: 8192
+    },
+    bytes: 8192
+  };
+
+  context.enqueueBrowserLogicalAudioChunk(record, chunk);
+  const group = record.browserTranslationGroups.get(0);
+  assert.equal(group.closed, true);
+  assert.equal(record.browserTranslationQueue.items.length, 0);
+
+  context.completeBrowserAsrChunkForGroup(record, chunk, [
+    { start: 10, end: 12, text: "first window source" }
+  ]);
+
+  assert.equal(record.browserTranslationQueue.items.length, 1);
+  assert.equal(record.browserTranslationQueue.items[0].chunk.index, 0);
+  assert.equal(record.browserTranslationQueue.items[0].sourceSegments[0].text, "first window source");
+}
+
+{
+  const record = {
     tabId: 714,
     startedAt: Date.now() - 1000,
     metadata: { duration: 90 },
@@ -1854,6 +2853,7 @@ function add(tabId, candidate) {
   await context.attachVttText(tabId, "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nmanual cache\n");
   await context.attachBrowserJobVttIfReady({
     tabId,
+    metadata: { pageUrl: context.getState(tabId).page.url },
     job: {
       id: "browser-auto-after-manual",
       status: "completed",
@@ -1887,6 +2887,7 @@ function add(tabId, candidate) {
 
   await context.attachBrowserJobVttIfReady({
     tabId,
+    metadata: { pageUrl: context.getState(tabId).page.url },
     job: {
       id: "browser-auto-without-manual",
       status: "completed",
@@ -1899,6 +2900,190 @@ function add(tabId, candidate) {
   });
 
   assert.deepEqual(sentVtts, ["WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nauto job\n"]);
+  chrome.tabs.sendMessage = originalSendMessage;
+}
+
+{
+  const tabId = 215;
+  seedPage(tabId, { duration: 600 });
+  context.getState(tabId).subtitleOverlayInjectedAt = Date.now();
+  const sentVtts = [];
+  const originalSendMessage = chrome.tabs.sendMessage;
+  chrome.tabs.sendMessage = async (_tabId, message) => {
+    if (message.type === "FUGUANG_ATTACH_VTT") {
+      sentVtts.push(message.vtt);
+      return { ok: true };
+    }
+    return null;
+  };
+
+  await context.attachBrowserJobVttIfReady({
+    tabId,
+    metadata: { pageUrl: context.getState(tabId).page.url },
+    job: {
+      id: "browser-auto-partial-source-fallback",
+      status: "completed",
+      stage: "completed_with_warnings",
+      translation: {
+        segmentCount: 2,
+        chunksDone: 1,
+        vttText: [
+          "WEBVTT",
+          "",
+          "00:00:00.000 --> 00:00:02.000",
+          "source first",
+          "",
+          "00:00:03.000 --> 00:00:05.000",
+          "translated second",
+          ""
+        ].join("\n"),
+        transcript: {
+          source: [
+            { start: 0, end: 2, text: "source first", chunkIndex: 0, segmentIndex: 0 },
+            { start: 3, end: 5, text: "source second", chunkIndex: 0, segmentIndex: 1 }
+          ],
+          translated: [
+            { start: 3, end: 5, text: "translated second", chunkIndex: 0, segmentIndex: 1 }
+          ]
+        }
+      }
+    }
+  });
+
+  assert.equal(sentVtts.length, 1);
+  assert.match(sentVtts[0], /source first/);
+  assert.match(sentVtts[0], /translated second/);
+  chrome.tabs.sendMessage = originalSendMessage;
+}
+
+{
+  const tabId = 216;
+  seedPage(tabId, { duration: 600 });
+  context.getState(tabId).subtitleOverlayInjectedAt = Date.now();
+  const sentVtts = [];
+  const originalSendMessage = chrome.tabs.sendMessage;
+  chrome.tabs.sendMessage = async (_tabId, message) => {
+    if (message.type === "FUGUANG_ATTACH_VTT") {
+      sentVtts.push(message.vtt);
+      return { ok: true };
+    }
+    return null;
+  };
+
+  await context.attachBrowserJobVttIfReady({
+    tabId,
+    metadata: { pageUrl: context.getState(tabId).page.url },
+    job: {
+      id: "browser-auto-failed-source-only",
+      status: "completed",
+      stage: "completed_with_warnings",
+      translation: {
+        segmentCount: 1,
+        chunksDone: 1,
+        vttText: "WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nsource only\n",
+        transcript: {
+          source: [{ start: 0, end: 2, text: "source only", chunkIndex: 0, segmentIndex: 0 }],
+          translated: []
+        }
+      }
+    }
+  });
+
+  assert.equal(sentVtts.length, 1);
+  assert.match(sentVtts[0], /source only/);
+  chrome.tabs.sendMessage = originalSendMessage;
+}
+
+{
+  const tabId = 218;
+  seedPage(tabId, { duration: 600 });
+  context.getState(tabId).subtitleOverlayInjectedAt = Date.now();
+  const sentVtts = [];
+  const originalSendMessage = chrome.tabs.sendMessage;
+  chrome.tabs.sendMessage = async (_tabId, message) => {
+    if (message.type === "FUGUANG_ATTACH_VTT") {
+      sentVtts.push(message.vtt);
+      return { ok: true };
+    }
+    return null;
+  };
+
+  await context.attachBrowserJobVttIfReady({
+    tabId,
+    metadata: { pageUrl: context.getState(tabId).page.url },
+    job: {
+      id: "browser-auto-running-partial-source-preview",
+      status: "running",
+      stage: "translation",
+      translation: {
+        segmentCount: 2,
+        chunksDone: 0,
+        vttText: [
+          "WEBVTT",
+          "",
+          "00:00:00.000 --> 00:00:02.000",
+          "source first",
+          "",
+          "00:00:03.000 --> 00:00:05.000",
+          "translated second",
+          ""
+        ].join("\n"),
+        transcript: {
+          source: [
+            { start: 0, end: 2, text: "source first", chunkIndex: 0, segmentIndex: 0 },
+            { start: 3, end: 5, text: "source second", chunkIndex: 0, segmentIndex: 1 }
+          ],
+          translated: [
+            { start: 3, end: 5, text: "translated second", chunkIndex: 0, segmentIndex: 1 }
+          ]
+        }
+      }
+    }
+  });
+
+  assert.equal(sentVtts.length, 1);
+  assert.match(sentVtts[0], /source first/);
+  assert.match(sentVtts[0], /translated second/);
+  assert.doesNotMatch(sentVtts[0], /source second\ntranslated second/);
+  chrome.tabs.sendMessage = originalSendMessage;
+}
+
+{
+  const tabId = 217;
+  seedPage(tabId, { duration: 600 });
+  context.getState(tabId).subtitleOverlayInjectedAt = Date.now();
+  const sentVtts = [];
+  const originalSendMessage = chrome.tabs.sendMessage;
+  chrome.tabs.sendMessage = async (_tabId, message) => {
+    if (message.type === "FUGUANG_ATTACH_VTT") {
+      sentVtts.push(message.vtt);
+      return { ok: true };
+    }
+    return null;
+  };
+
+  await context.attachBrowserJobVttIfReady({
+    tabId,
+    metadata: { pageUrl: context.getState(tabId).page.url },
+    job: {
+      id: "browser-auto-running-source-only",
+      status: "running",
+      stage: "translation",
+      translation: {
+        segmentCount: 1,
+        chunksDone: 0,
+        vttText: "WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nsource only while running\n",
+        transcript: {
+          source: [{ start: 0, end: 2, text: "source only while running", chunkIndex: 0, segmentIndex: 0 }],
+          translated: []
+        }
+      }
+    }
+  });
+
+  assert.deepEqual(sentVtts, [
+    "WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nsource only while running\n"
+  ]);
   chrome.tabs.sendMessage = originalSendMessage;
 }
 
@@ -1923,6 +3108,7 @@ function add(tabId, candidate) {
 
   await context.attachBrowserJobVttIfReady({
     tabId,
+    metadata: { pageUrl: context.getState(tabId).page.url },
     job: {
       id: "browser-auto-reattach",
       status: "completed",
@@ -1959,6 +3145,7 @@ function add(tabId, candidate) {
   };
   const record = {
     tabId,
+    metadata: { pageUrl: context.getState(tabId).page.url },
     job: {
       id: "browser-auto-vtt-change",
       status: "completed",
@@ -2060,6 +3247,186 @@ function add(tabId, candidate) {
   assert.equal(response.state.currentTime, 18);
   assert.equal(response.state.synthetic, true);
   chrome.tabs.sendMessage = originalSendMessage;
+}
+
+{
+  const sourceSegment = { start: 1, end: 2, text: "hello", chunkIndex: 0, segmentIndex: 0 };
+  const record = {
+    tabId: 300,
+    startedAt: Date.now() - 1000,
+    metadata: { title: "Translation failure keeps source only" },
+    modelConfig: {
+      targetLanguage: "zh-CN",
+      translation: { providerType: "openai", baseUrl: "https://llm.test/v1", model: "test", apiKey: "test" }
+    },
+    audioChunks: [],
+    sourceSegmentsByChunk: new Map([[0, [sourceSegment]]]),
+    translatedSegmentsByChunk: new Map(),
+    job: {
+      id: "browser-translation-failure-source-only",
+      status: "running",
+      stage: "translation",
+      extract: { elapsedSeconds: 1 },
+      translation: {
+        chunkStatuses: [{ index: 0, stage: "queued", status: "等待", attempts: 1 }],
+        chunksTotal: 1,
+        chunksDone: 0,
+        chunksFailed: 0
+      }
+    }
+  };
+  const originalTranslate = context.translateBrowserSegments;
+  const originalAttachBrowserJobVttIfReady = context.attachBrowserJobVttIfReady;
+  context.translateBrowserSegments = async () => {
+    throw new Error("mock translation failed");
+  };
+  context.attachBrowserJobVttIfReady = async () => {};
+
+  await context.processBrowserTranslationChunk(record, { index: 0 }, [sourceSegment]);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(record.translatedSegmentsByChunk.get(0))), []);
+  assert.deepEqual(JSON.parse(JSON.stringify(record.job.translation.transcript.translated)), []);
+  assert.equal(record.job.translation.transcript.source[0].text, "hello");
+  assert.equal(record.job.translation.chunkStatuses[0].stage, "failed");
+  assert.match(record.job.translation.chunkStatuses[0].error, /翻译失败/);
+  context.translateBrowserSegments = originalTranslate;
+  context.attachBrowserJobVttIfReady = originalAttachBrowserJobVttIfReady;
+}
+
+{
+  const originalFetch = context.fetch;
+  const calls = [];
+  context.fetch = async (_url, init = {}) => {
+    const body = JSON.parse(init.body);
+    calls.push(body);
+    if (calls.length === 1) {
+      return {
+        ok: false,
+        status: 400,
+        json: async () => ({ error: { message: "response_format is not supported by this compatible endpoint" } })
+      };
+    }
+    return {
+      ok: true,
+      json: async () => ({
+        choices: [{
+          message: {
+            content: JSON.stringify({ items: [{ i: 0, text: "兼容接口译文" }] })
+          }
+        }]
+      })
+    };
+  };
+
+  const items = await context.requestBrowserTranslationItems(
+    [{ start: 1, end: 2, text: "hello" }],
+    { providerType: "openai", baseUrl: "https://llm-compatible.test/v1", model: "test", apiKey: "test" },
+    "zh-CN",
+    { title: "response_format fallback" },
+    { timeoutMs: 1000 }
+  );
+
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls.map(body => Object.hasOwn(body, "response_format")), [true, false]);
+  assert.equal(items[0].text, "兼容接口译文");
+  context.fetch = originalFetch;
+}
+
+{
+  const originalFetch = context.fetch;
+  const calls = [];
+  context.fetch = async (_url, init = {}) => {
+    calls.push(JSON.parse(init.body));
+    return {
+      ok: false,
+      status: 401,
+      json: async () => ({ error: { message: "invalid api key" } })
+    };
+  };
+
+  await assert.rejects(
+    context.requestBrowserTranslationItems(
+      [{ start: 1, end: 2, text: "hello" }],
+      { providerType: "openai", baseUrl: "https://llm-invalid-key-compatible.test/v1", model: "test", apiKey: "bad" },
+      "zh-CN",
+      { title: "response_format fallback negative" },
+      { timeoutMs: 1000 }
+    ),
+    /invalid api key/
+  );
+  assert.equal(calls.length, 1);
+  assert.equal(Object.hasOwn(calls[0], "response_format"), true);
+  context.fetch = originalFetch;
+}
+
+{
+  const sourceSegments = [
+    { start: 1, end: 2, text: "ok-a", chunkIndex: 0, segmentIndex: 0 },
+    { start: 2, end: 3, text: "bad", chunkIndex: 0, segmentIndex: 1 },
+    { start: 3, end: 4, text: "ok-c", chunkIndex: 0, segmentIndex: 2 }
+  ];
+  const record = {
+    tabId: 303,
+    startedAt: Date.now() - 1000,
+    metadata: { title: "Translation partial failure keeps only real translations" },
+    modelConfig: {
+      targetLanguage: "zh-CN",
+      translation: { providerType: "openai", baseUrl: "https://llm.test/v1", model: "test", apiKey: "test" }
+    },
+    audioChunks: [],
+    sourceSegmentsByChunk: new Map([[0, sourceSegments]]),
+    translatedSegmentsByChunk: new Map(),
+    job: {
+      id: "browser-translation-partial-failure",
+      status: "running",
+      stage: "translation",
+      extract: { elapsedSeconds: 1 },
+      translation: {
+        chunkStatuses: [{ index: 0, stage: "queued", status: "等待", attempts: 1 }],
+        chunksTotal: 1,
+        chunksDone: 0,
+        chunksFailed: 0
+      }
+    }
+  };
+  const originalFetch = context.fetch;
+  const originalAttachBrowserJobVttIfReady = context.attachBrowserJobVttIfReady;
+  context.fetch = async (_url, init = {}) => {
+    const payload = JSON.parse(init.body);
+    const userMessage = payload.messages.find(message => message.role === "user");
+    const request = JSON.parse(userMessage.content);
+    const segments = request.segments || [];
+    if (segments.length > 1 || segments[0]?.text === "bad") {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: "not json" } }]
+        })
+      };
+    }
+    return {
+      ok: true,
+      json: async () => ({
+        choices: [{
+          message: {
+            content: JSON.stringify({ items: [{ i: 0, text: `译文-${segments[0].text}` }] })
+          }
+        }]
+      })
+    };
+  };
+  context.attachBrowserJobVttIfReady = async () => {};
+
+  await context.processBrowserTranslationChunk(record, { index: 0 }, sourceSegments);
+
+  assert.equal(JSON.stringify(record.translatedSegmentsByChunk.get(0).map(segment => segment.text)), JSON.stringify(["译文-ok-a", "译文-ok-c"]));
+  assert.equal(JSON.stringify(record.job.translation.transcript.translated.map(segment => segment.text)), JSON.stringify(["译文-ok-a", "译文-ok-c"]));
+  assert.equal(record.job.translation.transcript.translated.some(segment => segment.text === "bad"), false);
+  assert.match(record.job.translation.vttText, /bad/);
+  assert.equal(record.job.translation.chunkStatuses[0].stage, "completed_with_warnings");
+  assert.match(record.job.translation.chunkStatuses[0].error, /部分句子翻译失败/);
+  context.fetch = originalFetch;
+  context.attachBrowserJobVttIfReady = originalAttachBrowserJobVttIfReady;
 }
 
 {

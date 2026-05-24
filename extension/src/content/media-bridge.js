@@ -15,10 +15,10 @@
   window.addEventListener("message", handlePageMessage);
   window.__fuguangMediaBridgeCleanup = stopBridge;
 
-  reportPageMedia();
-  reportPageContext();
   timers.push(setInterval(reportPageMedia, 2000));
   timers.push(setInterval(reportPageContext, 1200));
+  reportPageMedia();
+  reportPageContext();
 
   function handlePageMessage(event) {
     if (!active) {

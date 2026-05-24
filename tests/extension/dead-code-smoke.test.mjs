@@ -7,6 +7,7 @@ const productFiles = [
   ...collectJs(path.join(extensionRoot, "src")),
   ...collectJs(path.join(extensionRoot, "web-ffmpeg/src"))
 ];
+const productSource = productFiles.map(file => fs.readFileSync(file, "utf8")).join("\n");
 const allowedSingleUseFunctions = new Map([
   ["src/content/page-sniffer.js", new Set(["fuguangFetch", "fuguangXhrOpen", "fuguangXhrSend", "fuguangJsonParse"])],
   ["src/sidepanel/subtitle-format.js", new Set(["initSubtitleFormat"])],
@@ -27,7 +28,7 @@ for (const file of productFiles) {
   const allowed = allowedSingleUseFunctions.get(relative) || new Set();
   for (const name of declaredFunctionNames(source)) {
     const count = countWord(source, name);
-    if (count <= 1 && !allowed.has(name)) {
+    if (count <= 1 && countWord(productSource, name) <= 1 && !allowed.has(name)) {
       suspicious.push(`${relative}:${name}`);
     }
   }

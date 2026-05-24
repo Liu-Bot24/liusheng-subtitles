@@ -216,6 +216,7 @@ function createHarness({ settings = {}, videos = [new FakeMedia()], legacyOverla
   const timeouts = new Map();
   let nextTimer = 1;
   let messageListener = null;
+  const messageListeners = [];
   let storageListener = null;
   let cleanupCalled = false;
   const document = new FakeDocument(videos);
@@ -268,6 +269,7 @@ function createHarness({ settings = {}, videos = [new FakeMedia()], legacyOverla
     runtime: {
       onMessage: {
         addListener(listener) {
+          messageListeners.push(listener);
           messageListener = listener;
         },
         removeListener() {}
@@ -316,6 +318,7 @@ function createHarness({ settings = {}, videos = [new FakeMedia()], legacyOverla
     videos,
     intervals,
     timeouts,
+    messageListeners,
     ready: async () => {
       await Promise.resolve();
       await Promise.resolve();
@@ -323,6 +326,12 @@ function createHarness({ settings = {}, videos = [new FakeMedia()], legacyOverla
     send: message => new Promise(resolve => {
       messageListener(message, {}, resolve);
     }),
+    sendWith: (listener, message) => new Promise(resolve => {
+      listener(message, {}, resolve);
+    }),
+    reload: () => {
+      vm.runInContext(source, context, { filename: "subtitle-overlay.js" });
+    },
     emitStorage: changes => storageListener(changes, "sync"),
     runIntervals: () => [...intervals.values()].forEach(timer => timer.fn()),
     cleanupCalled: () => cleanupCalled,
@@ -358,6 +367,30 @@ function createHarness({ settings = {}, videos = [new FakeMedia()], legacyOverla
   assert.equal(harness.context.document.getElementById(LEGACY_OVERLAY_ID), null);
   assert.equal((await harness.send({ type: "FUGUANG_ATTACH_VTT", vtt: SAMPLE_VTT })).ok, true);
   assert.equal(harness.overlayText(), "first cue");
+}
+
+{
+  const video = new FakeMedia({ currentTime: 1 });
+  const harness = createHarness({ videos: [video] });
+  await harness.ready();
+  const oldListener = harness.messageListeners[0];
+  assert.equal((await harness.send({ type: "FUGUANG_ATTACH_VTT", vtt: SAMPLE_VTT })).ok, true);
+  assert.equal(harness.overlayText(), "first cue");
+
+  harness.reload();
+  await harness.ready();
+  assert.equal((await harness.send({ type: "FUGUANG_ATTACH_VTT", vtt: OVERLAPPING_VTT })).ok, true);
+  assert.equal(harness.overlayText(), "stale long cue");
+
+  const staleAttachResponse = await harness.sendWith(oldListener, { type: "FUGUANG_ATTACH_VTT", vtt: SAMPLE_VTT });
+  assert.equal(staleAttachResponse.ok, false);
+  const staleStateResponse = await harness.sendWith(oldListener, { type: "FUGUANG_GET_VIDEO_STATE" });
+  assert.equal(staleStateResponse.ok, false);
+  assert.equal(staleStateResponse.state, null);
+  const staleSeekResponse = await harness.sendWith(oldListener, { type: "FUGUANG_SEEK_MEDIA", time: 4 });
+  assert.equal(staleSeekResponse.ok, false);
+  harness.runIntervals();
+  assert.equal(harness.overlayText(), "stale long cue");
 }
 
 {
@@ -398,6 +431,24 @@ function createHarness({ settings = {}, videos = [new FakeMedia()], legacyOverla
   video.paused = false;
   harness.runIntervals();
   assert.equal(harness.overlayText(), "first cue");
+}
+
+{
+  const video = new FakeMedia({ currentTime: 1, paused: true });
+  const harness = createHarness({ videos: [video] });
+  await harness.ready();
+  assert.equal((await harness.send({ type: "FUGUANG_ATTACH_VTT", vtt: SAMPLE_VTT, signature: "sample-signature" })).ok, true);
+  assert.equal(harness.overlayText(), "first cue");
+  assert.equal(harness.intervals.size, 1);
+
+  assert.equal((await harness.send({ type: "FUGUANG_DETACH_PRELOAD_VTT" })).ok, true);
+  assert.equal(harness.intervals.size, 0);
+  assert.equal(harness.overlayHidden(), true);
+  assert.equal(harness.overlayText(), "");
+  const stateResponse = await harness.send({ type: "FUGUANG_GET_VIDEO_STATE" });
+  assert.equal(stateResponse.ok, true);
+  assert.equal(stateResponse.state.subtitleSignature, "");
+  assert.equal(stateResponse.state.subtitleCueCount, 0);
 }
 
 {
@@ -446,6 +497,97 @@ function createHarness({ settings = {}, videos = [new FakeMedia()], legacyOverla
 
   assert.equal(harness.overlayHidden(), true);
   assert.equal(harness.overlayText(), "");
+}
+
+{
+  const oldVideo = new FakeMedia({ width: 1200, height: 680, currentTime: 1, paused: false });
+  oldVideo.currentSrc = "https://media.example.test/old-video.mp4";
+  oldVideo.src = oldVideo.currentSrc;
+  const harness = createHarness({ videos: [oldVideo] });
+  await harness.ready();
+  assert.equal((await harness.send({ type: "FUGUANG_ATTACH_VTT", vtt: SAMPLE_VTT })).ok, true);
+  assert.equal(harness.overlayText(), "first cue");
+
+  oldVideo.isConnected = false;
+  const newVideo = new FakeMedia({ width: 1200, height: 680, currentTime: 4, paused: false });
+  newVideo.currentSrc = "https://media.example.test/old-video.mp4";
+  newVideo.src = newVideo.currentSrc;
+  newVideo.ownerDocument = harness.context.document;
+  harness.videos.push(newVideo);
+  harness.runIntervals();
+
+  assert.equal(harness.overlayText(), "second cue");
+  const stateResponse = await harness.send({ type: "FUGUANG_GET_VIDEO_STATE" });
+  assert.equal(stateResponse.ok, true);
+  assert.equal(stateResponse.state.currentTime, 4);
+}
+
+{
+  const oldVideo = new FakeMedia({ width: 1200, height: 680, currentTime: 1, paused: false });
+  oldVideo.currentSrc = "https://media.example.test/old-video.mp4";
+  oldVideo.src = oldVideo.currentSrc;
+  const harness = createHarness({ videos: [oldVideo] });
+  await harness.ready();
+  assert.equal((await harness.send({ type: "FUGUANG_ATTACH_VTT", vtt: SAMPLE_VTT, signature: "old-video-signature" })).ok, true);
+  assert.equal(harness.overlayText(), "first cue");
+
+  oldVideo.isConnected = false;
+  const newVideo = new FakeMedia({ width: 1200, height: 680, currentTime: 4, paused: false });
+  newVideo.currentSrc = "https://media.example.test/new-video.mp4";
+  newVideo.src = newVideo.currentSrc;
+  newVideo.ownerDocument = harness.context.document;
+  harness.videos.push(newVideo);
+  harness.runIntervals();
+
+  assert.equal(harness.overlayHidden(), true);
+  assert.equal(harness.overlayText(), "");
+  const stateResponse = await harness.send({ type: "FUGUANG_GET_VIDEO_STATE" });
+  assert.equal(stateResponse.ok, true);
+  assert.equal(stateResponse.state.subtitleSignature, "");
+}
+
+{
+  const video = new FakeMedia({ width: 1200, height: 680, currentTime: 1, paused: false });
+  video.currentSrc = "https://media.example.test/old-video.mp4";
+  video.src = video.currentSrc;
+  const harness = createHarness({ videos: [video] });
+  await harness.ready();
+  assert.equal((await harness.send({ type: "FUGUANG_ATTACH_VTT", vtt: SAMPLE_VTT, signature: "old-video-signature" })).ok, true);
+  assert.equal(harness.overlayText(), "first cue");
+
+  video.currentSrc = "https://media.example.test/new-video.mp4";
+  video.src = video.currentSrc;
+  video.currentTime = 4;
+  harness.runIntervals();
+
+  assert.equal(harness.overlayHidden(), true);
+  assert.equal(harness.overlayText(), "");
+  const stateResponse = await harness.send({ type: "FUGUANG_GET_VIDEO_STATE" });
+  assert.equal(stateResponse.ok, true);
+  assert.equal(stateResponse.state.subtitleSignature, "");
+}
+
+{
+  const video = new FakeMedia({ currentTime: 1, paused: false });
+  const harness = createHarness({ videos: [video] });
+  await harness.ready();
+  assert.equal((await harness.send({ type: "FUGUANG_ATTACH_VTT", vtt: SAMPLE_VTT })).ok, true);
+  assert.equal(harness.overlayText(), "first cue");
+
+  video.paused = true;
+  video.dispatchEvent(new harness.context.Event("pause"));
+  assert.equal(harness.overlayText(), "first cue");
+
+  video.currentTime = 2.5;
+  video.dispatchEvent(new harness.context.Event("timeupdate"));
+  assert.equal(harness.overlayHidden(), true);
+  assert.equal(harness.overlayText(), "");
+
+  video.currentTime = 4;
+  video.paused = false;
+  video.dispatchEvent(new harness.context.Event("play"));
+  assert.equal(harness.overlayHidden(), false);
+  assert.equal(harness.overlayText(), "second cue");
 }
 
 {

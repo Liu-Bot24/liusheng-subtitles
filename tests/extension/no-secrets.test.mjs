@@ -12,7 +12,9 @@ const trackedFiles = execFileSync("git", ["ls-files", "-z"], {
   .split("\0")
   .filter(Boolean)
   .sort();
-const filesToContentScan = [...new Set([...trackedFiles, ...optionalLocalTextFiles()])].sort();
+const filesToContentScan = [...new Set([...trackedFiles, ...optionalLocalTextFiles()])]
+  .filter(file => fs.existsSync(path.join(repoRoot, file)))
+  .sort();
 
 const forbiddenPathPatterns = [
   { label: "tracked dotenv file", pattern: /(^|\/)\.env(?:\.|$)(?!example$)/ },

@@ -45,7 +45,8 @@ assert.deepEqual(backgroundHandled, new Set([
   "PAGE_MEDIA_FOUND",
   "PAGE_CONTEXT_FOUND",
   "OFFSCREEN_WEB_FFMPEG_PROGRESS",
-  "OFFSCREEN_WEB_FFMPEG_CHUNK_READY"
+  "OFFSCREEN_WEB_FFMPEG_CHUNK_READY",
+  "UPDATE_MEDIA_HEADER_RULE_DOMAINS"
 ]));
 
 const sidepanelSent = messageKeysForPattern(files.sidepanel, /type:\s*MESSAGE\.([A-Z0-9_]+)/g);

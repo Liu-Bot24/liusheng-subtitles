@@ -49,171 +49,22 @@ const SUBTITLE_SYNC_KEYS = [
   "subtitleDisplayMode",
   "subtitleBackgroundOpacity"
 ];
-const SUBTITLE_CACHE_DB_NAME = "fuguang-subtitle-cache";
-const SUBTITLE_CACHE_DB_VERSION = 1;
-const SUBTITLE_CACHE_SCHEMA_VERSION = 3;
+const SUBTITLE_CACHE_SCHEMA_VERSION = 4;
+const SUBTITLE_CACHE_STRICT_LEGACY_SCHEMA_VERSION = 3;
 const SUBTITLE_CACHE_LEGACY_SCHEMA_VERSION = 2;
-const SUBTITLE_CACHE_STORE = "subtitles";
-const SUBTITLE_CACHE_MAX_ENTRIES = 80;
-const SUBTITLE_CACHE_MAX_AGE_DAYS = 30;
 const SUBTITLE_USER_SCROLL_HOLD_MS = 8000;
-const DEFAULT_ASR_PROFILE_ID = "openai_whisper";
-const DEFAULT_LLM_PROFILE_ID = "llm";
-const TARGET_LANGUAGE_ALIASES = new Map([
-  ["zh-cn", "zh-CN"],
-  ["zh-hans", "zh-CN"],
-  ["zh", "zh-CN"],
-  ["chinese", "zh-CN"],
-  ["中文", "zh-CN"],
-  ["简体中文", "zh-CN"],
-  ["en", "en"],
-  ["english", "en"],
-  ["英文", "en"],
-  ["ja", "ja"],
-  ["jp", "ja"],
-  ["japanese", "ja"],
-  ["日语", "ja"],
-  ["fr", "fr"],
-  ["french", "fr"],
-  ["法语", "fr"],
-  ["ko", "ko"],
-  ["kr", "ko"],
-  ["korean", "ko"],
-  ["韩语", "ko"],
-  ["de", "de"],
-  ["german", "de"],
-  ["德语", "de"],
-  ["ru", "ru"],
-  ["russian", "ru"],
-  ["俄语", "ru"]
-]);
-const SOURCE_LANGUAGE_ALIASES = new Map([
-  ["auto", "auto"],
-  ["automatic", "auto"],
-  ["detect", "auto"],
-  ["default", "auto"],
-  ["自动", "auto"],
-  ["自动识别", "auto"],
-  ["zh-cn", "zh"],
-  ["zh-hans", "zh"],
-  ["zh", "zh"],
-  ["chinese", "zh"],
-  ["中文", "zh"],
-  ["简体中文", "zh"],
-  ["en", "en"],
-  ["english", "en"],
-  ["英语", "en"],
-  ["英文", "en"],
-  ["ja", "ja"],
-  ["jp", "ja"],
-  ["japanese", "ja"],
-  ["日语", "ja"],
-  ["ko", "ko"],
-  ["kr", "ko"],
-  ["korean", "ko"],
-  ["韩语", "ko"],
-  ["fr", "fr"],
-  ["french", "fr"],
-  ["法语", "fr"],
-  ["de", "de"],
-  ["german", "de"],
-  ["德语", "de"],
-  ["ru", "ru"],
-  ["russian", "ru"],
-  ["俄语", "ru"],
-  ["es", "es"],
-  ["spanish", "es"],
-  ["西语", "es"],
-  ["西班牙语", "es"],
-  ["pt", "pt"],
-  ["portuguese", "pt"],
-  ["葡语", "pt"],
-  ["葡萄牙语", "pt"],
-  ["it", "it"],
-  ["italian", "it"],
-  ["意语", "it"],
-  ["意大利语", "it"]
-]);
-const KNOWN_ASR_PROFILES = [
-  {
-    id: "openai_whisper",
-    name: "OpenAI Whisper",
-    providerType: "openai",
-    baseUrl: "https://api.openai.com/v1",
-    model: "whisper-1",
-    vadFilter: "auto",
-    apiKey: ""
-  },
-  {
-    id: "groq_whisper",
-    name: "Groq Whisper",
-    providerType: "groq",
-    baseUrl: "https://api.groq.com/openai/v1",
-    model: "whisper-large-v3-turbo",
-    vadFilter: "auto",
-    apiKey: ""
-  },
-  {
-    id: "xai_grok",
-    name: "xAI Grok",
-    providerType: "xai",
-    baseUrl: "https://api.x.ai/v1",
-    model: "grok-2-voice-1212",
-    vadFilter: "auto",
-    apiKey: ""
-  },
-  {
-    id: "custom_asr",
-    name: "自定义 ASR",
-    providerType: "openai",
-    baseUrl: "",
-    model: "",
-    vadFilter: "auto",
-    apiKey: ""
-  }
-];
-const KNOWN_LLM_PROFILES = [
-  {
-    id: "test_llm",
-    name: "Real LLM HLS",
-    providerType: "openai",
-    baseUrl: "https://llm.example.invalid/v1",
-    model: "test-llm",
-    apiKey: ""
-  },
-  {
-    id: "custom_llm",
-    name: "Custom LLM",
-    providerType: "openai",
-    baseUrl: "https://api.siliconflow.cn/v1",
-    model: "deepseek-ai/DeepSeek-V3.2",
-    apiKey: ""
-  },
-  {
-    id: "siliconflow_hunyuan_mt_7b",
-    name: "Custom LLM",
-    providerType: "openai",
-    baseUrl: "https://api.siliconflow.cn/v1",
-    model: "custom-llm",
-    apiKey: ""
-  },
-  {
-    id: "openai_custom",
-    name: "自定义 OpenAI 格式",
-    providerType: "openai",
-    baseUrl: "https://api.openai.com/v1",
-    model: "",
-    apiKey: ""
-  },
-  {
-    id: "anthropic",
-    name: "自定义 Anthropic 格式",
-    providerType: "anthropic",
-    baseUrl: "https://api.anthropic.com/v1",
-    model: "",
-    apiKey: ""
-  }
-];
+const normalizeTargetLanguageValue = FuguangSidepanelLanguage.normalizeTargetLanguageValue;
+const normalizeSourceLanguageValue = FuguangSidepanelLanguage.normalizeSourceLanguageValue;
+const DEFAULT_ASR_PROFILE_ID = FuguangSidepanelProfiles.DEFAULT_ASR_PROFILE_ID;
+const DEFAULT_LLM_PROFILE_ID = FuguangSidepanelProfiles.DEFAULT_LLM_PROFILE_ID;
+const createEmptyProfile = FuguangSidepanelProfiles.createEmptyProfile;
+const defaultProfiles = FuguangSidepanelProfiles.defaultProfiles;
+const normalizeAsrVadFilterMode = FuguangSidepanelProfiles.normalizeAsrVadFilterMode;
+const normalizeSelectedProfileId = FuguangSidepanelProfiles.normalizeSelectedProfileId;
+const normalizeStoredProfiles = FuguangSidepanelProfiles.normalizeStoredProfiles;
+const placeholderBaseUrl = FuguangSidepanelProfiles.placeholderBaseUrl;
+const profileById = FuguangSidepanelProfiles.profileById;
+const uniqueProfiles = FuguangSidepanelProfiles.uniqueProfiles;
 
 const elements = {
   pageTitle: document.querySelector("#pageTitle"),
@@ -313,6 +164,11 @@ let elapsedTicker = 0;
 const clearedSubtitleJobIds = new Set();
 const retryingChunks = new Set();
 
+setSubtitleOutputRuntimeStateProvider(() => ({
+  mode: subtitleDisplayMode,
+  isRunning: isRunningJob(currentJob)
+}));
+
 document.addEventListener("DOMContentLoaded", init);
 elements.tabTask.addEventListener("click", () => showTab("task"));
 elements.tabSettings.addEventListener("click", () => showTab("settings"));
@@ -382,9 +238,9 @@ async function refreshActiveTab() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => []);
   const changed = Boolean(activeTab?.id && tab?.id && (tab.id !== activeTab.id || tab.url !== activeTab.url));
   if (tab?.id && (!activeTab?.id || changed)) {
-    const sameTabNavigated = Boolean(activeTab?.id && tab.id === activeTab.id && tab.url !== activeTab.url);
-    if (sameTabNavigated && (subtitleCues.length || attachedSubtitleTabId === activeTab.id)) {
-      await detachCurrentSubtitlesFromPage();
+    const previousTab = activeTab;
+    if (changed && previousTab?.id && (subtitleCues.length || attachedSubtitleTabId === previousTab.id)) {
+      await detachSubtitlesFromTab(previousTab.id);
     }
     activeTab = tab;
     if (changed) {
@@ -477,38 +333,20 @@ function applyStoredSettings(data) {
   renderSubtitleOverlayButton();
 }
 
-function normalizeTargetLanguageValue(value) {
-  const text = String(value || "").trim();
-  if (!text) {
-    return DEFAULTS.targetLanguage;
-  }
-  const key = text.toLowerCase().replace("_", "-");
-  return TARGET_LANGUAGE_ALIASES.get(key) || DEFAULTS.targetLanguage;
-}
-
 function setTargetLanguageValue(value) {
-  elements.targetLanguage.value = normalizeTargetLanguageValue(value);
+  elements.targetLanguage.value = normalizeTargetLanguageValue(value, DEFAULTS.targetLanguage);
 }
 
 function getTargetLanguageValue() {
-  return normalizeTargetLanguageValue(elements.targetLanguage.value);
-}
-
-function normalizeSourceLanguageValue(value) {
-  const text = String(value || "").trim();
-  if (!text) {
-    return DEFAULTS.sourceLanguage;
-  }
-  const key = text.toLowerCase().replace("_", "-");
-  return SOURCE_LANGUAGE_ALIASES.get(key) || DEFAULTS.sourceLanguage;
+  return normalizeTargetLanguageValue(elements.targetLanguage.value, DEFAULTS.targetLanguage);
 }
 
 function setSourceLanguageValue(value) {
-  elements.sourceLanguage.value = normalizeSourceLanguageValue(value);
+  elements.sourceLanguage.value = normalizeSourceLanguageValue(value, DEFAULTS.sourceLanguage);
 }
 
 function getSourceLanguageValue() {
-  return normalizeSourceLanguageValue(elements.sourceLanguage.value);
+  return normalizeSourceLanguageValue(elements.sourceLanguage.value, DEFAULTS.sourceLanguage);
 }
 
 async function clearLegacySyncSettingsIfNeeded(syncStored) {
@@ -528,103 +366,6 @@ function pickDefined(source, keys) {
   return result;
 }
 
-function normalizeStoredProfiles(kind, storedProfiles) {
-  const profilesById = new Map(defaultProfiles(kind).map(profile => [profile.id, profile]));
-  for (const rawProfile of Array.isArray(storedProfiles) ? storedProfiles : []) {
-    const profile = normalizeProfile(rawProfile);
-    if (!profile.id) {
-      continue;
-    }
-    const knownProfile = profilesById.get(profile.id);
-    if (knownProfile) {
-      profilesById.set(profile.id, mergeProfileDefaults(knownProfile, profile));
-    } else if (hasProfileContent(profile)) {
-      profilesById.set(profile.id, profile);
-    }
-  }
-  return uniqueProfiles([...profilesById.values()]);
-}
-
-function normalizeProfile(rawProfile = {}) {
-  return {
-    id: String(rawProfile.id || "").trim(),
-    name: String(rawProfile.name || "").trim(),
-    providerType: normalizeProviderType(rawProfile.providerType || rawProfile.provider_type),
-    baseUrl: String(rawProfile.baseUrl || rawProfile.base_url || "").trim(),
-    model: String(rawProfile.model || "").trim(),
-    vadFilter: normalizeAsrVadFilterMode(rawProfile.vadFilter || rawProfile.vad_filter || rawProfile.vadFilterMode),
-    apiKey: String(rawProfile.apiKey || rawProfile.api_key || "").trim()
-  };
-}
-
-function normalizeAsrVadFilterMode(value) {
-  const normalized = String(value || "auto").trim().toLowerCase();
-  if (["on", "true", "1", "yes", "force", "enabled"].includes(normalized)) {
-    return "on";
-  }
-  if (["off", "false", "0", "no", "disabled"].includes(normalized)) {
-    return "off";
-  }
-  return "auto";
-}
-
-function normalizeProviderType(providerType) {
-  const value = String(providerType || "").trim();
-  return ["openai", "groq", "xai", "anthropic"].includes(value) ? value : "openai";
-}
-
-function mergeProfileDefaults(defaultProfile, storedProfile) {
-  return {
-    id: storedProfile.id || defaultProfile.id,
-    name: storedProfile.name || defaultProfile.name || "",
-    providerType: storedProfile.providerType || defaultProfile.providerType || "openai",
-    baseUrl: storedProfile.baseUrl || defaultProfile.baseUrl || "",
-    model: storedProfile.model || defaultProfile.model || "",
-    vadFilter: storedProfile.vadFilter || defaultProfile.vadFilter || "auto",
-    apiKey: storedProfile.apiKey || defaultProfile.apiKey || ""
-  };
-}
-
-function hasProfileContent(profile) {
-  return Boolean(profile.apiKey || profile.baseUrl || profile.model || profile.name);
-}
-
-function uniqueProfiles(profiles) {
-  const seen = new Set();
-  const output = [];
-  for (const profile of profiles) {
-    if (seen.has(profile.id)) {
-      continue;
-    }
-    seen.add(profile.id);
-    output.push({
-      ...profile,
-      name: profile.name || profile.model || "未命名档案"
-    });
-  }
-  return output;
-}
-
-function defaultProfiles(kind) {
-  return knownProfileDefaults(kind).map(cloneProfile);
-}
-
-function knownProfileDefaults(kind) {
-  return kind === "asr" ? KNOWN_ASR_PROFILES : KNOWN_LLM_PROFILES;
-}
-
-function cloneProfile(profile) {
-  return {
-    id: profile.id,
-    name: profile.name || "",
-    providerType: profile.providerType || "openai",
-    baseUrl: profile.baseUrl || "",
-    model: profile.model || "",
-    vadFilter: profile.vadFilter || "auto",
-    apiKey: profile.apiKey || ""
-  };
-}
-
 function renderProfileOptions(select, profiles, selectedId) {
   select.replaceChildren();
   for (const profile of profiles) {
@@ -640,20 +381,6 @@ function selectedProfile(kind) {
   const profiles = kind === "asr" ? asrProfiles : llmProfiles;
   const selectedId = kind === "asr" ? elements.asrProfileId.value : elements.llmProfileId.value;
   return profileById(profiles, selectedId);
-}
-
-function profileById(profiles, id) {
-  return profiles.find(profile => profile.id === id) || profiles[0] || {};
-}
-
-function normalizeSelectedProfileId(profiles, selectedId, fallbackId) {
-  if (profiles.some(profile => profile.id === selectedId)) {
-    return selectedId;
-  }
-  if (profiles.some(profile => profile.id === fallbackId)) {
-    return fallbackId;
-  }
-  return profiles[0]?.id || "";
 }
 
 function renderSelectedProfile(kind) {
@@ -739,32 +466,6 @@ function deleteProfile(kind) {
   }
   renderSelectedProfile(kind);
   setMessage("已删除当前档案。本机存储会在保存设置后更新。");
-}
-
-function createEmptyProfile(kind) {
-  const prefix = kind === "asr" ? "asr_profile" : "llm_profile";
-  return {
-    id: `${prefix}_${Date.now()}`,
-    name: "",
-    providerType: "openai",
-    baseUrl: "",
-    model: "",
-    vadFilter: "auto",
-    apiKey: ""
-  };
-}
-
-function placeholderBaseUrl(providerType) {
-  if (providerType === "anthropic") {
-    return "https://api.anthropic.com/v1";
-  }
-  if (providerType === "groq") {
-    return "https://api.groq.com/openai/v1";
-  }
-  if (providerType === "xai") {
-    return "https://api.x.ai/v1";
-  }
-  return "https://api.openai.com/v1";
 }
 
 async function saveSettings() {
@@ -956,13 +657,18 @@ async function retryPreloadFromSidePanel() {
     return;
   }
   await refreshActiveTab();
+  const requestContext = captureSidepanelRequestContext();
   retryRequestInFlight = true;
   updateActionButtons(currentJob);
   setMessage(retryPreloadMessage(currentJob));
   try {
-    const response = await send({ type: MESSAGE.RETRY_PRELOAD, tabId: activeTab?.id });
+    const response = await send({ type: MESSAGE.RETRY_PRELOAD, tabId: requestContext.tabId });
     if (!response.ok) {
       setMessage(response.error);
+      return;
+    }
+    if (!(await sidepanelRequestStillCurrent(requestContext))) {
+      setMessage("当前标签页已经变化，已忽略刚才返回的旧任务。");
       return;
     }
     currentJobId = response.job?.id || "";
@@ -979,7 +685,8 @@ async function retryPreloadFromSidePanel() {
 
 function retryPreloadMessage(job) {
   const failed = Number(job?.translation?.chunksFailed || job?.progress?.chunksFailed || 0);
-  if (failed > 0) {
+  const asrPartialFailed = Number(job?.translation?.chunksAsrPartialFailed || job?.progress?.translation?.chunksAsrPartialFailed || 0);
+  if (failed + asrPartialFailed > 0) {
     return "正在重试失败识别分段...";
   }
   if (countReusableSourceChunks(job) > 0) {
@@ -996,17 +703,22 @@ async function retryTranslationFromSidePanel(chunkIndexes = []) {
     return;
   }
   await refreshActiveTab();
+  const requestContext = captureSidepanelRequestContext();
   translationRetryRequestInFlight = true;
   updateActionButtons(currentJob);
   setMessage("正在只重翻译字幕，不会重新语音识别...");
   try {
     const response = await send({
       type: MESSAGE.RETRANSLATE_PRELOAD,
-      tabId: activeTab?.id,
+      tabId: requestContext.tabId,
       chunkIndexes: Array.isArray(chunkIndexes) ? chunkIndexes : []
     });
     if (!response.ok) {
       setMessage(response.error);
+      return;
+    }
+    if (!(await sidepanelRequestStillCurrent(requestContext))) {
+      setMessage("当前标签页已经变化，已忽略刚才返回的旧任务。");
       return;
     }
     currentJobId = response.job?.id || currentJobId;
@@ -1027,6 +739,7 @@ async function retryChunkFromSidePanel(index, options = {}) {
     setMessage("没有可重试的识别分段。");
     return;
   }
+  const requestContext = captureSidepanelRequestContext();
   if (retryingChunks.has(index)) {
     return;
   }
@@ -1036,11 +749,15 @@ async function retryChunkFromSidePanel(index, options = {}) {
   try {
     const response = await send({
       type: options.translationOnly ? MESSAGE.RETRANSLATE_PRELOAD : MESSAGE.RETRY_PRELOAD_CHUNKS,
-      tabId: activeTab?.id,
+      tabId: requestContext.tabId,
       chunkIndexes: [index]
     });
     if (!response.ok) {
       setMessage(response.error);
+      return;
+    }
+    if (!(await sidepanelRequestStillCurrent(requestContext))) {
+      setMessage("当前标签页已经变化，已忽略刚才返回的旧任务。");
       return;
     }
     if (currentJobId) {
@@ -1052,6 +769,28 @@ async function retryChunkFromSidePanel(index, options = {}) {
     retryingChunks.delete(index);
     updateActionButtons(currentJob);
   }
+}
+
+function captureSidepanelRequestContext() {
+  return {
+    tabId: activeTab?.id || 0,
+    tabKey: activeTabKey(activeTab),
+    jobId: currentJobId || ""
+  };
+}
+
+async function sidepanelRequestStillCurrent(requestContext) {
+  await refreshActiveTab();
+  return sidepanelRequestContextStillCurrent(requestContext);
+}
+
+function sidepanelRequestContextStillCurrent(requestContext) {
+  return Boolean(
+    requestContext?.tabId &&
+    requestContext.tabKey &&
+    activeTabKey(activeTab) === requestContext.tabKey &&
+    (currentJobId || "") === (requestContext.jobId || "")
+  );
 }
 
 async function cancelPreloadFromSidePanel() {
@@ -1315,6 +1054,8 @@ async function renderSubtitles(jobId, job = null) {
   if (job?.subtitleCleared || isSubtitleJobCleared(jobId)) {
     return;
   }
+  const requestTabKey = activeTabKey(activeTab);
+  const requestCurrentJobId = currentJobId || "";
   const signature = subtitleSignature(jobId, job);
   const needsTranscriptRetry = subtitleDisplayMode === "bilingual" && subtitleCues.length && subtitleCueSource !== "transcript";
   if (signature && renderedSubtitleSignature === signature && renderedSubtitleJobId === jobId && subtitleCues.length && !needsTranscriptRetry) {
@@ -1329,16 +1070,23 @@ async function renderSubtitles(jobId, job = null) {
   }
   const requestId = ++subtitleLoadRequestId;
   pendingSubtitleSignature = pendingKey;
-  pendingSubtitlePromise = loadSubtitleCues(jobId);
-  const result = await pendingSubtitlePromise;
-  if (requestId !== subtitleLoadRequestId) {
+  const pending = loadSubtitleCues(jobId);
+  pendingSubtitlePromise = pending;
+  let result;
+  try {
+    result = await pending;
+  } finally {
+    if (pendingSubtitlePromise === pending) {
+      pendingSubtitlePromise = null;
+      pendingSubtitleSignature = "";
+    }
+  }
+  if (!shouldApplySubtitleRenderLoad(requestId, requestTabKey, requestCurrentJobId)) {
     return;
   }
-  pendingSubtitlePromise = null;
-  pendingSubtitleSignature = "";
   const cues = result.cues;
   renderedSubtitleJobId = jobId || renderedSubtitleJobId;
-  renderedSubtitleSignature = signature || `${jobId}:${cues.length}`;
+  renderedSubtitleSignature = signature || "";
   subtitleCueSource = result.source;
   currentTranscript = result.transcript || (result.source === "transcript" ? transcriptFromCues(cues) : currentTranscript);
   subtitleCues = cues;
@@ -1349,6 +1097,19 @@ async function renderSubtitles(jobId, job = null) {
   if (result.source === "transcript") {
     cacheCurrentSubtitles().catch(() => {});
   }
+}
+
+function shouldApplySubtitleRenderLoad(requestId, requestTabKey, requestCurrentJobId) {
+  if (requestId !== subtitleLoadRequestId) {
+    return false;
+  }
+  if (!requestTabKey || activeTabKey(activeTab) !== requestTabKey) {
+    return false;
+  }
+  if (requestCurrentJobId && currentJobId !== requestCurrentJobId) {
+    return false;
+  }
+  return true;
 }
 
 async function loadSubtitleCues(jobId) {
@@ -1368,12 +1129,20 @@ async function loadSubtitleCues(jobId) {
 
 function renderSubtitleCueList() {
   elements.subtitleList.replaceChildren();
+  const visibleCues = subtitleCues
+    .map((cue, index) => ({ cue, index }))
+    .filter(item => shouldIncludeCueInSubtitleOutput(item.cue, subtitleDisplayMode, subtitleCues));
   if (!subtitleCues.length) {
     elements.subtitleList.textContent = renderedSubtitleJobId ? "字幕文件为空。" : "字幕生成后会显示在这里。";
     renderSubtitleNotice();
     return;
   }
-  for (const [index, cue] of subtitleCues.entries()) {
+  if (!visibleCues.length) {
+    elements.subtitleList.textContent = "当前模式下没有可显示的真实译文。";
+    renderSubtitleNotice();
+    return;
+  }
+  for (const { cue, index } of visibleCues) {
     const item = document.createElement("div");
     item.className = "cue";
     item.dataset.index = String(index);
@@ -1382,7 +1151,7 @@ function renderSubtitleCueList() {
     time.textContent = cue.time;
     const textWrap = document.createElement("div");
     textWrap.className = "subtitle-lines";
-    if (subtitleDisplayMode === "bilingual" && cue.sourceText) {
+    if (subtitleDisplayMode === "bilingual" && cue.sourceText && cue.sourceText !== cue.text) {
       const source = document.createElement("div");
       source.className = "subtitle-source";
       source.textContent = cue.sourceText;
@@ -1413,6 +1182,7 @@ function clearSubtitles(text, jobId = "") {
   subtitleCueSource = "";
   currentTranscript = null;
   currentSubtitleCacheEntry = null;
+  cachedSubtitleLoadedKey = "";
   activeCueIndex = -1;
   stopSubtitleFollow();
   renderSubtitleNotice("");
@@ -1622,10 +1392,10 @@ function subtitleSourcePreviewNoticeText() {
     return "";
   }
   if (!translatedCount) {
-    return "正在显示 ASR 原文；译文完成后会自动替换。";
+    return "字幕列表、浮层和导出会先用 ASR 原文补位；译文完成后会自动替换，若模型最终拒绝翻译也不会留下空白。";
   }
   if (translatedCount < sourceCount) {
-    return "部分译文已完成；未完成部分先显示 ASR 原文。";
+    return "部分译文已完成；缺译句已用 ASR 原文补位，字幕列表、浮层和导出保持完整，重翻译成功后会自动替换。";
   }
   return "";
 }
@@ -1747,20 +1517,21 @@ function chunkList(statuses) {
     error.className = "chunk-error";
     error.textContent = status.error ? friendlyChunkError(status.error) : "";
     row.append(index, stage, meta);
-    if (status.stage === "failed") {
+    if (["failed", "completed_with_warnings"].includes(status.stage)) {
       const running = isRunningJob(currentJob);
       const audioCacheRemoved = Boolean(currentJob?.audioCacheRemoved);
-      const sourceAvailable = chunkHasReusableSource(status);
+      const needsAsrRetry = chunkNeedsAsrRetry(status);
+      const sourceAvailable = chunkHasReusableSource(status) && !needsAsrRetry;
       const retry = document.createElement("button");
       retry.className = "chunk-retry";
       retry.type = "button";
       retry.textContent = sourceAvailable ? "重翻译" : "重试";
       retry.disabled = running || (!sourceAvailable && audioCacheRemoved) || retryingChunks.has(Number(status.index));
       retry.title = audioCacheRemoved
-        ? (sourceAvailable ? "只重跑翻译，不会重新识别，也不需要音频缓存。" : "当前任务的音频缓存已清除，需要重新抽取全部。")
+        ? (sourceAvailable ? "后台仍保留当前任务的 ASR 原文时，只重跑这个翻译分段；如果浏览器回收了后台任务状态，需要重新抽取。" : "当前任务的音频缓存已清除，需要重新抽取全部。")
         : running
           ? "当前任务仍在运行，结束后可单独重试这个失败识别分段。"
-          : (sourceAvailable ? "只重跑这个翻译分段的翻译，不重新语音识别。" : "重新识别并翻译这个失败识别分段。");
+          : (sourceAvailable ? "后台仍保留当前任务的 ASR 原文时，只重跑这个翻译分段；如果浏览器回收了后台任务状态，需要重新抽取。" : "重新识别并翻译这个失败识别分段。");
       retry.addEventListener("click", event => {
         event.preventDefault();
         event.stopPropagation();
@@ -1780,158 +1551,8 @@ function chunkHasReusableSource(status) {
   return Number(status?.sourceCount || status?.source_segments || status?.sourceSegments || 0) > 0;
 }
 
-function parseVtt(vtt) {
-  return vtt
-    .split(/\n\n+/)
-    .map(block => block.trim())
-    .filter(block => block && !block.startsWith("WEBVTT"))
-    .map(block => {
-      const lines = block.split("\n").filter(Boolean);
-      const timeIndex = lines.findIndex(line => line.includes("-->"));
-      if (timeIndex < 0) {
-        return null;
-      }
-      const [startText, endText] = lines[timeIndex].split("-->").map(value => value.trim().split(/\s+/)[0]);
-      const start = parseTimestamp(startText);
-      const end = parseTimestamp(endText);
-      const text = lines.slice(timeIndex + 1).join(" ").replace(/<[^>]+>/g, "").trim();
-      return {
-        start,
-        end,
-        time: lines[timeIndex],
-        text,
-        sourceText: ""
-      };
-    })
-    .filter(cue => cue && Number.isFinite(cue.start) && Number.isFinite(cue.end) && cue.text);
-}
-
-function cuesFromTranscript(transcript) {
-  const source = Array.isArray(transcript?.source) ? transcript.source : [];
-  const translated = Array.isArray(transcript?.translated) ? transcript.translated : [];
-  const cues = [];
-  for (const { sourceSegment, translatedSegment } of mergeTranscriptSegments(source, translated)) {
-    const start = firstFiniteNumber(translatedSegment.start, sourceSegment.start);
-    const end = firstFiniteNumber(translatedSegment.end, sourceSegment.end);
-    const translatedText = cleanSubtitleText(translatedSegment.text);
-    const sourceText = cleanSubtitleText(sourceSegment.text);
-    const text = translatedText || sourceText;
-    if (Number.isFinite(start) && Number.isFinite(end) && text) {
-      cues.push({
-        start,
-        end,
-        time: formatCueTime(start, end),
-        text,
-        sourceText: translatedText && sourceText && sourceText !== text ? sourceText : ""
-      });
-    }
-  }
-  return cues;
-}
-
-function mergeTranscriptSegments(source, translated) {
-  const sourceSegments = Array.isArray(source) ? source : [];
-  const translatedSegments = Array.isArray(translated) ? translated : [];
-  const useIdentity = sourceSegments.some(hasSegmentIdentity) || translatedSegments.some(hasSegmentIdentity);
-  if (!useIdentity) {
-    const total = Math.max(sourceSegments.length, translatedSegments.length);
-    return Array.from({ length: total }, (_, index) => ({
-      sourceSegment: sourceSegments[index] || {},
-      translatedSegment: translatedSegments[index] || {}
-    }));
-  }
-  const translatedByKey = new Map();
-  translatedSegments.forEach(segment => {
-    const key = segmentIdentityKey(segment);
-    if (key) {
-      translatedByKey.set(key, segment);
-    }
-  });
-  const usedKeys = new Set();
-  const merged = sourceSegments.map(segment => {
-    const key = segmentIdentityKey(segment);
-    const translatedSegment = key ? translatedByKey.get(key) : null;
-    if (key && translatedSegment) {
-      usedKeys.add(key);
-    }
-    return {
-      sourceSegment: segment,
-      translatedSegment: translatedSegment || {}
-    };
-  });
-  for (const segment of translatedSegments) {
-    const key = segmentIdentityKey(segment);
-    if (!key || usedKeys.has(key)) {
-      continue;
-    }
-    merged.push({
-      sourceSegment: {},
-      translatedSegment: segment
-    });
-  }
-  return merged.sort((left, right) => {
-    const leftStart = firstFiniteNumber(left.translatedSegment.start, left.sourceSegment.start);
-    const rightStart = firstFiniteNumber(right.translatedSegment.start, right.sourceSegment.start);
-    return leftStart - rightStart;
-  });
-}
-
-function hasSegmentIdentity(segment) {
-  return Boolean(segmentIdentityKey(segment));
-}
-
-function segmentIdentityKey(segment) {
-  const chunkIndex = Number(segment?.chunkIndex);
-  const segmentIndex = Number(segment?.segmentIndex);
-  if (Number.isFinite(chunkIndex) && Number.isFinite(segmentIndex)) {
-    return `${chunkIndex}:${segmentIndex}`;
-  }
-  return "";
-}
-
-function transcriptFromCues(cues) {
-  return {
-    source: cues.map(cue => ({ start: cue.start, end: cue.end, text: cue.sourceText || "" })),
-    translated: cues.map(cue => ({ start: cue.start, end: cue.end, text: cue.text || "" })),
-    chunkStatuses: []
-  };
-}
-
-function cuesToVtt(cues, mode = subtitleDisplayMode) {
-  const lines = ["WEBVTT", ""];
-  for (const cue of cues) {
-    if (!Number.isFinite(cue.start) || !Number.isFinite(cue.end) || !cue.text) {
-      continue;
-    }
-    const textLines = [];
-    if (mode === "bilingual" && cue.sourceText) {
-      textLines.push(cue.sourceText);
-    }
-    textLines.push(cue.text);
-    lines.push(formatCueTime(cue.start, cue.end));
-    lines.push(textLines.join("\n"));
-    lines.push("");
-  }
-  return lines.join("\n");
-}
-
-function cuesToSrt(cues, mode = subtitleDisplayMode) {
-  return cues
-    .filter(cue => Number.isFinite(cue.start) && Number.isFinite(cue.end) && cue.text)
-    .map((cue, index) => {
-      const textLines = [];
-      if (mode === "bilingual" && cue.sourceText) {
-        textLines.push(cue.sourceText);
-      }
-      textLines.push(cue.text);
-      return [
-        String(index + 1),
-        `${formatSrtTimestamp(cue.start)} --> ${formatSrtTimestamp(cue.end)}`,
-        textLines.join("\n")
-      ].join("\n");
-    })
-    .join("\n\n")
-    .concat("\n");
+function chunkNeedsAsrRetry(status) {
+  return Number(status?.asrFailures || status?.asr_failures || 0) > 0;
 }
 
 async function attachCurrentSubtitlesToPage() {
@@ -1943,13 +1564,23 @@ async function attachCurrentSubtitlesToPage() {
     return;
   }
   const vtt = cuesToVtt(subtitleCues);
-  const signature = subtitleAttachSignature(activeTab.id, vtt);
-  const response = await send({ type: MESSAGE.ATTACH_VTT_TEXT, tabId: activeTab.id, vtt });
+  if (!hasDisplayableSubtitleVtt(vtt)) {
+    await detachCurrentSubtitlesFromPage();
+    renderSubtitleNotice();
+    return;
+  }
+  const requestContext = captureSidepanelRequestContext();
+  const signature = subtitleAttachSignature(requestContext.tabId, vtt);
+  const response = await send({ type: MESSAGE.ATTACH_VTT_TEXT, tabId: requestContext.tabId, vtt });
   if (!response.ok) {
     renderSubtitleNotice(response.error || "当前页面没有可挂载字幕的播放器。");
     return;
   }
-  attachedSubtitleTabId = activeTab.id;
+  if (!sidepanelRequestContextStillCurrent(requestContext)) {
+    await detachSubtitlesFromTab(requestContext.tabId);
+    return;
+  }
+  attachedSubtitleTabId = requestContext.tabId;
   attachedSubtitleSignature = signature;
   renderSubtitleNotice();
 }
@@ -1963,6 +1594,10 @@ async function ensureCurrentSubtitlesAttachedToPage() {
     return;
   }
   const vtt = cuesToVtt(subtitleCues);
+  if (!hasDisplayableSubtitleVtt(vtt)) {
+    await detachCurrentSubtitlesFromPage();
+    return;
+  }
   const signature = subtitleAttachSignature(activeTab.id, vtt);
   if (attachedSubtitleTabId === activeTab.id && attachedSubtitleSignature === signature) {
     const stateResponse = await send({ type: MESSAGE.GET_VIDEO_STATE, tabId: activeTab.id }).catch(() => null);
@@ -1978,18 +1613,33 @@ async function ensureCurrentSubtitlesAttachedToPage() {
 }
 
 async function detachCurrentSubtitlesFromPage() {
-  attachedSubtitleTabId = 0;
-  attachedSubtitleSignature = "";
   if (!activeTab?.id) {
+    attachedSubtitleTabId = 0;
+    attachedSubtitleSignature = "";
     return;
   }
-  await send({ type: MESSAGE.DETACH_PRELOAD_VTT, tabId: activeTab.id }).catch(() => null);
+  await detachSubtitlesFromTab(activeTab.id);
+}
+
+async function detachSubtitlesFromTab(tabId) {
+  if (attachedSubtitleTabId === tabId) {
+    attachedSubtitleTabId = 0;
+    attachedSubtitleSignature = "";
+  }
+  if (!tabId) {
+    return;
+  }
+  await send({ type: MESSAGE.DETACH_PRELOAD_VTT, tabId }).catch(() => null);
 }
 
 function subtitleAttachSignature(tabId, vtt) {
   const text = String(vtt || "");
   // Must match background attachVttText(); the page reports that signature back.
   return `manual:${vttContentSignature(text)}`;
+}
+
+function hasDisplayableSubtitleVtt(vtt) {
+  return /-->/.test(String(vtt || ""));
 }
 
 function vttContentSignature(vtt) {
@@ -2006,7 +1656,13 @@ async function cacheCurrentSubtitles() {
     return;
   }
   const transcript = currentTranscript || transcriptFromCues(subtitleCues);
-  const entry = await buildSubtitleCacheEntry(transcript);
+  if (isRunningJob(currentJob) && !transcriptHasRealTranslatedCue(transcript)) {
+    return;
+  }
+  if (!transcriptHasDisplayableCues(transcript, subtitleDisplayMode, { allowRunningSourcePreview: false })) {
+    return;
+  }
+  const entry = await buildSubtitleCacheEntry(transcript, transcript?.metadata || {});
   if (!entry.id) {
     return;
   }
@@ -2021,8 +1677,13 @@ async function exportCurrentSubtitle() {
     setMessage("还没有可导出的字幕。");
     return;
   }
-  const blob = new Blob([cuesToSrt(subtitleCues)], { type: "application/x-subrip;charset=utf-8" });
-  downloadBlob(blob, `${safeFilename(elements.pageTitle.textContent || "fuguang-subtitle")}.srt`);
+  const srt = cuesToSrt(subtitleCues, subtitleDisplayMode, { allowRunningSourcePreview: false });
+  if (!/\d+\n\d{2}:\d{2}:\d{2},\d{3}\s+-->\s+\d{2}:\d{2}:\d{2},\d{3}/.test(srt)) {
+    setMessage("当前模式下还没有可导出的真实译文。");
+    return;
+  }
+  const blob = new Blob([srt], { type: "application/x-subrip;charset=utf-8" });
+  await downloadBlob(blob, `${safeFilename(elements.pageTitle.textContent || "fuguang-subtitle")}.srt`);
   setMessage("SRT 字幕已导出。");
 }
 
@@ -2116,23 +1777,34 @@ async function clearCurrentSubtitleCache() {
       cachedSubtitleLoadedKey = "";
     }
 
-    if (!deleted) {
+    if (!deleted && !wasShowingClearedCache) {
       renderSubtitleNotice();
       setMessage("当前页面没有已保存的字幕缓存。");
       return;
     }
+    let suppressError = "";
     if (wasShowingClearedCache || subtitleCues.length) {
       const jobIdToSuppress = currentJobId || renderedSubtitleJobId || currentSubtitleCacheEntry?.jobId || "";
       if (jobIdToSuppress) {
         clearedSubtitleJobIds.add(jobIdToSuppress);
-        await suppressPreloadSubtitleState(jobIdToSuppress);
+        try {
+          await suppressPreloadSubtitleState(jobIdToSuppress);
+        } catch (error) {
+          suppressError = formatRuntimeError(error.message);
+        }
       }
       await detachCurrentSubtitlesFromPage();
       clearSubtitles("已清除当前页面字幕缓存。");
     } else {
       renderSubtitleNotice();
     }
-    setMessage(`已清除当前页面字幕缓存（${deleted} 条）。`);
+    if (suppressError) {
+      setMessage(`已清除当前页面字幕缓存（${deleted} 条），但后台字幕状态清理失败：${suppressError}`);
+    } else if (deleted) {
+      setMessage(`已清除当前页面字幕缓存（${deleted} 条）。`);
+    } else {
+      setMessage("当前页面没有已保存的字幕缓存，已清除当前显示的缓存字幕。");
+    }
   } catch (error) {
     setMessage(`清除字幕缓存失败：${formatRuntimeError(error.message)}`);
   }
@@ -2165,18 +1837,32 @@ async function tryLoadCachedSubtitleForCurrentPage() {
     await ensureCurrentSubtitlesAttachedToPage();
     return;
   }
+  const requestTabKey = activeTabKey(activeTab);
+  const requestLoadId = subtitleLoadRequestId;
   cacheAutoLoadInFlight = true;
   try {
     await pruneSubtitleCache();
+    if (!shouldApplyCachedSubtitleLoad(requestTabKey, requestLoadId)) {
+      return;
+    }
     const { key, entry } = await getSubtitleCacheEntryForCurrentPage();
+    if (!shouldApplyCachedSubtitleLoad(requestTabKey, requestLoadId)) {
+      return;
+    }
     if (!key) {
+      await detachStalePageSubtitlesWithoutCache();
       return;
     }
     if (!entry?.transcript) {
+      await detachStalePageSubtitlesWithoutCache();
       return;
     }
     const cues = cuesFromTranscript(entry.transcript);
     if (!cues.length) {
+      await detachStalePageSubtitlesWithoutCache();
+      return;
+    }
+    if (!shouldApplyCachedSubtitleLoad(requestTabKey, requestLoadId)) {
       return;
     }
     cachedSubtitleLoadedKey = key;
@@ -2195,21 +1881,40 @@ async function tryLoadCachedSubtitleForCurrentPage() {
   }
 }
 
+function shouldApplyCachedSubtitleLoad(requestTabKey, requestLoadId) {
+  return Boolean(
+    requestTabKey &&
+    activeTabKey(activeTab) === requestTabKey &&
+    subtitleLoadRequestId === requestLoadId &&
+    !currentJobId &&
+    !subtitleCues.length
+  );
+}
+
+async function detachStalePageSubtitlesWithoutCache() {
+  if (!activeTab?.id || currentJobId || subtitleCues.length) {
+    return;
+  }
+  await detachCurrentSubtitlesFromPage();
+}
+
 async function buildSubtitleCacheEntry(transcript, importedPayload = {}) {
-  const context = currentSubtitleCacheContext(importedPayload);
+  const metadata = transcript?.metadata && typeof transcript.metadata === "object" ? transcript.metadata : {};
+  const payload = { ...metadata, ...importedPayload };
+  const context = currentSubtitleCacheContext(payload);
   const selected = getSelectedCandidate();
-  const pageUrl = context.pageUrl;
-  const title = importedPayload.title || elements.pageTitle.textContent || selected?.title || "";
-  const sourceUrl = context.sourceUrl;
+  const pageUrl = normalizeCacheUrl(context.pageUrl);
+  const title = payload.title || elements.pageTitle.textContent || selected?.title || "";
+  const sourceUrl = normalizeMediaCacheUrl(context.sourceUrl);
   const id = await buildSubtitleCacheKey({ pageUrl, sourceUrl });
   return {
     id,
     pageUrl,
     title,
     sourceUrl,
-    jobId: importedPayload.jobId || renderedSubtitleJobId || currentJobId || "",
+    jobId: payload.jobId || renderedSubtitleJobId || currentJobId || "",
     transcript,
-    createdAt: importedPayload.createdAt || new Date().toISOString(),
+    createdAt: payload.createdAt || new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     segmentCount: Math.max(transcript.source?.length || 0, transcript.translated?.length || 0),
     approxBytes: JSON.stringify(transcript).length
@@ -2238,29 +1943,16 @@ function currentSubtitleCacheContext(payload = {}) {
   };
 }
 
-function subtitleCacheSeed(normalizedPage, normalizedSource) {
-  if (normalizedPage && normalizedSource) {
-    return `page:${normalizedPage}\nsource:${normalizedSource}`;
-  }
-  if (normalizedPage) {
-    return `page:${normalizedPage}`;
-  }
-  if (normalizedSource) {
-    return `source:${normalizedSource}`;
-  }
-  return "";
-}
-
 async function getSubtitleCacheEntryForCurrentPage() {
   const context = currentSubtitleCacheContext();
   const key = await buildSubtitleCacheKey(context);
   const entry = key ? await getSubtitleCacheEntry(key) : null;
-  if (entry) {
+  if (subtitleCacheEntryMatchesContext(entry, context) && subtitleCacheEntryHasDisplayableCues(entry)) {
     return { key, entry };
   }
   for (const legacyKey of await buildLegacySubtitleCacheKeys(context)) {
     const legacyEntry = await getSubtitleCacheEntry(legacyKey);
-    if (subtitleCacheEntryMatchesContext(legacyEntry, context)) {
+    if (subtitleCacheEntryMatchesContext(legacyEntry, context) && subtitleCacheEntryHasDisplayableCues(legacyEntry)) {
       return { key: legacyKey, entry: legacyEntry };
     }
   }
@@ -2280,7 +1972,7 @@ async function buildMatchingSubtitleCacheKeysForCurrentPage() {
       keys.add(legacyKey);
     }
   }
-  for (const entry of await getSubtitleCacheEntriesMatchingPageContext(context)) {
+  for (const entry of await getSubtitleCacheEntriesMatchingPageContext(context, { includeUnsafeForClear: true })) {
     if (entry?.id) {
       keys.add(entry.id);
     }
@@ -2291,299 +1983,61 @@ async function buildMatchingSubtitleCacheKeysForCurrentPage() {
 async function buildLegacySubtitleCacheKeys({ pageUrl = "", sourceUrl = "" }) {
   const normalizedPage = normalizeCacheUrl(pageUrl);
   const normalizedSource = normalizeMediaCacheUrl(sourceUrl);
-  const seeds = [...new Set([normalizedPage, normalizedSource].filter(Boolean))];
   const keys = [];
+  const strictSeed = normalizedPage && normalizedSource
+    ? subtitleCacheSeed(normalizedPage, normalizedSource)
+    : "";
+  if (strictSeed) {
+    keys.push(`subtitle:v${SUBTITLE_CACHE_STRICT_LEGACY_SCHEMA_VERSION}:${await sha256Text(strictSeed)}`);
+  }
+  if (canUsePageOnlySubtitleCacheFallback(normalizedPage)) {
+    return keys;
+  }
+  const seeds = [...new Set([normalizedPage, normalizedSource].filter(Boolean))];
   for (const seed of seeds) {
     keys.push(`subtitle:v${SUBTITLE_CACHE_LEGACY_SCHEMA_VERSION}:${await sha256Text(seed)}`);
   }
   return keys;
 }
 
-function subtitleCacheEntryMatchesContext(entry, context) {
-  if (!entry?.transcript) {
-    return false;
-  }
-  const currentSource = normalizeMediaCacheUrl(context.sourceUrl);
-  const entrySource = normalizeMediaCacheUrl(entry.sourceUrl);
-  if (currentSource) {
-    return Boolean(entrySource && entrySource === currentSource);
-  }
-  const currentPage = normalizeCacheUrl(context.pageUrl);
-  const entryPage = normalizeCacheUrl(entry.pageUrl);
-  return Boolean(currentPage && entryPage === currentPage);
-}
-
 async function findSubtitleCacheEntryByPageContext(context) {
-  const [entry] = await getSubtitleCacheEntriesMatchingPageContext(context);
+  const entry = (await getSubtitleCacheEntriesMatchingPageContext(context))
+    .find(subtitleCacheEntryHasDisplayableCues);
   return entry?.id ? { key: entry.id, entry } : null;
 }
 
-async function getSubtitleCacheEntriesMatchingPageContext(context) {
+async function getSubtitleCacheEntriesMatchingPageContext(context, { includeUnsafeForClear = false } = {}) {
   const currentPage = normalizeCacheUrl(context.pageUrl);
   if (!canUsePageOnlySubtitleCacheFallback(currentPage)) {
     return [];
   }
   return (await getAllSubtitleCacheEntries())
-    .filter(entry => subtitleCacheEntryMatchesPageFallback(entry, currentPage))
+    .filter(entry => includeUnsafeForClear
+      ? subtitleCacheEntryMatchesPageForClear(entry, currentPage)
+      : subtitleCacheEntryMatchesPageFallback(entry, currentPage, context))
     .sort((left, right) => subtitleCacheEntryTime(right) - subtitleCacheEntryTime(left));
 }
 
-function subtitleCacheEntryMatchesPageFallback(entry, normalizedPage) {
+function subtitleCacheEntryMatchesPageFallback(entry, normalizedPage, context) {
   return Boolean(
     entry?.id &&
     entry?.transcript &&
+    subtitleCacheEntryHasCurrentSchema(entry) &&
     normalizedPage &&
-    normalizeCacheUrl(entry.pageUrl) === normalizedPage
+    normalizeCacheUrl(entry.pageUrl) === normalizedPage &&
+    subtitleCacheEntryHasSameMediaIdentity(entry, context) &&
+    subtitleCacheEntryMetadataMatchesContext(entry, context)
   );
 }
 
-function canUsePageOnlySubtitleCacheFallback(normalizedPage) {
-  if (!normalizedPage) {
-    return false;
-  }
-  try {
-    const url = new URL(normalizedPage);
-    return /(^|\.)bilibili\.com$/i.test(url.hostname) && /^\/video\/[A-Za-z0-9_-]+$/i.test(url.pathname);
-  } catch {
-    return false;
-  }
+function subtitleCacheEntryHasDisplayableCues(entry) {
+  return Boolean(entry?.transcript && transcriptHasDisplayableCues(entry.transcript, subtitleDisplayMode, {
+    allowRunningSourcePreview: false
+  }));
 }
 
-function subtitleCacheEntryTime(entry) {
-  return Date.parse(entry?.updatedAt || entry?.createdAt || "") || 0;
-}
-
-function normalizeCacheUrl(rawUrl) {
-  try {
-    const url = new URL(rawUrl);
-    url.hash = "";
-    normalizeBilibiliPageCacheUrl(url);
-    for (const key of [...url.searchParams.keys()]) {
-      if (/^(utm_|spm_|vd_source$|from$|share_|fbclid$|gclid$)/i.test(key)) {
-        url.searchParams.delete(key);
-      }
-    }
-    url.searchParams.sort();
-    return url.toString();
-  } catch {
-    return String(rawUrl || "").trim();
-  }
-}
-
-function normalizeMediaCacheUrl(rawUrl) {
-  try {
-    const url = new URL(rawUrl);
-    url.hash = "";
-    const bilibiliIdentity = getBilibiliMediaCacheIdentity(url);
-    if (bilibiliIdentity) {
-      return `bilibili:${bilibiliIdentity}`;
-    }
-    for (const key of [...url.searchParams.keys()]) {
-      if (/^(utm_|spm_|vd_source$|from$|share_|fbclid$|gclid$|token$|access_?token$|auth(?:_key)?$|signature$|sign$|sig$|expires?$|expiration$|deadline$|timestamp$|ts$|nonce$|session(?:id)?$|sid$|x-amz-|x-oss-|x-goog-)/i.test(key)) {
-        url.searchParams.delete(key);
-      }
-    }
-    url.searchParams.sort();
-    return url.toString();
-  } catch {
-    return String(rawUrl || "").trim();
-  }
-}
-
-function normalizeBilibiliPageCacheUrl(url) {
-  if (!/(^|\.)bilibili\.com$/i.test(url.hostname)) {
-    return;
-  }
-  const match = url.pathname.match(/^\/video\/([A-Za-z0-9_-]+)\/?$/);
-  if (match) {
-    url.pathname = `/video/${match[1]}`;
-    const part = url.searchParams.get("p");
-    url.search = "";
-    if (part && /^\d+$/.test(part)) {
-      url.searchParams.set("p", part);
-    }
-  }
-}
-
-function getBilibiliMediaCacheIdentity(url) {
-  if (!isLikelyBilibiliMediaCacheUrl(url)) {
-    return "";
-  }
-  const filename = decodeURIComponent(url.pathname.split("/").pop() || "");
-  const filenameMatch = filename.match(/^(\d+-\d+)-\d+\.(?:m4s|mp4)$/i);
-  if (filenameMatch) {
-    return filenameMatch[1];
-  }
-  const pathMatch = url.pathname.match(/\/upgcxcode\/(?:[^/]+\/){0,4}(\d+)(?:\/|$)/i);
-  if (pathMatch) {
-    return pathMatch[1];
-  }
-  const path = canonicalMediaCachePathname(url.pathname || "");
-  return path ? `${url.hostname}${path}` : "";
-}
-
-function isLikelyBilibiliMediaCacheUrl(url) {
-  return (
-    /(?:^|\.)bilibili(?:video)?\.com$/i.test(url.hostname) ||
-    /(?:^|\.)bilivideo\.(?:com|cn)$/i.test(url.hostname) ||
-    /\/upgcxcode\//i.test(url.pathname)
-  );
-}
-
-function canonicalMediaCachePathname(pathname) {
-  return String(pathname || "")
-    .replace(/\/\d{3,5}x\d{3,5}(?=\/)/g, "/{resolution}")
-    .replace(/\/(?:\d{3,4}p|[1-9]\d{1,3}k|[48]k)(?=\/)/gi, "/{quality}")
-    .replace(/(?:^|[-_/])\d{3,4}p(?=[-_/.]|$)/gi, "-{quality}")
-    .replace(/(?:^|[-_/])(?:[1-9]\d{1,3}k|[48]k)(?=[-_/.])/gi, "-{quality}")
-    .replace(/-\d{5,6}(?=\.m4s$)/i, "-{track}");
-}
-
-async function sha256Text(text) {
-  const bytes = new TextEncoder().encode(text);
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
-  return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, "0")).join("");
-}
-
-function openSubtitleCacheDb() {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(SUBTITLE_CACHE_DB_NAME, SUBTITLE_CACHE_DB_VERSION);
-    request.onupgradeneeded = () => {
-      const db = request.result;
-      if (!db.objectStoreNames.contains(SUBTITLE_CACHE_STORE)) {
-        db.createObjectStore(SUBTITLE_CACHE_STORE, { keyPath: "id" });
-      }
-    };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error || new Error("无法打开字幕缓存。"));
-  });
-}
-
-async function getSubtitleCacheEntry(id) {
-  if (!id) {
-    return null;
-  }
-  const db = await openSubtitleCacheDb();
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction(SUBTITLE_CACHE_STORE, "readonly");
-    const request = transaction.objectStore(SUBTITLE_CACHE_STORE).get(id);
-    request.onsuccess = () => resolve(request.result || null);
-    request.onerror = () => reject(request.error || new Error("无法读取字幕缓存。"));
-    transaction.oncomplete = () => db.close();
-  });
-}
-
-async function getAllSubtitleCacheEntries() {
-  const db = await openSubtitleCacheDb();
-  return new Promise((resolve, reject) => {
-    let entries = [];
-    const transaction = db.transaction(SUBTITLE_CACHE_STORE, "readonly");
-    const request = transaction.objectStore(SUBTITLE_CACHE_STORE).getAll();
-    request.onsuccess = () => {
-      entries = Array.isArray(request.result) ? request.result : [];
-    };
-    request.onerror = () => reject(request.error || new Error("无法读取字幕缓存。"));
-    transaction.oncomplete = () => {
-      db.close();
-      resolve(entries);
-    };
-    transaction.onerror = () => {
-      db.close();
-      reject(transaction.error || new Error("无法读取字幕缓存。"));
-    };
-  });
-}
-
-async function deleteSubtitleCacheEntries(ids) {
-  const uniqueIds = [...new Set(ids)].filter(Boolean);
-  if (!uniqueIds.length) {
-    return 0;
-  }
-  const db = await openSubtitleCacheDb();
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction(SUBTITLE_CACHE_STORE, "readwrite");
-    const store = transaction.objectStore(SUBTITLE_CACHE_STORE);
-    let deleted = 0;
-    for (const id of uniqueIds) {
-      const request = store.get(id);
-      request.onsuccess = () => {
-        if (request.result) {
-          store.delete(id);
-          deleted += 1;
-        }
-      };
-      request.onerror = () => {
-        reject(request.error || new Error("无法读取字幕缓存。"));
-      };
-    }
-    transaction.oncomplete = () => {
-      db.close();
-      resolve(deleted);
-    };
-    transaction.onerror = () => {
-      db.close();
-      reject(transaction.error || new Error("无法删除字幕缓存。"));
-    };
-  });
-}
-
-async function putSubtitleCacheEntry(entry) {
-  const db = await openSubtitleCacheDb();
-  await new Promise((resolve, reject) => {
-    const transaction = db.transaction(SUBTITLE_CACHE_STORE, "readwrite");
-    transaction.objectStore(SUBTITLE_CACHE_STORE).put(entry);
-    transaction.oncomplete = () => {
-      db.close();
-      resolve();
-    };
-    transaction.onerror = () => {
-      db.close();
-      reject(transaction.error || new Error("无法写入字幕缓存。"));
-    };
-  });
-  await pruneSubtitleCache();
-}
-
-async function pruneSubtitleCache() {
-  const db = await openSubtitleCacheDb();
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction(SUBTITLE_CACHE_STORE, "readwrite");
-    const store = transaction.objectStore(SUBTITLE_CACHE_STORE);
-    const request = store.getAll();
-    request.onsuccess = () => {
-      const entries = Array.isArray(request.result) ? request.result : [];
-      const cutoff = Date.now() - SUBTITLE_CACHE_MAX_AGE_DAYS * 24 * 60 * 60 * 1000;
-      const sorted = entries
-        .map(entry => ({
-          entry,
-          updatedAt: Date.parse(entry?.updatedAt || entry?.createdAt || "") || 0
-        }))
-        .sort((a, b) => b.updatedAt - a.updatedAt);
-      const idsToDelete = new Set();
-      for (const item of sorted) {
-        if (item.updatedAt && item.updatedAt < cutoff) {
-          idsToDelete.add(item.entry.id);
-        }
-      }
-      for (const item of sorted.slice(SUBTITLE_CACHE_MAX_ENTRIES)) {
-        idsToDelete.add(item.entry.id);
-      }
-      for (const id of idsToDelete) {
-        if (id && id !== currentSubtitleCacheEntry?.id) {
-          store.delete(id);
-        }
-      }
-    };
-    request.onerror = () => reject(request.error || new Error("无法维护字幕缓存。"));
-    transaction.oncomplete = () => {
-      db.close();
-      resolve();
-    };
-    transaction.onerror = () => {
-      db.close();
-      reject(transaction.error || new Error("无法维护字幕缓存。"));
-    };
-  });
+function subtitleCacheEntryHasCurrentSchema(entry) {
+  return String(entry?.id || "").startsWith(`subtitle:v${SUBTITLE_CACHE_SCHEMA_VERSION}:`);
 }
 
 function subtitleSignature(jobId, job) {
@@ -2596,7 +2050,24 @@ function subtitleSignature(jobId, job) {
   const chunksDone = Number(translation.chunksDone || progress.chunksDone || 0);
   const chunksFailed = Number(translation.chunksFailed || progress.chunksFailed || 0);
   const base = `${jobId}:${segmentCount}:${chunksDone}:${chunksFailed}`;
-  return translation.vttText ? `${base}:${textContentSignature(translation.vttText)}` : base;
+  const contentVersion = subtitleContentVersion(translation);
+  return contentVersion ? `${base}:${contentVersion}` : "";
+}
+
+function subtitleContentVersion(translation = {}) {
+  for (const key of ["vttSignature", "transcriptHash", "contentHash"]) {
+    const value = String(translation?.[key] || "").trim();
+    if (value) {
+      return `${key}:${value}`;
+    }
+  }
+  if (translation.vttText) {
+    return `vtt:${textContentSignature(translation.vttText)}`;
+  }
+  if (translation.transcript) {
+    return `transcript:${textContentSignature(JSON.stringify(translation.transcript))}`;
+  }
+  return "";
 }
 
 function textContentSignature(value) {
@@ -2608,54 +2079,12 @@ function textContentSignature(value) {
   return `${text.length}:${Math.abs(hash)}`;
 }
 
-function firstFiniteNumber(...values) {
-  for (const value of values) {
-    const number = Number(value);
-    if (Number.isFinite(number)) {
-      return number;
-    }
-  }
-  return Number.NaN;
-}
-
-function cleanSubtitleText(value) {
-  return String(value || "").replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
-}
-
 function safeFilename(value) {
   const text = String(value || "fuguang-subtitle")
     .replace(/[\\/:*?"<>|]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
   return (text || "fuguang-subtitle").slice(0, 80);
-}
-
-function formatCueTime(start, end) {
-  return `${formatTimestamp(start)} --> ${formatTimestamp(end)}`;
-}
-
-function formatTimestamp(value) {
-  const time = Math.max(0, Number(value) || 0);
-  const hours = Math.floor(time / 3600);
-  const minutes = Math.floor((time % 3600) / 60);
-  const seconds = Math.floor(time % 60);
-  const milliseconds = Math.floor((time - Math.floor(time)) * 1000);
-  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}.${String(milliseconds).padStart(3, "0")}`;
-}
-
-function formatSrtTimestamp(value) {
-  return formatTimestamp(value).replace(".", ",");
-}
-
-function parseTimestamp(value) {
-  const parts = value.replace(",", ".").split(":");
-  if (parts.length < 2 || parts.length > 3) {
-    return Number.NaN;
-  }
-  const seconds = Number(parts.pop());
-  const minutes = Number(parts.pop());
-  const hours = parts.length ? Number(parts.pop()) : 0;
-  return hours * 3600 + minutes * 60 + seconds;
 }
 
 function showTab(tab) {
@@ -2763,6 +2192,7 @@ function chunkStageLabel(stage) {
     asr_done: "待翻译",
     translation: "翻译",
     completed: "完成",
+    completed_with_warnings: "部分完成",
     done: "完成",
     failed: "失败",
     cancelled: "停止"
@@ -2785,6 +2215,10 @@ function chunkMetaText(status) {
   }
   if (translatedSegments) {
     parts.push(`译文 ${translatedSegments}`);
+  }
+  const asrFailures = Number(status.asrFailures || status.asr_failures || 0);
+  if (asrFailures > 0) {
+    parts.push(`${asrFailures} 个音频分段识别失败`);
   }
   if (!sourceSegments && status.sourceCount) {
     parts.push(`原文 ${status.sourceCount}`);
@@ -2881,17 +2315,19 @@ function friendlyChunkError(error) {
 function updateActionButtons(job) {
   const running = isRunningJob(job);
   const failed = Number(job?.translation?.chunksFailed || job?.progress?.chunksFailed || 0);
+  const asrPartialFailed = Number(job?.translation?.chunksAsrPartialFailed || job?.progress?.translation?.chunksAsrPartialFailed || 0);
+  const retryableAsrFailures = failed + asrPartialFailed;
   const sourceChunks = countReusableSourceChunks(job);
   const audioChunks = countReusableAudioChunks(job);
   const canResumeAudio = audioChunks > 0 && !sourceChunks;
   const canResumeTranslation = sourceChunks > 0;
-  const canRetryPreload = failed > 0 || canResumeAudio || canResumeTranslation;
+  const canRetryPreload = retryableAsrFailures > 0 || canResumeAudio || canResumeTranslation;
   const audioCacheRemoved = Boolean(job?.audioCacheRemoved);
   elements.startPreload.disabled = startRequestInFlight || running;
   elements.startPreload.textContent = job ? "重新抽取全部" : "开始抽取";
   elements.startPreload.title = job ? "放弃当前任务状态，从选中的媒体源重新抽取音频并创建新任务。" : "从当前选中的媒体源抽取音频并生成字幕。";
-  elements.retryPreload.textContent = failed
-    ? `重试失败识别分段 ${failed}`
+  elements.retryPreload.textContent = retryableAsrFailures
+    ? `重试失败识别分段 ${retryableAsrFailures}`
     : canResumeTranslation
       ? "继续翻译"
       : canResumeAudio
@@ -2899,14 +2335,14 @@ function updateActionButtons(job) {
         : "重试失败识别分段";
   elements.retryPreload.title = audioCacheRemoved
     ? "当前任务的音频缓存已清除，需要重新抽取全部。"
-    : canResumeTranslation && !failed
-      ? "复用已有 ASR 原文继续翻译，不重新抽取音频，也不重新语音识别。"
-      : canResumeAudio && !failed
+    : canResumeTranslation && !retryableAsrFailures
+      ? "后台仍保留当前任务的 ASR 原文时，继续翻译不重新抽取音频，也不重新语音识别。"
+      : canResumeAudio && !retryableAsrFailures
         ? "复用已抽取的音频缓存继续语音识别和翻译，不重新下载媒体切片。"
         : "只重试当前任务里的失败识别分段，优先复用已有 ASR 原文，其次复用已抽取的音频缓存。";
   elements.retryPreload.disabled = retryRequestInFlight || !job || running || audioCacheRemoved || !canRetryPreload;
   elements.retryTranslation.textContent = "重翻译字幕";
-  elements.retryTranslation.title = "只复用已有 ASR 原文重新翻译，不重新抽取音频，也不重新语音识别。";
+  elements.retryTranslation.title = "后台仍保留当前任务的 ASR 原文时，只重新翻译字幕；如果浏览器回收了后台任务状态，需要重新抽取。";
   elements.retryTranslation.disabled = translationRetryRequestInFlight || !job || running || sourceChunks <= 0;
   elements.cancelPreload.disabled = !running;
   elements.clearAudioCache.disabled = !job || running;
@@ -2914,8 +2350,8 @@ function updateActionButtons(job) {
   elements.clearAudioCache.title = running
     ? "任务运行中不能清音频缓存，请先停止或等待结束。"
     : audioCacheRemoved
-      ? "再次扫描并清除当前任务的本机音频切片；字幕缓存不受影响。"
-      : "只清除当前任务的本机音频切片；字幕缓存不受影响。";
+      ? "再次清除当前任务的浏览器本地音频切片缓存；字幕缓存不受影响。"
+      : "只清除当前任务的浏览器本地音频切片缓存；字幕缓存不受影响。";
 }
 
 function countReusableSourceChunks(job) {

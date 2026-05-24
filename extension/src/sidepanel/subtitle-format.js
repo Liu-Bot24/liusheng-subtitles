@@ -76,7 +76,14 @@
     if (!Number.isFinite(start) || !Number.isFinite(end) || end < start || !text) {
       return null;
     }
-    return { start, end, text };
+    const normalized = { start, end, text };
+    const chunkIndex = Number(segment?.chunkIndex);
+    const segmentIndex = Number(segment?.segmentIndex);
+    if (Number.isFinite(chunkIndex) && Number.isFinite(segmentIndex)) {
+      normalized.chunkIndex = chunkIndex;
+      normalized.segmentIndex = segmentIndex;
+    }
+    return normalized;
   }
 
   function fromSegments(format, segments) {

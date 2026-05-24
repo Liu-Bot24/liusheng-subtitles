@@ -1,3 +1,61 @@
+import { FuguangBrowserAsrProvider } from "./browser-asr-provider.js";
+import { FuguangBrowserAsrPostprocess } from "./browser-asr-postprocess.js";
+import { FuguangBrowserLanguage } from "./browser-language.js";
+import { FuguangBrowserMediaCandidates } from "./browser-media-candidates.js";
+import { FuguangBrowserModelProfiles } from "./browser-model-profiles.js";
+import { FuguangBrowserTranslationPipeline } from "./browser-translation-pipeline.js";
+import { FuguangMediaHeaderRules } from "./media-header-rules.js";
+
+var normalizeAsrTimeoutMs = FuguangBrowserAsrProvider.normalizeAsrTimeoutMs;
+var ASR_VAD_SPLIT_MIN_SILENCE_SECONDS = FuguangBrowserAsrPostprocess.ASR_VAD_SPLIT_MIN_SILENCE_SECONDS;
+var filterAsrSegmentsByChunkOwnership = FuguangBrowserAsrPostprocess.filterAsrSegmentsByChunkOwnership;
+var filterAsrSegmentsByHallucinationGuard = FuguangBrowserAsrPostprocess.filterAsrSegmentsByHallucinationGuard;
+var filterAsrSegmentsBySpeechActivity = FuguangBrowserAsrPostprocess.filterAsrSegmentsBySpeechActivity;
+var filterAsrSuspiciousRepeatedRuns = FuguangBrowserAsrPostprocess.filterAsrSuspiciousRepeatedRuns;
+var mergeAdjacentDuplicateAsrSegments = FuguangBrowserAsrPostprocess.mergeAdjacentDuplicateAsrSegments;
+var mergeAsrSpeechIntervals = FuguangBrowserAsrPostprocess.mergeAsrSpeechIntervals;
+var normalizeAsrSegments = FuguangBrowserAsrPostprocess.normalizeAsrSegments;
+var normalizeAsrSpeechIntervals = FuguangBrowserAsrPostprocess.normalizeAsrSpeechIntervals;
+var shouldSkipBrowserAsrChunk = FuguangBrowserAsrPostprocess.shouldSkipBrowserAsrChunk;
+var browserAsrRequestFields = FuguangBrowserAsrProvider.browserAsrRequestFields;
+var resolveBrowserAsrSupportedRequestFields = FuguangBrowserAsrProvider.resolveBrowserAsrSupportedRequestFields;
+var normalizeAsrVadFilterMode = FuguangBrowserAsrProvider.normalizeAsrVadFilterMode;
+var browserAsrEndpoint = FuguangBrowserAsrProvider.browserAsrEndpoint;
+var normalizeAsrLanguage = FuguangBrowserAsrProvider.normalizeAsrLanguage;
+var normalizeTargetLanguage = FuguangBrowserLanguage.normalizeTargetLanguage;
+var DEFAULT_ASR_PROFILE_ID = FuguangBrowserModelProfiles.DEFAULT_ASR_PROFILE_ID;
+var AUDIO_EXTENSIONS = FuguangBrowserMediaCandidates.AUDIO_EXTENSIONS;
+var MANIFEST_EXTENSIONS = FuguangBrowserMediaCandidates.MANIFEST_EXTENSIONS;
+var candidateFingerprint = FuguangBrowserMediaCandidates.candidateFingerprint;
+var candidatesReferToSamePreloadTarget = FuguangBrowserMediaCandidates.candidatesReferToSamePreloadTarget;
+var classifyUrl = FuguangBrowserMediaCandidates.classifyUrl;
+var compactRequestHeaders = FuguangBrowserMediaCandidates.compactRequestHeaders;
+var compactResponseHeaders = FuguangBrowserMediaCandidates.compactResponseHeaders;
+var firstUsefulTitle = FuguangBrowserMediaCandidates.firstUsefulTitle;
+var getGroupedCandidatesForState = FuguangBrowserMediaCandidates.getGroupedCandidatesForState;
+var getHeader = FuguangBrowserMediaCandidates.getHeader;
+var inferKindFromContentType = FuguangBrowserMediaCandidates.inferKindFromContentType;
+var isGenericBinaryContentType = FuguangBrowserMediaCandidates.isGenericBinaryContentType;
+var isIgnoredMediaUrl = FuguangBrowserMediaCandidates.isIgnoredMediaUrl;
+var isMediaContentType = FuguangBrowserMediaCandidates.isMediaContentType;
+var mergeCandidate = FuguangBrowserMediaCandidates.mergeCandidate;
+var pickFinite = FuguangBrowserMediaCandidates.pickFinite;
+var resolvePreloadCandidateForStart = FuguangBrowserMediaCandidates.resolvePreloadCandidateForStart;
+var sanitizeInternalRequestHeaders = FuguangBrowserMediaCandidates.sanitizeInternalRequestHeaders;
+var stripCandidateRequestHeaders = FuguangBrowserMediaCandidates.stripCandidateRequestHeaders;
+var DEFAULT_LLM_PROFILE_ID = FuguangBrowserModelProfiles.DEFAULT_LLM_PROFILE_ID;
+var compactProviderConfig = FuguangBrowserModelProfiles.compactProviderConfig;
+var findProfile = FuguangBrowserModelProfiles.findProfile;
+var normalizeProviderType = FuguangBrowserModelProfiles.normalizeProviderType;
+var normalizeSelectedProfileId = FuguangBrowserModelProfiles.normalizeSelectedProfileId;
+var normalizeStoredProfiles = FuguangBrowserModelProfiles.normalizeStoredProfiles;
+var translateBrowserSegments = FuguangBrowserTranslationPipeline.translateBrowserSegments;
+var translateBrowserSegmentsBatch = FuguangBrowserTranslationPipeline.translateBrowserSegmentsBatch;
+var browserTranslationFailures = FuguangBrowserTranslationPipeline.browserTranslationFailures;
+var withMediaRequestHeaderRules = FuguangMediaHeaderRules.withMediaRequestHeaderRules;
+var updateMediaRequestHeaderRuleDomains = FuguangMediaHeaderRules.updateMediaRequestHeaderRuleDomains;
+var buildMediaHeaderRules = FuguangMediaHeaderRules.buildMediaHeaderRules;
+
 const MESSAGE = {
   GET_STATUS: "FUGUANG_GET_STATUS",
   GET_CANDIDATES: "FUGUANG_GET_CANDIDATES",
@@ -21,15 +79,14 @@ const MESSAGE = {
   SEEK_MEDIA: "FUGUANG_SEEK_MEDIA",
   OFFSCREEN_WEB_FFMPEG_EXTRACT_AUDIO: "FUGUANG_OFFSCREEN_WEB_FFMPEG_EXTRACT_AUDIO",
   OFFSCREEN_WEB_FFMPEG_PROGRESS: "FUGUANG_OFFSCREEN_WEB_FFMPEG_PROGRESS",
-  OFFSCREEN_WEB_FFMPEG_CHUNK_READY: "FUGUANG_OFFSCREEN_WEB_FFMPEG_CHUNK_READY"
+  OFFSCREEN_WEB_FFMPEG_CHUNK_READY: "FUGUANG_OFFSCREEN_WEB_FFMPEG_CHUNK_READY",
+  UPDATE_MEDIA_HEADER_RULE_DOMAINS: "FUGUANG_UPDATE_MEDIA_HEADER_RULE_DOMAINS"
 };
 
 const DEFAULT_WEB_FFMPEG_PATH = "web-ffmpeg/index.html";
 const WEB_FFMPEG_AUDIO_CACHE = "fuguang-web-ffmpeg-audio";
 const WEB_FFMPEG_AUDIO_CACHE_ORIGIN = "https://fuguang.local";
 const WEB_FFMPEG_AUDIO_CACHE_PREFIX = "/__fuguang_audio_cache";
-const MEDIA_HEADER_RULE_ID_BASE = 250000;
-let nextMediaHeaderRuleId = 0;
 const CAPTION_POSITION_STORAGE_KEY = "captionPosition";
 const LEGACY_CAPTION_TOP_RATIO_KEY = "captionTopRatio";
 const DEFAULT_MODEL_SETTINGS = {
@@ -39,260 +96,13 @@ const DEFAULT_MODEL_SETTINGS = {
   translationWorkers: 3,
   chunkMinutes: 15
 };
-const BROWSER_TRANSLATION_BATCH_SIZE = 60;
-const BROWSER_TRANSLATION_MAX_AUTO_SPLIT_DEPTH = 1;
-const BROWSER_TRANSLATION_TIMEOUT_MS = 90_000;
-const BROWSER_ASR_MIN_TIMEOUT_MS = 180_000;
-const BROWSER_ASR_MAX_TIMEOUT_MS = 20 * 60_000;
-const BROWSER_ASR_TIMEOUT_PER_AUDIO_SECOND_MS = 1_250;
 const BROWSER_ASR_UPLOAD_CHUNK_SECONDS = 15 * 60;
 const BROWSER_ASR_MAX_UPLOAD_CHUNK_SECONDS = 30 * 60;
 const BROWSER_ASR_MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
-const ASR_HALLUCINATION_COMPRESSION_RATIO = 8;
-const ASR_HALLUCINATION_NO_SPEECH_PROBABILITY = 0.75;
-const ASR_REPEATED_RUN_MIN_COUNT = 4;
-const ASR_REPEATED_RUN_MIN_TEXT_CHARS = 6;
-const ASR_REPEATED_RUN_MIN_DURATION_SECONDS = 6;
-const ASR_SUSPICIOUS_REPEAT_MIN_COUNT = 2;
-const ASR_SUSPICIOUS_REPEAT_MIN_DURATION_SECONDS = 2;
-const ASR_ADJACENT_DUPLICATE_MAX_GAP_SECONDS = 0.2;
-const ASR_VAD_SPLIT_MIN_SILENCE_SECONDS = 2;
-const ASR_WORD_LOW_PROBABILITY_THRESHOLD = 0.15;
-const ASR_WORD_SHORT_DURATION_SECONDS = 0.133;
-const ASR_WORD_LONG_DURATION_SECONDS = 2.0;
-const ASR_WORD_ANOMALY_SCORE_THRESHOLD = 3.0;
-const ASR_HALLUCINATION_SILENCE_THRESHOLD_SECONDS = 1.0;
-const ASR_STABLE_TS_NONSPEECH_ERROR_RATIO = 0.3;
-const ASR_STABLE_TS_MIN_WORD_DURATION_SECONDS = 0.1;
-const BROWSER_ASR_COMPAT_QUALITY_FIELDS = [
-  ["word_timestamps", "true"],
-  ["condition_on_previous_text", "false"],
-  ["no_speech_threshold", "0.45"],
-  ["compression_ratio_threshold", "2.4"],
-  ["log_prob_threshold", "-1"],
-  ["hallucination_silence_threshold", "1"]
-];
-const ASR_SUSPICIOUS_HALLUCINATION_PATTERNS = [
-  /ご視聴.*ありがとう/,
-  /ご覧.*ありがとう/,
-  /チャンネル登録/,
-  /おやすみなさい/,
-  /thank(?:s|you).*watch/,
-  /thanks.*watch/,
-  /like.*subscribe/,
-  /subscribe.*channel/,
-  /see.*next.*(?:video|time)/,
-  /goodnight/,
-  /subtitles?by/,
-  /captions?by/,
-  /amaraorg/,
-  /感谢.*观看/,
-  /感謝.*觀看/,
-  /谢谢.*观看/,
-  /謝謝.*觀看/,
-  /请.*订阅/,
-  /請.*訂閱/,
-  /下(?:期|次)再见/,
-  /晚安/,
-  /시청해주셔서감사/,
-  /구독.*좋아요/,
-  /안녕히주무세요/,
-  /untertitel/,
-  /gracias.*ver/,
-  /suscr[ií]b/,
-  /merci.*regard/
-];
-const TARGET_LANGUAGE_NAMES = new Map([
-  ["zh-CN", "Simplified Chinese"],
-  ["en", "English"],
-  ["ja", "Japanese"],
-  ["fr", "French"],
-  ["ko", "Korean"],
-  ["de", "German"],
-  ["ru", "Russian"]
-]);
-const TARGET_LANGUAGE_ALIASES = new Map([
-  ["zh-cn", "zh-CN"],
-  ["zh-hans", "zh-CN"],
-  ["zh", "zh-CN"],
-  ["chinese", "zh-CN"],
-  ["中文", "zh-CN"],
-  ["简体中文", "zh-CN"],
-  ["en", "en"],
-  ["english", "en"],
-  ["英文", "en"],
-  ["ja", "ja"],
-  ["jp", "ja"],
-  ["japanese", "ja"],
-  ["日语", "ja"],
-  ["fr", "fr"],
-  ["french", "fr"],
-  ["法语", "fr"],
-  ["ko", "ko"],
-  ["kr", "ko"],
-  ["korean", "ko"],
-  ["韩语", "ko"],
-  ["de", "de"],
-  ["german", "de"],
-  ["德语", "de"],
-  ["ru", "ru"],
-  ["russian", "ru"],
-  ["俄语", "ru"]
-]);
-const ASR_LANGUAGE_ALIASES = new Map([
-  ["auto", ""],
-  ["automatic", ""],
-  ["detect", ""],
-  ["default", ""],
-  ["自动", ""],
-  ["自动识别", ""],
-  ["zh-cn", "zh"],
-  ["zh-hans", "zh"],
-  ["zh", "zh"],
-  ["chinese", "zh"],
-  ["中文", "zh"],
-  ["简体中文", "zh"],
-  ["en", "en"],
-  ["english", "en"],
-  ["英语", "en"],
-  ["英文", "en"],
-  ["ja", "ja"],
-  ["jp", "ja"],
-  ["japanese", "ja"],
-  ["日语", "ja"],
-  ["ko", "ko"],
-  ["kr", "ko"],
-  ["korean", "ko"],
-  ["韩语", "ko"],
-  ["fr", "fr"],
-  ["french", "fr"],
-  ["法语", "fr"],
-  ["de", "de"],
-  ["german", "de"],
-  ["德语", "de"],
-  ["ru", "ru"],
-  ["russian", "ru"],
-  ["俄语", "ru"],
-  ["es", "es"],
-  ["spanish", "es"],
-  ["西语", "es"],
-  ["西班牙语", "es"],
-  ["pt", "pt"],
-  ["portuguese", "pt"],
-  ["葡语", "pt"],
-  ["葡萄牙语", "pt"],
-  ["it", "it"],
-  ["italian", "it"],
-  ["意语", "it"],
-  ["意大利语", "it"]
-]);
 const MODEL_SETTINGS_VERSION = 5;
-const DEFAULT_ASR_PROFILE_ID = "openai_whisper";
-const DEFAULT_LLM_PROFILE_ID = "llm";
-const KNOWN_ASR_PROFILES = [
-  {
-    id: "openai_whisper",
-    name: "OpenAI Whisper",
-    providerType: "openai",
-    baseUrl: "https://api.openai.com/v1",
-    model: "whisper-1",
-    vadFilter: "auto",
-    apiKey: ""
-  },
-  {
-    id: "groq_whisper",
-    name: "Groq Whisper",
-    providerType: "groq",
-    baseUrl: "https://api.groq.com/openai/v1",
-    model: "whisper-large-v3-turbo",
-    vadFilter: "auto",
-    apiKey: ""
-  },
-  {
-    id: "xai_grok",
-    name: "xAI Grok",
-    providerType: "xai",
-    baseUrl: "https://api.x.ai/v1",
-    model: "grok-2-voice-1212",
-    vadFilter: "auto",
-    apiKey: ""
-  },
-  {
-    id: "custom_asr",
-    name: "自定义 ASR",
-    providerType: "openai",
-    baseUrl: "",
-    model: "",
-    vadFilter: "auto",
-    apiKey: ""
-  }
-];
-const KNOWN_LLM_PROFILES = [
-  {
-    id: "test_llm",
-    name: "Real LLM HLS",
-    providerType: "openai",
-    baseUrl: "https://llm.example.invalid/v1",
-    model: "test-llm",
-    apiKey: ""
-  },
-  {
-    id: "custom_llm",
-    name: "Custom LLM",
-    providerType: "openai",
-    baseUrl: "https://api.siliconflow.cn/v1",
-    model: "deepseek-ai/DeepSeek-V3.2",
-    apiKey: ""
-  },
-  {
-    id: "siliconflow_hunyuan_mt_7b",
-    name: "Custom LLM",
-    providerType: "openai",
-    baseUrl: "https://api.siliconflow.cn/v1",
-    model: "custom-llm",
-    apiKey: ""
-  },
-  {
-    id: "openai_custom",
-    name: "自定义 OpenAI 格式",
-    providerType: "openai",
-    baseUrl: "https://api.openai.com/v1",
-    model: "",
-    apiKey: ""
-  },
-  {
-    id: "anthropic",
-    name: "自定义 Anthropic 格式",
-    providerType: "anthropic",
-    baseUrl: "https://api.anthropic.com/v1",
-    model: "",
-    apiKey: ""
-  }
-];
 const MAX_CANDIDATES_PER_TAB = 80;
 const requestHeadersById = new Map();
 const browserPreloadJobs = new Map();
-const browserAsrVadCapabilityCache = new Map();
-const browserAsrRequestFieldCapabilityCache = new Map();
-
-const AUDIO_EXTENSIONS = new Set(["aac", "flac", "m4a", "mp3", "oga", "ogg", "opus", "wav", "weba"]);
-const MANIFEST_EXTENSIONS = new Set(["m3u8", "m3u", "mpd"]);
-const MEDIA_EXTENSIONS = new Set([...AUDIO_EXTENSIONS, ...MANIFEST_EXTENSIONS, "mp4", "m4s", "ts", "webm"]);
-const MEDIA_CONTENT_TYPES = [
-  "audio/",
-  "video/",
-  "application/dash+xml",
-  "application/m4s",
-  "application/octet-stream",
-  "application/vnd.apple.mpegurl",
-  "application/x-mpegurl",
-  "application/mpegurl",
-  "video/mp2t"
-];
-const ASR_AUDIO_IDEAL_MIN_BPS = 96_000;
-const ASR_AUDIO_IDEAL_MAX_BPS = 160_000;
-const ASR_AUDIO_ACCEPTABLE_LOW_BPS = 48_000;
-const ASR_AUDIO_ACCEPTABLE_HIGH_BPS = 320_000;
 
 const tabState = new Map();
 
@@ -423,8 +233,9 @@ chrome.webRequest.onErrorOccurred.addListener(
 
 chrome.webNavigation.onCommitted.addListener(details => {
   if (details.frameId === 0) {
-    tabState.delete(details.tabId);
+    return clearTopLevelNavigationState(details.tabId, { detachSubtitles: true });
   }
+  return undefined;
 });
 
 chrome.webNavigation.onHistoryStateUpdated?.addListener(details => {
@@ -439,9 +250,8 @@ chrome.tabs.onRemoved.addListener(tabId => {
 });
 
 async function clearTopLevelNavigationState(tabId, { detachSubtitles = false } = {}) {
-  const state = tabState.get(tabId);
   try {
-    if (detachSubtitles && state && (state.attachedVttSignature || state.manualVttSignature)) {
+    if (detachSubtitles) {
       await broadcastMessageToFrames(tabId, { type: MESSAGE.DETACH_PRELOAD_VTT });
     }
   } finally {
@@ -543,6 +353,8 @@ async function handleMessage(message, sender) {
       return applyOffscreenWebFfmpegProgress(message);
     case MESSAGE.OFFSCREEN_WEB_FFMPEG_CHUNK_READY:
       return applyOffscreenWebFfmpegChunkReady(message);
+    case MESSAGE.UPDATE_MEDIA_HEADER_RULE_DOMAINS:
+      return updateMediaRequestHeaderRuleDomains(message.jobId, message.urls || []);
     default:
       return {};
   }
@@ -552,7 +364,22 @@ async function getStatus(tabId) {
   await refreshTabInfo(tabId);
   const state = getState(tabId);
   const webFfmpeg = await getWebFfmpegConfig();
-  const preloadJob = refreshBrowserPreloadJobForStatus(state.preloadJob);
+  const currentPageUrl = state.page?.url || state.context?.href || "";
+  let preloadJob = refreshBrowserPreloadJobForStatus(state.preloadJob);
+  if (preloadJob && !browserPreloadJobMatchesPageUrl(preloadJob, currentPageUrl)) {
+    state.preload = "idle";
+    state.preloadJob = null;
+    state.attachedVttSignature = "";
+    preloadJob = null;
+  }
+  if (!preloadJob) {
+    const matchingRecord = findBrowserPreloadRecordForTabPage(tabId, currentPageUrl);
+    if (matchingRecord) {
+      preloadJob = matchingRecord.job;
+      state.preload = matchingRecord.job.status || "running";
+      state.preloadJob = matchingRecord.job;
+    }
+  }
   return {
     webFfmpeg,
     preload: state.preload || "idle",
@@ -660,10 +487,11 @@ async function startPreload(tabId, candidate) {
   if (!candidate?.url) {
     throw new Error("请先选择一个媒体源。");
   }
-  if (isIgnoredMediaUrl(candidate.url)) {
+  const state = getState(tabId);
+  const preloadCandidate = resolvePreloadCandidateForStart(state, candidate);
+  if (isIgnoredMediaUrl(preloadCandidate.url)) {
     throw new Error("这个候选是播放器占位媒体，不是真实视频源。请刷新候选列表后选择真实媒体。");
   }
-  const state = getState(tabId);
   const now = Date.now();
   if (Number(state.preloadStartLockUntil || 0) > now) {
     return {
@@ -677,12 +505,13 @@ async function startPreload(tabId, candidate) {
   clearPreloadSubtitleSuppression(tabId);
   state.manualVttSignature = "";
   await detachPreloadVtt(tabId);
+  await refreshTabInfo(tabId);
   const modelConfig = await getModelConfig();
   const tab = await chrome.tabs.get(tabId).catch(() => null);
-  const pageUrl = candidate.pageUrl || state.page?.url || tab?.url || candidate.initiator || state.context?.href || "";
-  const metadata = buildPreloadMetadata(candidate, state, pageUrl);
+  const pageUrl = preloadCandidate.pageUrl || state.page?.url || tab?.url || preloadCandidate.initiator || state.context?.href || "";
+  const metadata = buildPreloadMetadata(preloadCandidate, state, pageUrl);
   const payload = await startBrowserPreload(tabId, {
-    ...candidate,
+    ...preloadCandidate,
     pageUrl,
     chunkSeconds: modelConfig.chunkSeconds
   }, metadata, modelConfig);
@@ -692,7 +521,7 @@ async function startPreload(tabId, candidate) {
     error: "",
     attachedVttSignature: ""
   });
-  setTabStatus(tabId, { lastPreloadCandidate: candidate });
+  setTabStatus(tabId, { lastPreloadCandidate: preloadCandidate });
   return { preload: payload.status || "queued", job: payload.job, result: payload.result };
 }
 
@@ -717,6 +546,12 @@ async function startBrowserPreload(tabId, candidate, metadata, modelConfig) {
     stage: "extracting",
     source: candidate.url,
     sourceUrl: candidate.url,
+    metadata: {
+      title: metadata.title || "",
+      pageUrl: metadata.pageUrl || "",
+      sourceUrl: metadata.sourceUrl || candidate.url || "",
+      duration: metadata.duration || null
+    },
     createdAt: Date.now(),
     updatedAt: Date.now(),
     extract: {
@@ -853,7 +688,7 @@ async function runBrowserPreloadJob(jobId) {
   publishBrowserSubtitle(record);
   const completion = finalizeBrowserCompletionState(record);
   await attachBrowserJobVttIfReady(record);
-  if (!completion.failed && !completion.coverageWarning) {
+  if (browserCompletionAllowsAudioRelease(completion)) {
     await releaseBrowserAudioChunks(record);
   }
 }
@@ -880,7 +715,7 @@ async function extractCandidateAudioInBrowser(record) {
     asrChunkSeconds: record.browserAsrChunkSeconds || browserAsrUploadChunkSeconds(record.modelConfig),
     cacheNamespace: record.job.id,
     jobId: record.job.id
-  }));
+  }), record.job.id);
   if (!response?.ok) {
     throw new Error(response?.error || "Web FFmpeg 音频提取失败。");
   }
@@ -950,9 +785,25 @@ function applyBrowserExtractionProgress(record, progress = {}) {
     elapsedSeconds: elapsedSeconds(record.startedAt),
     updatedAt: Date.now()
   };
-  record.job.stage = "extracting";
+  if (!browserJobStageIsPastExtraction(record.job.stage)) {
+    record.job.stage = "extracting";
+  }
   publishBrowserPreloadJob(record);
   return record.job.extract;
+}
+
+function browserJobStageIsPastExtraction(stage) {
+  return [
+    "asr",
+    "asr_done",
+    "translation",
+    "retrying",
+    "retry_translation",
+    "completed",
+    "completed_with_warnings",
+    "failed",
+    "cancelled"
+  ].includes(String(stage || ""));
 }
 
 function appendBrowserInternalAudioChunk(record, chunk) {
@@ -1149,10 +1000,12 @@ function ensureBrowserTranslationGroupForAudioChunk(record, chunk) {
   let group = record.browserTranslationGroups.get(groupIndex);
   if (!group) {
     const segmentSeconds = browserTranslationSegmentSeconds(record);
+    const targetEnd = browserTranslationGroupTargetEnd(record, groupIndex);
     group = {
       index: groupIndex,
       start: groupIndex * segmentSeconds,
-      end: Math.min((groupIndex + 1) * segmentSeconds, pickFinite(record.metadata?.duration, (groupIndex + 1) * segmentSeconds)),
+      end: targetEnd,
+      targetEnd,
       chunks: [],
       chunkIndexes: new Set(),
       total: 0,
@@ -1174,8 +1027,36 @@ function ensureBrowserTranslationGroupForAudioChunk(record, chunk) {
     group.start = Math.min(group.start, browserAudioChunkCoreStart(chunk));
     group.end = Math.max(group.end, browserAudioChunkCoreEnd(chunk));
     record.browserAsrChunkToTranslationGroup.set(chunk.index, groupIndex);
+    closeBrowserTranslationGroupIfChunkCompletesWindow(record, group, chunk);
   }
   return group;
+}
+
+function browserTranslationGroupTargetEnd(record, groupIndex) {
+  const segmentSeconds = browserTranslationSegmentSeconds(record);
+  const boundaryEnd = (groupIndex + 1) * segmentSeconds;
+  const duration = pickFinite(
+    record?.metadata?.duration,
+    record?.candidate?.duration,
+    record?.job?.extract?.duration
+  );
+  return duration ? Math.min(boundaryEnd, duration) : boundaryEnd;
+}
+
+function closeBrowserTranslationGroupIfChunkCompletesWindow(record, group, chunk) {
+  if (!group || group.closed) {
+    return false;
+  }
+  const targetEnd = pickFinite(group.targetEnd, group.end);
+  if (!targetEnd) {
+    return false;
+  }
+  if (browserAudioChunkCoreEnd(chunk) + 0.001 < targetEnd) {
+    return false;
+  }
+  group.closed = true;
+  maybeFinalizeBrowserTranslationGroup(record, group);
+  return true;
 }
 
 function browserTranslationGroupIndex(record, chunk) {
@@ -1230,6 +1111,8 @@ function completeBrowserAsrChunkForGroup(record, chunk, sourceSegments, error = 
     status: "识别",
     attempts: Math.max(1, record.job.translation.chunkStatuses[group.index]?.attempts || 1),
     sourceCount: group.sourceSegments.length,
+    asrFailures: group.failed,
+    asrErrors: group.errors.slice(0, 5),
     error: "",
     message: `识别音频分段 ${group.completed}/${group.total}${group.failed ? ` · ${group.failed} 失败` : ""}`
   });
@@ -1249,6 +1132,8 @@ function maybeFinalizeBrowserTranslationGroup(record, group) {
       status: "失败",
       sourceCount: 0,
       translatedCount: 0,
+      asrFailures: group.failed,
+      asrErrors: group.errors.slice(0, 5),
       error: group.errors[0] || "这个识别分段没有可用原文。"
     });
     publishBrowserSubtitle(record);
@@ -1262,6 +1147,8 @@ function maybeFinalizeBrowserTranslationGroup(record, group) {
       status: "完成",
       sourceCount: 0,
       translatedCount: 0,
+      asrFailures: 0,
+      asrErrors: [],
       message: "无语音"
     });
     publishBrowserSubtitle(record);
@@ -1272,6 +1159,8 @@ function maybeFinalizeBrowserTranslationGroup(record, group) {
     stage: "asr_done",
     status: "待翻译",
     sourceCount: sourceSegments.length,
+    asrFailures: group.failed,
+    asrErrors: group.errors.slice(0, 5),
     error: group.failed ? `有 ${group.failed} 个识别音频分段失败，先翻译可用原文。` : "",
     message: `原文 ${sourceSegments.length}${group.empty ? ` · 跳过 ${group.empty} 个无语音分段` : ""}`
   });
@@ -1426,6 +1315,8 @@ async function processBrowserTranslationChunk(record, chunk, sourceSegments) {
     return;
   }
   const current = record.job.translation.chunkStatuses[chunk.index] || {};
+  const asrFailures = chunkStatusAsrFailureCount(current);
+  const asrErrors = Array.isArray(current.asrErrors) ? current.asrErrors : [];
   const attempt = current.attempts || 1;
   updateChunkStatus(record, chunk.index, {
     stage: "translation",
@@ -1443,6 +1334,8 @@ async function processBrowserTranslationChunk(record, chunk, sourceSegments) {
       record.modelConfig.targetLanguage,
       record.metadata,
       {
+        batchWorkers: browserTranslationBatchWorkers(record),
+        splitWorkers: browserTranslationSplitWorkers(record),
         onProgress(progress) {
           updateChunkStatus(record, chunk.index, {
             stage: "translation",
@@ -1454,19 +1347,25 @@ async function processBrowserTranslationChunk(record, chunk, sourceSegments) {
         }
       }
     );
+    const translationFailures = browserTranslationFailures(translatedSegments);
+    const warningMessage = browserCompletedChunkWarningMessage(translationFailures, asrFailures);
     updateChunkStatus(record, chunk.index, {
-      stage: "completed",
-      status: "完成",
+      stage: warningMessage ? "completed_with_warnings" : "completed",
+      status: warningMessage ? "部分完成" : "完成",
       translatedCount: translatedSegments.length,
+      translationFailures: translationFailures.length,
+      asrFailures,
+      asrErrors,
+      error: warningMessage,
       message: `原文 ${sourceSegments.length} · 译文 ${translatedSegments.length}`
     });
   } catch (error) {
-    translatedSegments = sourceSegments.map(segment => ({ ...segment }));
+    translatedSegments = [];
     updateChunkStatus(record, chunk.index, {
       stage: "failed",
       status: "失败",
-      translatedCount: translatedSegments.length,
-      error: `翻译失败，已先显示原文：${error.message || String(error)}`
+      translatedCount: 0,
+      error: `翻译失败，已保留原文供重试：${error.message || String(error)}`
     });
   }
   record.translatedSegmentsByChunk.set(chunk.index, translatedSegments);
@@ -1529,54 +1428,6 @@ function takeAsyncQueue(queue) {
   return new Promise(resolve => {
     queue.waiters.push(resolve);
   });
-}
-
-async function withMediaRequestHeaderRules(sourceUrl, pageUrl, task) {
-  const rules = buildMediaHeaderRules(sourceUrl, pageUrl);
-  if (!rules.length || !chrome.declarativeNetRequest?.updateSessionRules) {
-    return task();
-  }
-  const ruleIds = rules.map(rule => rule.id);
-  await chrome.declarativeNetRequest.updateSessionRules({
-    removeRuleIds: ruleIds,
-    addRules: rules
-  });
-  try {
-    return await task();
-  } finally {
-    await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: ruleIds }).catch(() => {});
-  }
-}
-
-function buildMediaHeaderRules(sourceUrl, pageUrl) {
-  let source;
-  let page;
-  try {
-    source = new URL(String(sourceUrl || ""));
-    page = new URL(String(pageUrl || ""));
-  } catch {
-    return [];
-  }
-  if (!["http:", "https:"].includes(source.protocol) || !["http:", "https:"].includes(page.protocol)) {
-    return [];
-  }
-  const requestHeaders = [
-    { header: "referer", operation: "set", value: page.href },
-    { header: "origin", operation: "set", value: page.origin }
-  ];
-  const id = MEDIA_HEADER_RULE_ID_BASE + (nextMediaHeaderRuleId = (nextMediaHeaderRuleId + 1) % 10000);
-  return [{
-    id,
-    priority: 1,
-    action: {
-      type: "modifyHeaders",
-      requestHeaders
-    },
-    condition: {
-      requestDomains: [source.hostname],
-      resourceTypes: ["xmlhttprequest", "media", "other"]
-    }
-  }];
 }
 
 function normalizeBrowserAudioChunks(audio, chunkSeconds, fallbackDuration = 0) {
@@ -1692,570 +1543,17 @@ async function transcribeBrowserAudioChunk(chunk, asrConfig) {
   if (!response.ok) {
     throw new Error(payload.error?.message || payload.message || `ASR 返回 HTTP ${response.status}`);
   }
-  const normalized = normalizeAsrSegments(payload, chunk.start, chunk.end);
+  const normalized = normalizeAsrSegments(payload, chunk.start, chunk.end, {
+    providerType: asrConfig?.providerType
+  });
   const speechFiltered = filterAsrSegmentsBySpeechActivity(normalized, chunk);
   const hallucinationFiltered = filterAsrSegmentsByHallucinationGuard(speechFiltered, chunk);
   return filterAsrSegmentsByChunkOwnership(hallucinationFiltered, chunk);
 }
 
-function filterAsrSegmentsByChunkOwnership(segments, chunk = {}) {
-  if (!Array.isArray(segments) || !segments.length) {
-    return [];
-  }
-  const hasCoreWindow = Number.isFinite(Number(chunk?.coreStart)) || Number.isFinite(Number(chunk?.coreEnd));
-  if (!hasCoreWindow) {
-    return segments;
-  }
-  const coreStart = browserAudioChunkCoreStart(chunk);
-  const coreEnd = browserAudioChunkCoreEnd(chunk);
-  const chunkStart = Math.max(0, pickFinite(chunk?.start, coreStart));
-  const chunkEnd = Math.max(chunkStart, pickFinite(chunk?.end, coreEnd));
-  const hasLeftOverlap = coreStart > chunkStart + 0.001;
-  const hasRightOverlap = coreEnd < chunkEnd - 0.001;
-  return segments.map(segment => {
-    const start = Number(segment?.start);
-    const end = Number(segment?.end);
-    if (!Number.isFinite(start) || !Number.isFinite(end)) {
-      return null;
-    }
-    const ownerTime = start + ((end - start) / 2);
-    if (hasLeftOverlap && ownerTime < coreStart) {
-      return null;
-    }
-    if (hasRightOverlap && ownerTime >= coreEnd) {
-      return null;
-    }
-    const clippedStart = hasLeftOverlap ? Math.max(start, coreStart) : start;
-    const clippedEnd = hasRightOverlap ? Math.min(end, coreEnd) : end;
-    if (clippedEnd <= clippedStart) {
-      return null;
-    }
-    if (clippedStart === start && clippedEnd === end) {
-      return segment;
-    }
-    return { ...segment, start: clippedStart, end: clippedEnd };
-  }).filter(Boolean);
-}
-
-function shouldSkipBrowserAsrChunk(chunk = {}) {
-  if (!Array.isArray(chunk?.speechIntervals)) {
-    return false;
-  }
-  const speechIntervals = normalizeAsrSpeechIntervals(chunk.speechIntervals);
-  return !speechIntervals || speechIntervals.length === 0;
-}
-
-function filterAsrSegmentsBySpeechActivity(segments, chunk = {}) {
-  if (!Array.isArray(segments) || !segments.length) {
-    return [];
-  }
-  const speechIntervals = normalizeAsrSpeechIntervals(chunk?.speechIntervals);
-  if (speechIntervals === null) {
-    return segments;
-  }
-  if (!speechIntervals.length) {
-    return [];
-  }
-  const ownerSlack = 0.45;
-  return segments.map(segment => {
-    const speechSuppressed = suppressAsrSegmentNonspeechWords(segment, speechIntervals);
-    if (speechSuppressed) {
-      return speechSuppressed;
-    }
-    if (normalizeAsrWordTimingItems(segment?.words || []).length) {
-      return null;
-    }
-    const start = Number(segment?.start);
-    const end = Number(segment?.end);
-    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
-      return null;
-    }
-    const duration = Math.max(0, end - start);
-    const ownerTime = start + duration / 2;
-    const minOverlap = Math.min(0.25, Math.max(0.05, duration * 0.15));
-    const hasSpeechEvidence = speechIntervals.some(interval => {
-      if (ownerTime >= interval.start - ownerSlack && ownerTime <= interval.end + ownerSlack) {
-        return true;
-      }
-      const overlap = Math.min(end, interval.end + ownerSlack) - Math.max(start, interval.start - ownerSlack);
-      return overlap >= minOverlap;
-    });
-    return hasSpeechEvidence ? segment : null;
-  }).filter(Boolean);
-}
-
-function filterAsrSegmentsByHallucinationGuard(segments, chunk = {}) {
-  if (!Array.isArray(segments) || !segments.length) {
-    return [];
-  }
-  const speechIntervals = normalizeAsrSpeechIntervals(chunk?.speechIntervals);
-  const speechFiltered = segments.filter(segment => {
-    const wordAnomaly = isAsrWordAnomalySegment(segment);
-    const suspiciousText = isLikelyAsrHallucinationText(segment?.text);
-    if (!wordAnomaly && !suspiciousText) {
-      return true;
-    }
-    if (speechIntervals === null) {
-      return true;
-    }
-    if (!speechIntervals.length) {
-      return false;
-    }
-    if (hasStrongSpeechEvidence(segment, speechIntervals)) {
-      return true;
-    }
-    if (wordAnomaly && isAsrSegmentSurroundedByNonspeech(segment, speechIntervals)) {
-      return false;
-    }
-    return !suspiciousText;
-  });
-  return filterAsrSuspiciousRepeatedRuns(speechFiltered);
-}
-
-function suppressAsrSegmentNonspeechWords(segment, speechIntervals) {
-  const words = normalizeAsrWordTimingItems(segment?.words || []);
-  if (!words.length) {
-    return null;
-  }
-  const keptWords = words.map(word => suppressAsrWordNonspeechTiming(word, speechIntervals)).filter(Boolean);
-  if (!keptWords.length) {
-    return null;
-  }
-  return {
-    ...segment,
-    start: Math.min(...keptWords.map(word => word.start)),
-    end: Math.max(...keptWords.map(word => word.end)),
-    text: joinAsrWords(keptWords.map(word => word.text)),
-    words: keptWords
-  };
-}
-
-function suppressAsrWordNonspeechTiming(word, speechIntervals) {
-  const start = Number(word?.start);
-  const end = Number(word?.end);
-  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
-    return null;
-  }
-  const overlaps = speechIntervals.map(interval => ({
-    start: Math.max(start, interval.start),
-    end: Math.min(end, interval.end)
-  })).filter(interval => interval.end > interval.start);
-  if (!overlaps.length) {
-    return null;
-  }
-  const duration = end - start;
-  const overlap = overlaps.reduce((sum, interval) => sum + (interval.end - interval.start), 0);
-  const overlapRatio = overlap / duration;
-  const minOverlap = Math.min(0.2, Math.max(0.03, duration * (1 - ASR_STABLE_TS_NONSPEECH_ERROR_RATIO)));
-  if (overlapRatio < (1 - ASR_STABLE_TS_NONSPEECH_ERROR_RATIO) && overlap < minOverlap) {
-    return null;
-  }
-  const clampedStart = Math.min(...overlaps.map(interval => interval.start));
-  const clampedEnd = Math.max(...overlaps.map(interval => interval.end));
-  if (clampedEnd - clampedStart < ASR_STABLE_TS_MIN_WORD_DURATION_SECONDS) {
-    return null;
-  }
-  return {
-    ...word,
-    start: clampedStart,
-    end: clampedEnd
-  };
-}
-
-function hasStrongSpeechEvidence(segment, speechIntervals) {
-  const start = Number(segment?.start);
-  const end = Number(segment?.end);
-  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
-    return false;
-  }
-  const duration = end - start;
-  const overlap = asrSpeechOverlapSeconds(start, end, speechIntervals, 0.05);
-  const required = Math.min(1, Math.max(0.35, duration * 0.45));
-  return overlap >= required || overlap / duration >= 0.55;
-}
-
-function isAsrWordAnomalySegment(segment) {
-  const words = normalizeAsrWordTimingItems(segment?.words || nestedAsrWordItemsFromSegment(segment?.rawSegment));
-  const contentWords = words
-    .filter(word => !isAsrPunctuationOnlyWord(word.text))
-    .slice(0, 8);
-  if (!contentWords.length) {
-    return false;
-  }
-  const score = contentWords.reduce((sum, word) => sum + asrWordAnomalyScore(word), 0);
-  return score >= ASR_WORD_ANOMALY_SCORE_THRESHOLD || score + 0.01 >= contentWords.length;
-}
-
-function asrWordAnomalyScore(word) {
-  const duration = Number(word?.end) - Number(word?.start);
-  if (!Number.isFinite(duration) || duration <= 0) {
-    return 0;
-  }
-  let score = 0;
-  const probability = optionalAsrNumber(word, ["probability", "prob"]);
-  if (probability !== null && probability < ASR_WORD_LOW_PROBABILITY_THRESHOLD) {
-    score += 1;
-  }
-  if (duration < ASR_WORD_SHORT_DURATION_SECONDS) {
-    score += (ASR_WORD_SHORT_DURATION_SECONDS - duration) * 15;
-  }
-  if (duration > ASR_WORD_LONG_DURATION_SECONDS) {
-    score += duration - ASR_WORD_LONG_DURATION_SECONDS;
-  }
-  return score;
-}
-
-function isAsrPunctuationOnlyWord(text) {
-  return /^[\s.,!?;:'"()[\]{}，。！？；：“”‘’（）【】《》、·…—-]+$/.test(String(text || ""));
-}
-
-function isAsrSegmentSurroundedByNonspeech(segment, speechIntervals) {
-  const start = Number(segment?.start);
-  const end = Number(segment?.end);
-  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
-    return false;
-  }
-  const duration = end - start;
-  const overlap = asrSpeechOverlapSeconds(start, end, speechIntervals, 0.05);
-  if (overlap >= Math.min(0.35, duration * 0.2)) {
-    return false;
-  }
-  const previousSpeechEnd = speechIntervals
-    .filter(interval => interval.end <= start)
-    .reduce((max, interval) => Math.max(max, interval.end), -Infinity);
-  const nextSpeechStart = speechIntervals
-    .filter(interval => interval.start >= end)
-    .reduce((min, interval) => Math.min(min, interval.start), Infinity);
-  const silenceBefore = Number.isFinite(previousSpeechEnd)
-    ? start - previousSpeechEnd
-    : Infinity;
-  const silenceAfter = Number.isFinite(nextSpeechStart)
-    ? nextSpeechStart - end
-    : Infinity;
-  return silenceBefore > ASR_HALLUCINATION_SILENCE_THRESHOLD_SECONDS
-    && silenceAfter > ASR_HALLUCINATION_SILENCE_THRESHOLD_SECONDS;
-}
-
-function asrSpeechOverlapSeconds(start, end, speechIntervals, slack = 0) {
-  if (!Array.isArray(speechIntervals) || !speechIntervals.length) {
-    return 0;
-  }
-  return speechIntervals.reduce((sum, interval) => {
-    const intervalStart = Number(interval.start) - slack;
-    const intervalEnd = Number(interval.end) + slack;
-    if (!Number.isFinite(intervalStart) || !Number.isFinite(intervalEnd)) {
-      return sum;
-    }
-    return sum + Math.max(0, Math.min(end, intervalEnd) - Math.max(start, intervalStart));
-  }, 0);
-}
-
-function normalizeAsrSpeechIntervals(intervals) {
-  if (!Array.isArray(intervals)) {
-    return null;
-  }
-  return intervals
-    .map(interval => ({
-      start: Number(interval?.start),
-      end: Number(interval?.end)
-    }))
-    .filter(interval => Number.isFinite(interval.start) && Number.isFinite(interval.end) && interval.end > interval.start)
-    .sort((left, right) => left.start - right.start || left.end - right.end);
-}
-
-function mergeAsrSpeechIntervals(intervals) {
-  const normalized = normalizeAsrSpeechIntervals(intervals) || [];
-  const merged = [];
-  for (const interval of normalized) {
-    const previous = merged.at(-1);
-    if (previous && interval.start <= previous.end + 0.15) {
-      previous.end = Math.max(previous.end, interval.end);
-    } else {
-      merged.push({ ...interval });
-    }
-  }
-  return merged;
-}
-
-function normalizeAsrTimeoutMs(timeoutMs, chunk = {}) {
-  const normalized = Number(timeoutMs);
-  if (Number.isFinite(normalized) && normalized > 0) {
-    return normalized;
-  }
-  const duration = pickFinite(
-    chunk.duration,
-    Number(chunk.end) - Number(chunk.start)
-  );
-  if (!duration) {
-    return BROWSER_ASR_MIN_TIMEOUT_MS;
-  }
-  return Math.min(
-    BROWSER_ASR_MAX_TIMEOUT_MS,
-    Math.max(BROWSER_ASR_MIN_TIMEOUT_MS, Math.ceil(duration * BROWSER_ASR_TIMEOUT_PER_AUDIO_SECOND_MS))
-  );
-}
-
 function formatAsrFetchError(error, endpoint) {
   const message = error?.message || String(error || "网络不可达");
   return `${endpoint} 无法连接（${message}）。请确认浏览器能访问该 API 地址，并且目标服务允许扩展发起跨域请求。`;
-}
-
-function browserAsrRequestFields(asrConfig, rawLanguage = "", options = {}) {
-  const provider = normalizeProviderType(asrConfig?.providerType);
-  const language = normalizeAsrLanguage(rawLanguage);
-  if (provider === "xai") {
-    const xaiLanguage = xaiAsrLanguage(language);
-    return xaiLanguage ? [["format", "true"], ["language", xaiLanguage]] : [];
-  }
-  const fields = [
-    ["model", asrConfig?.model || ""],
-    ["response_format", "verbose_json"],
-    ["timestamp_granularities[]", "segment"],
-    ["timestamp_granularities[]", "word"]
-  ];
-  if (shouldUseBrowserAsrVadFilter(asrConfig, options)) {
-    fields.push(["vad_filter", "true"]);
-  }
-  fields.push(...browserAsrCompatibleQualityFields(asrConfig, options));
-  if (language) {
-    fields.push(["language", language]);
-  }
-  return fields;
-}
-
-function browserAsrCompatibleQualityFields(asrConfig = {}, options = {}) {
-  if (normalizeProviderType(asrConfig?.providerType) !== "openai" || isKnownStandardAsrBaseUrl(asrConfig?.baseUrl)) {
-    return [];
-  }
-  return BROWSER_ASR_COMPAT_QUALITY_FIELDS.filter(([name]) => asrRequestFieldSupported(options, name));
-}
-
-function shouldUseBrowserAsrVadFilter(asrConfig = {}, options = {}) {
-  const mode = normalizeAsrVadFilterMode(asrConfig?.vadFilter || asrConfig?.vad_filter || asrConfig?.vadFilterMode);
-  if (normalizeProviderType(asrConfig?.providerType) !== "openai") {
-    return false;
-  }
-  if (isKnownStandardAsrBaseUrl(asrConfig?.baseUrl)) {
-    return false;
-  }
-  if (mode === "off") {
-    return false;
-  }
-  if (mode === "on") {
-    return true;
-  }
-  if (options.vadFilterSupported || options.openApiVadFilterSupported || asrRequestFieldSupported(options, "vad_filter")) {
-    return true;
-  }
-  return false;
-}
-
-function asrRequestFieldSupported(options = {}, name) {
-  const fields = options.supportedRequestFields || options.openApiSupportedFields;
-  if (fields && typeof fields.has === "function") {
-    return fields.has(name);
-  }
-  if (Array.isArray(fields)) {
-    return fields.includes(name);
-  }
-  return false;
-}
-
-async function resolveBrowserAsrSupportedRequestFields(asrConfig = {}) {
-  if (!shouldProbeBrowserAsrCapabilities(asrConfig)) {
-    return new Set();
-  }
-  return browserAsrOpenApiSupportedRequestFields(asrConfig?.baseUrl);
-}
-
-function shouldProbeBrowserAsrCapabilities(asrConfig = {}) {
-  const mode = normalizeAsrVadFilterMode(asrConfig?.vadFilter || asrConfig?.vad_filter || asrConfig?.vadFilterMode);
-  if (mode === "off" || normalizeProviderType(asrConfig?.providerType) !== "openai") {
-    return false;
-  }
-  const baseUrl = String(asrConfig?.baseUrl || "").trim();
-  return Boolean(baseUrl && !isKnownStandardAsrBaseUrl(baseUrl));
-}
-
-async function browserAsrOpenApiSupportedRequestFields(baseUrl) {
-  const cacheKey = String(baseUrl || "").trim();
-  if (!cacheKey) {
-    return new Set();
-  }
-  if (browserAsrRequestFieldCapabilityCache.has(cacheKey)) {
-    return browserAsrRequestFieldCapabilityCache.get(cacheKey);
-  }
-  if (browserAsrVadCapabilityCache.has(cacheKey)) {
-    return new Set(browserAsrVadCapabilityCache.get(cacheKey) ? ["vad_filter"] : []);
-  }
-  for (const openApiUrl of browserAsrOpenApiUrlCandidates(cacheKey)) {
-    try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 1500);
-      let response;
-      try {
-        response = await fetch(openApiUrl, { signal: controller.signal });
-      } finally {
-        clearTimeout(timer);
-      }
-      if (!response?.ok) {
-        continue;
-      }
-      const schema = await response.json().catch(() => null);
-      const fields = schemaAudioTranscriptionRequestProperties(schema);
-      if (fields.size) {
-        browserAsrRequestFieldCapabilityCache.set(cacheKey, fields);
-        browserAsrVadCapabilityCache.set(cacheKey, fields.has("vad_filter"));
-        return fields;
-      }
-    } catch {
-      // Capability probing is best-effort; unknown APIs should keep the standard request shape.
-    }
-  }
-  browserAsrVadCapabilityCache.set(cacheKey, false);
-  const fields = new Set();
-  browserAsrRequestFieldCapabilityCache.set(cacheKey, fields);
-  return fields;
-}
-
-function browserAsrOpenApiUrlCandidates(baseUrl) {
-  let parsed;
-  try {
-    parsed = new URL(String(baseUrl || ""));
-  } catch {
-    return [];
-  }
-  const origin = `${parsed.protocol}//${parsed.host}`;
-  const rawPath = parsed.pathname
-    .replace(/\/+$/, "")
-    .replace(/\/audio\/transcriptions$/i, "")
-    .replace(/\/audio\/translations$/i, "");
-  const paths = [];
-  if (rawPath.endsWith("/v1")) {
-    paths.push(rawPath.slice(0, -3) || "");
-  }
-  paths.push(rawPath || "");
-  paths.push("");
-  const seen = new Set();
-  return paths
-    .map(path => `${origin}${path}/openapi.json`)
-    .filter(url => {
-      if (seen.has(url)) {
-        return false;
-      }
-      seen.add(url);
-      return true;
-    });
-}
-
-function schemaAudioTranscriptionRequestProperties(schema) {
-  const properties = new Set();
-  if (!schema || typeof schema !== "object" || !schema.paths || typeof schema.paths !== "object") {
-    return properties;
-  }
-  for (const [pathName, pathItem] of Object.entries(schema.paths)) {
-    if (!/\/audio\/(?:transcriptions|translations)\b/i.test(String(pathName))) {
-      continue;
-    }
-    for (const operation of Object.values(pathItem || {})) {
-      collectOperationRequestBodyProperties(operation, schema, properties);
-    }
-  }
-  return properties;
-}
-
-function collectOperationRequestBodyProperties(operation, rootSchema, output) {
-  const requestBody = resolveOpenApiRef(rootSchema, operation?.requestBody) || operation?.requestBody;
-  const content = requestBody?.content;
-  if (!content || typeof content !== "object") {
-    return;
-  }
-  for (const media of Object.values(content)) {
-    collectSchemaProperties(media?.schema, rootSchema, output);
-  }
-}
-
-function collectSchemaProperties(schema, rootSchema, output, seen = new Set()) {
-  if (!schema || typeof schema !== "object" || seen.has(schema)) {
-    return;
-  }
-  seen.add(schema);
-  const referenced = resolveOpenApiRef(rootSchema, schema);
-  if (referenced && referenced !== schema) {
-    collectSchemaProperties(referenced, rootSchema, output, seen);
-    return;
-  }
-  if (schema.properties && typeof schema.properties === "object") {
-    for (const propertyName of Object.keys(schema.properties)) {
-      output.add(propertyName);
-    }
-  }
-  for (const key of ["allOf", "anyOf", "oneOf"]) {
-    if (Array.isArray(schema[key])) {
-      schema[key].forEach(item => collectSchemaProperties(item, rootSchema, output, seen));
-    }
-  }
-  if (schema.items) {
-    collectSchemaProperties(schema.items, rootSchema, output, seen);
-  }
-}
-
-function resolveOpenApiRef(rootSchema, value) {
-  const ref = String(value?.$ref || "");
-  if (!ref.startsWith("#/") || !rootSchema || typeof rootSchema !== "object") {
-    return null;
-  }
-  return ref
-    .slice(2)
-    .split("/")
-    .map(part => part.replace(/~1/g, "/").replace(/~0/g, "~"))
-    .reduce((node, part) => (node && typeof node === "object" ? node[part] : undefined), rootSchema) || null;
-}
-
-function normalizeAsrVadFilterMode(value) {
-  const normalized = String(value || "auto").trim().toLowerCase();
-  if (["on", "true", "1", "yes", "force", "enabled"].includes(normalized)) {
-    return "on";
-  }
-  if (["off", "false", "0", "no", "disabled"].includes(normalized)) {
-    return "off";
-  }
-  return "auto";
-}
-
-function isKnownStandardAsrBaseUrl(value) {
-  try {
-    const url = new URL(String(value || ""));
-    return new Set(["api.openai.com", "api.groq.com", "api.x.ai"]).has(url.hostname.toLowerCase());
-  } catch {
-    return false;
-  }
-}
-
-function browserAsrEndpoint(asrConfig) {
-  const provider = normalizeProviderType(asrConfig?.providerType);
-  const baseUrl = normalizeApiBaseUrl(asrConfig?.baseUrl || "");
-  if (provider === "xai") {
-    return `${baseUrl}/stt`;
-  }
-  return baseUrl.endsWith("/audio/transcriptions") ? baseUrl : `${baseUrl}/audio/transcriptions`;
-}
-
-function normalizeAsrLanguage(language) {
-  const text = String(language || "").trim();
-  if (!text) {
-    return "";
-  }
-  const key = text.toLowerCase().replace("_", "-");
-  const normalized = ASR_LANGUAGE_ALIASES.has(key)
-    ? ASR_LANGUAGE_ALIASES.get(key)
-    : TARGET_LANGUAGE_ALIASES.get(key) || key;
-  return normalized === "zh-CN" ? "zh" : normalized;
-}
-
-function xaiAsrLanguage(language) {
-  const supported = new Set(["en", "fr", "de", "it", "pt", "pl", "tr", "ru", "nl", "cs", "ar", "es", "ja", "ko", "hi", "th", "vi"]);
-  return supported.has(language) ? language : "";
 }
 
 async function getBrowserAudioChunkBuffer(file) {
@@ -2274,610 +1572,6 @@ async function getBrowserAudioChunkBuffer(file) {
     return response.arrayBuffer();
   }
   throw new Error("识别音频分段缺少可上传的数据。");
-}
-
-function normalizeAsrSegments(payload, offsetSeconds, chunkEndSeconds) {
-  const segments = asrTimedSegmentsFromPayload(payload);
-  const chunkStart = Number(offsetSeconds || 0) || 0;
-  const chunkEnd = Number(chunkEndSeconds || 0) || 0;
-  const timeOffset = asrSegmentsUseAbsoluteTime(segments, chunkStart, chunkEnd) ? 0 : chunkStart;
-  const timedSegments = segments
-    .map(segment => {
-      const words = normalizeAsrWordTimingItems(segment.words || nestedAsrWordItemsFromSegment(segment.rawSegment))
-        .map(word => ({
-          ...word,
-          start: word.start + timeOffset,
-          end: word.end + timeOffset
-        }));
-      return {
-        start: segment.start + timeOffset,
-        end: segment.end + timeOffset,
-        text: cleanVttText(segment.text || ""),
-        ...(words.length ? { words } : {}),
-        rawSegment: segment.rawSegment || segment
-      };
-    })
-    .filter(segment => Number.isFinite(segment.start) && Number.isFinite(segment.end) && segment.end > segment.start && segment.text)
-    .sort((left, right) => left.start - right.start || left.end - right.end);
-
-  const qualityFilteredSegments = timedSegments.filter(segment => !isAsrHallucinatedSegment(segment.rawSegment, segment.text));
-  const output = filterAsrSuspiciousRepeatedRuns(filterAsrRepeatedRuns(qualityFilteredSegments))
-    .map(({ rawSegment, ...segment }) => segment);
-
-  if (output.length) {
-    return output;
-  }
-  if (timedSegments.length && output.length !== timedSegments.length) {
-    return [];
-  }
-  const text = cleanVttText(asrPayloadText(payload));
-  if (!text) {
-    return [];
-  }
-  throw new Error("语音识别结果没有 segment 或 word 时间戳，无法生成可用字幕。");
-}
-
-function asrTimedSegmentsFromPayload(payload) {
-  const segmentItems = asrSegmentItemsFromPayload(payload);
-  if (segmentItems.length) {
-    return refineAsrSegmentsWithTopLevelWords(segmentItems, asrWordItemsFromPayload(payload));
-  }
-  return segmentsFromAsrWordItems(asrWordItemsFromPayload(payload));
-}
-
-function refineAsrSegmentsWithTopLevelWords(segments, words) {
-  const timedWords = normalizeAsrWordTimingItems(words);
-  if (!timedWords.length) {
-    return segments;
-  }
-  return segments.map(segment => {
-    const matchedWords = asrWordsForWindow(timedWords, segment.start, segment.end);
-    if (!matchedWords.length) {
-      return segment;
-    }
-    return {
-      ...segment,
-      start: Math.min(...matchedWords.map(word => word.start)),
-      end: Math.max(...matchedWords.map(word => word.end)),
-      words: matchedWords
-    };
-  });
-}
-
-function asrSegmentItemsFromPayload(payload) {
-  const segments = [];
-  for (const item of asrArrayItemsFromPayload(payload, ["segments", "results", "chunks"])) {
-    const text = cleanVttText(item?.text || item?.transcript || "");
-    const start = firstAsrNumber(item, ["start", "start_time"]);
-    const end = firstAsrNumber(item, ["end", "end_time"]);
-    if (text && Number.isFinite(start) && Number.isFinite(end) && end > start) {
-      const words = normalizeAsrWordTimingItems(nestedAsrWordItemsFromSegment(item));
-      const bounds = refinedAsrSegmentBoundsFromTimedWords(words, start, end);
-      segments.push({ start: bounds.start, end: bounds.end, text, ...(words.length ? { words } : {}), rawSegment: item });
-    }
-  }
-  return segments;
-}
-
-function refinedAsrSegmentBoundsFromTimedWords(words, fallbackStart, fallbackEnd) {
-  const bounds = asrWordBounds(words);
-  if (!bounds) {
-    return { start: fallbackStart, end: fallbackEnd };
-  }
-  const margin = 0.5;
-  if (bounds.start < fallbackStart - margin || bounds.start > fallbackEnd + margin) {
-    return { start: fallbackStart, end: fallbackEnd };
-  }
-  if (bounds.end < fallbackStart - margin || bounds.end > fallbackEnd + margin || bounds.end <= bounds.start) {
-    return { start: fallbackStart, end: fallbackEnd };
-  }
-  return { start: bounds.start, end: bounds.end };
-}
-
-function nestedAsrWordItemsFromSegment(segment) {
-  for (const key of ["words", "word_timestamps", "tokens"]) {
-    const value = segment?.[key];
-    if (Array.isArray(value)) {
-      return value.filter(item => item && typeof item === "object");
-    }
-  }
-  return [];
-}
-
-function asrWordBounds(words) {
-  const timedWords = normalizeAsrWordTimingItems(words);
-  if (!timedWords.length) {
-    return null;
-  }
-  return {
-    start: Math.min(...timedWords.map(word => word.start)),
-    end: Math.max(...timedWords.map(word => word.end))
-  };
-}
-
-function asrWordsForWindow(words, fallbackStart, fallbackEnd) {
-  const start = Number(fallbackStart);
-  const end = Number(fallbackEnd);
-  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
-    return [];
-  }
-  const margin = 0.05;
-  return normalizeAsrWordTimingItems(words).filter(word => word.end > start + margin && word.start < end - margin);
-}
-
-function normalizeAsrWordTimingItems(words) {
-  const output = [];
-  let start = null;
-  let end = null;
-  for (const word of words) {
-    const text = cleanVttText(word?.word || word?.text || word?.token || "");
-    const wordStart = firstAsrNumber(word, ["start", "start_time"]);
-    const wordEnd = firstAsrNumber(word, ["end", "end_time"]);
-    if (!text || !Number.isFinite(wordStart) || !Number.isFinite(wordEnd) || wordEnd <= wordStart) {
-      continue;
-    }
-    start = wordStart;
-    end = wordEnd;
-    const probability = optionalAsrNumber(word, ["probability", "prob"]);
-    output.push({
-      start,
-      end,
-      text,
-      ...(probability === null ? {} : { probability })
-    });
-  }
-  return output;
-}
-
-function asrWordItemsFromPayload(payload) {
-  return asrArrayItemsFromPayload(payload, ["words", "word_timestamps"]);
-}
-
-function asrArrayItemsFromPayload(payload, keys) {
-  const sources = [];
-  if (payload && typeof payload === "object") {
-    sources.push(payload);
-    if (payload.result && typeof payload.result === "object") {
-      sources.push(payload.result);
-    }
-  }
-  for (const source of sources) {
-    for (const key of keys) {
-      const value = source[key];
-      if (Array.isArray(value)) {
-        return value.filter(item => item && typeof item === "object");
-      }
-    }
-  }
-  return [];
-}
-
-function segmentsFromAsrWordItems(words) {
-  const timedWords = normalizeAsrWordTimingItems(words);
-  const segments = [];
-  let currentWords = [];
-  let currentStart = null;
-  let currentEnd = null;
-  for (const word of timedWords) {
-    const start = word.start;
-    const end = word.end;
-    if (currentStart === null) {
-      currentStart = start;
-    }
-    const shouldFlush = currentWords.length > 0 && currentEnd !== null && (
-      joinAsrWords(currentWords.map(item => item.text)).length >= 32
-      || start - currentEnd >= 0.8
-      || end - currentStart >= 7.0
-    );
-    if (shouldFlush && currentStart !== null && currentEnd !== null) {
-      segments.push({
-        start: currentStart,
-        end: currentEnd,
-        text: joinAsrWords(currentWords.map(item => item.text)),
-        words: currentWords,
-        rawSegment: { words: currentWords }
-      });
-      currentWords = [];
-      currentStart = start;
-    }
-    currentWords.push(word);
-    currentEnd = end;
-  }
-  if (currentWords.length && currentStart !== null && currentEnd !== null) {
-    segments.push({
-      start: currentStart,
-      end: currentEnd,
-      text: joinAsrWords(currentWords.map(item => item.text)),
-      words: currentWords,
-      rawSegment: { words: currentWords }
-    });
-  }
-  return segments;
-}
-
-function firstAsrNumber(payload, keys) {
-  for (const key of keys) {
-    if (Object.prototype.hasOwnProperty.call(payload || {}, key)) {
-      const value = Number(payload[key]);
-      if (Number.isFinite(value)) {
-        return value;
-      }
-    }
-  }
-  return NaN;
-}
-
-function optionalAsrNumber(payload, keys) {
-  for (const key of keys) {
-    if (Object.prototype.hasOwnProperty.call(payload || {}, key)) {
-      const value = Number(payload[key]);
-      if (Number.isFinite(value)) {
-        return value;
-      }
-    }
-  }
-  return null;
-}
-
-function joinAsrWords(words) {
-  return words.some(containsCjk) ? words.join("") : words.join(" ");
-}
-
-function containsCjk(value) {
-  return /[\u3400-\u9fff]/.test(String(value || ""));
-}
-
-function asrPayloadText(payload) {
-  if (!payload || typeof payload !== "object") {
-    return "";
-  }
-  const text = payload.text || payload.result?.text;
-  if (text) {
-    return text;
-  }
-  return asrArrayItemsFromPayload(payload, ["segments", "results", "chunks", "words", "word_timestamps"])
-    .map(item => item?.text || item?.transcript || item?.word || item?.token || "")
-    .join(" ");
-}
-
-function isAsrHallucinatedSegment(rawSegment, text) {
-  const normalizedText = normalizeAsrHallucinationText(text);
-  if (normalizedText.length < ASR_REPEATED_RUN_MIN_TEXT_CHARS) {
-    return false;
-  }
-  const noSpeechProbability = Number(rawSegment?.no_speech_prob);
-  if (Number.isFinite(noSpeechProbability) && noSpeechProbability >= ASR_HALLUCINATION_NO_SPEECH_PROBABILITY) {
-    return true;
-  }
-  const compressionRatio = Number(rawSegment?.compression_ratio);
-  return Number.isFinite(compressionRatio) && compressionRatio >= ASR_HALLUCINATION_COMPRESSION_RATIO;
-}
-
-function filterAsrRepeatedRuns(segments) {
-  const output = [];
-  for (let index = 0; index < segments.length;) {
-    const key = normalizeAsrHallucinationText(segments[index]?.text);
-    let nextIndex = index + 1;
-    while (nextIndex < segments.length && key && normalizeAsrHallucinationText(segments[nextIndex]?.text) === key) {
-      nextIndex += 1;
-    }
-    const run = segments.slice(index, nextIndex);
-    if (!isAsrRepeatedRunHallucination(key, run)) {
-      output.push(...run);
-    }
-    index = nextIndex;
-  }
-  return output;
-}
-
-function filterAsrSuspiciousRepeatedRuns(segments) {
-  const output = [];
-  for (let index = 0; index < segments.length;) {
-    const key = normalizeAsrHallucinationText(segments[index]?.text);
-    let nextIndex = index + 1;
-    while (
-      nextIndex < segments.length
-      && key
-      && normalizeAsrHallucinationText(segments[nextIndex]?.text) === key
-    ) {
-      nextIndex += 1;
-    }
-    const run = segments.slice(index, nextIndex);
-    if (!isAsrSuspiciousRepeatedRunHallucination(key, run)) {
-      output.push(...run);
-    }
-    index = nextIndex;
-  }
-  return output;
-}
-
-function isAsrRepeatedRunHallucination(key, run) {
-  if (!key || key.length < ASR_REPEATED_RUN_MIN_TEXT_CHARS || run.length < ASR_REPEATED_RUN_MIN_COUNT) {
-    return false;
-  }
-  const duration = run.reduce((sum, segment) => sum + Math.max(0, Number(segment.end) - Number(segment.start)), 0);
-  return duration >= ASR_REPEATED_RUN_MIN_DURATION_SECONDS;
-}
-
-function isAsrSuspiciousRepeatedRunHallucination(key, run) {
-  if (!key || run.length < ASR_SUSPICIOUS_REPEAT_MIN_COUNT || !isLikelyAsrHallucinationText(key)) {
-    return false;
-  }
-  const duration = run.reduce((sum, segment) => sum + Math.max(0, Number(segment.end) - Number(segment.start)), 0);
-  return duration >= ASR_SUSPICIOUS_REPEAT_MIN_DURATION_SECONDS;
-}
-
-function isLikelyAsrHallucinationText(text) {
-  const normalizedText = normalizeAsrHallucinationText(text);
-  if (normalizedText.length < ASR_REPEATED_RUN_MIN_TEXT_CHARS) {
-    return false;
-  }
-  return ASR_SUSPICIOUS_HALLUCINATION_PATTERNS.some(pattern => pattern.test(normalizedText));
-}
-
-function normalizeAsrHallucinationText(text) {
-  return String(text || "")
-    .toLowerCase()
-    .replace(/[\s,.!?;:'"()[\]{}，。！？；：“”‘’（）【】《》、·…—-]+/g, "");
-}
-
-function asrSegmentsUseAbsoluteTime(segments, chunkStart, chunkEnd) {
-  if (!chunkStart || !Array.isArray(segments) || !segments.length) {
-    return false;
-  }
-  const firstTimedSegment = segments.find(segment => Number.isFinite(Number(segment?.start)) && Number.isFinite(Number(segment?.end)));
-  if (!firstTimedSegment) {
-    return false;
-  }
-  const firstStart = Number(firstTimedSegment.start);
-  const firstEnd = Number(firstTimedSegment.end);
-  const tolerance = 1;
-  if (firstStart < chunkStart - tolerance) {
-    return false;
-  }
-  if (Number.isFinite(chunkEnd) && chunkEnd > chunkStart && firstStart > chunkEnd + tolerance) {
-    return false;
-  }
-  return firstEnd > firstStart;
-}
-
-async function translateBrowserSegments(sourceSegments, llmConfig, targetLanguage, metadata, options = {}) {
-  const batches = splitSegmentsForBrowserTranslation(sourceSegments, BROWSER_TRANSLATION_BATCH_SIZE);
-  const translated = [];
-  for (let batchIndex = 0; batchIndex < batches.length; batchIndex += 1) {
-    options.onProgress?.({
-      batchIndex: batchIndex + 1,
-      batchTotal: batches.length,
-      segmentCount: batches[batchIndex].length
-    });
-    const batchTranslated = await translateBrowserSegmentsBatch(
-      batches[batchIndex],
-      llmConfig,
-      targetLanguage,
-      metadata,
-      options
-    );
-    translated.push(...batchTranslated);
-  }
-  return translated;
-}
-
-async function translateBrowserSegmentsBatch(sourceSegments, llmConfig, targetLanguage, metadata, options = {}, autoSplitDepth = 0) {
-  const provider = normalizeProviderType(llmConfig.providerType);
-  const messages = buildTranslationMessages(sourceSegments, targetLanguage, metadata);
-  const timeoutMs = normalizeTimeoutMs(options.timeoutMs);
-  try {
-    const request = provider === "anthropic"
-      ? requestAnthropicMessage(llmConfig, messages, options)
-      : requestOpenAiCompatibleChat(llmConfig, messages, options);
-    const content = await withPromiseTimeout(request, timeoutMs, "翻译模型请求超时");
-    const json = parseModelJson(content);
-    const items = Array.isArray(json?.items)
-      ? json.items
-      : Array.isArray(json?.translated_transcript)
-        ? json.translated_transcript
-        : [];
-    if (!items.length) {
-      throw new Error("翻译模型没有返回可用字幕条目。");
-    }
-    return alignTranslatedSegments(sourceSegments, items);
-  } catch (error) {
-    if (sourceSegments.length <= 1 || browserTranslationErrorIsPermanent(error)) {
-      throw error;
-    }
-    if (autoSplitDepth >= BROWSER_TRANSLATION_MAX_AUTO_SPLIT_DEPTH) {
-      throw new Error(`翻译模型返回不稳定，已达到自动拆分重试上限（单个批次最多自动拆分 1 次）。原错误：${error.message || error}`);
-    }
-    const midpoint = Math.ceil(sourceSegments.length / 2);
-    const left = await translateBrowserSegmentsBatch(
-      sourceSegments.slice(0, midpoint),
-      llmConfig,
-      targetLanguage,
-      metadata,
-      options,
-      autoSplitDepth + 1
-    );
-    const right = await translateBrowserSegmentsBatch(
-      sourceSegments.slice(midpoint),
-      llmConfig,
-      targetLanguage,
-      metadata,
-      options,
-      autoSplitDepth + 1
-    );
-    return [...left, ...right];
-  }
-}
-
-function splitSegmentsForBrowserTranslation(sourceSegments, batchSize) {
-  const size = Math.max(1, Number(batchSize) || 1);
-  const batches = [];
-  for (let index = 0; index < sourceSegments.length; index += size) {
-    batches.push(sourceSegments.slice(index, index + size));
-  }
-  return batches;
-}
-
-function buildTranslationMessages(sourceSegments, targetLanguage, metadata) {
-  const targetCode = normalizeTargetLanguage(targetLanguage);
-  const targetName = targetLanguageName(targetCode);
-  const context = {
-    title: metadata?.title || "",
-    description: metadata?.description || "",
-    pageLanguage: metadata?.pageLanguage || "",
-    channel: metadata?.channel || "",
-    duration: metadata?.duration || null,
-    pageUrl: metadata?.pageUrl || ""
-  };
-  return [
-    {
-      role: "system",
-      content: [
-        `你是专业字幕翻译器。把每一条字幕翻译成自然、口语化、适合视频字幕的 ${targetName}。`,
-        "只返回一个合法 JSON 对象，不要 Markdown，不要解释，不要额外字段。",
-        "输出格式必须是 {\"items\":[{\"i\":0,\"text\":\"译文\"}]}。",
-        "items 数量必须与输入 segments 完全一致，i 必须逐条对应，顺序必须保持不变。",
-        "不要合并、拆分、省略、总结字幕；不要把原语言文本留在译文里，除非它是人名、品牌名、网址、代码或明确应保留的专有名词。",
-        "如果原文已经是目标语言，也要润色为自然字幕，而不是混入其他语言。"
-      ].join("\n")
-    },
-    {
-      role: "user",
-      content: JSON.stringify({
-        targetLanguage: {
-          code: targetCode,
-          name: targetName
-        },
-        context,
-        segments: sourceSegments.map((segment, index) => ({
-          i: index,
-          start: roundTime(segment.start),
-          end: roundTime(segment.end),
-          text: segment.text
-        }))
-      })
-    }
-  ];
-}
-
-async function requestOpenAiCompatibleChat(config, messages, options = {}) {
-  const timeoutMs = normalizeTimeoutMs(options.timeoutMs);
-  const { response, payload } = await fetchJsonWithTimeout(`${normalizeApiBaseUrl(config.baseUrl)}/chat/completions`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${config.apiKey}`,
-      "content-type": "application/json"
-    },
-    body: JSON.stringify({
-      model: config.model,
-      messages,
-      temperature: 0.1,
-      response_format: { type: "json_object" }
-    })
-  }, timeoutMs, "翻译模型");
-  if (!response.ok) {
-    throw new Error(payload.error?.message || payload.message || `翻译模型返回 HTTP ${response.status}`);
-  }
-  return payload.choices?.[0]?.message?.content || "";
-}
-
-async function requestAnthropicMessage(config, messages, options = {}) {
-  const system = messages.find(message => message.role === "system")?.content || "";
-  const user = messages.filter(message => message.role !== "system");
-  const timeoutMs = normalizeTimeoutMs(options.timeoutMs);
-  const { response, payload } = await fetchJsonWithTimeout(`${normalizeApiBaseUrl(config.baseUrl)}/messages`, {
-    method: "POST",
-    headers: {
-      "x-api-key": config.apiKey,
-      "anthropic-version": "2023-06-01",
-      "content-type": "application/json"
-    },
-    body: JSON.stringify({
-      model: config.model,
-      max_tokens: 4096,
-      temperature: 0.1,
-      system,
-      messages: user
-    })
-  }, timeoutMs, "翻译模型");
-  if (!response.ok) {
-    throw new Error(payload.error?.message || payload.message || `翻译模型返回 HTTP ${response.status}`);
-  }
-  return (payload.content || []).map(item => item.text || "").join("\n");
-}
-
-function normalizeTimeoutMs(timeoutMs) {
-  const normalized = Number(timeoutMs);
-  return Number.isFinite(normalized) && normalized > 0 ? normalized : BROWSER_TRANSLATION_TIMEOUT_MS;
-}
-
-async function withPromiseTimeout(promise, timeoutMs, label) {
-  let timer = 0;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise((_, reject) => {
-        timer = setTimeout(() => {
-          reject(new Error(`${label}（${Math.round(timeoutMs / 1000)} 秒）`));
-        }, timeoutMs);
-      })
-    ]);
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-async function fetchJsonWithTimeout(url, init, timeoutMs, label) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetch(url, {
-      ...init,
-      signal: controller.signal
-    });
-    const payload = await response.json().catch(() => ({}));
-    return { response, payload };
-  } catch (error) {
-    if (controller.signal.aborted) {
-      throw new Error(`${label}请求超时（${Math.round(timeoutMs / 1000)} 秒）`);
-    }
-    throw error;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-function browserTranslationErrorIsPermanent(error) {
-  const message = String(error?.message || error || "").toLowerCase();
-  return /(401|403|404|unauthorized|forbidden|invalid api key|api key|quota|rate limit|不存在的模型|模型不存在)/.test(message);
-}
-
-function parseModelJson(content) {
-  const text = String(content || "").trim().replace(/^```(?:json)?|```$/g, "").trim();
-  try {
-    return JSON.parse(text);
-  } catch {
-    const match = text.match(/\{[\s\S]*\}/);
-    if (!match) {
-      throw new Error("模型返回的 JSON 无法自动修复。");
-    }
-    return JSON.parse(match[0]);
-  }
-}
-
-function alignTranslatedSegments(sourceSegments, items) {
-  const byIndex = new Map();
-  items.forEach((item, position) => {
-    const index = Number.isInteger(Number(item.i)) ? Number(item.i) : position;
-    byIndex.set(index, cleanVttText(item.text || item.translation || item.translated || ""));
-  });
-  return sourceSegments.map((segment, index) => ({
-    start: segment.start,
-    end: segment.end,
-    chunkIndex: segment.chunkIndex,
-    segmentIndex: segment.segmentIndex,
-    text: byIndex.get(index) || segment.text
-  }));
 }
 
 function normalizeBrowserSourceSegmentsForTranslation(segments, chunkIndex) {
@@ -2901,33 +1595,6 @@ function isUsableTimedTextSegment(segment) {
   const end = Number(segment?.end);
   const text = cleanVttText(segment?.text || "");
   return Number.isFinite(start) && Number.isFinite(end) && end > start && Boolean(text);
-}
-
-function mergeAdjacentDuplicateAsrSegments(segments) {
-  const merged = [];
-  for (const segment of segments || []) {
-    const previous = merged[merged.length - 1];
-    if (previous && canMergeAdjacentDuplicateAsrSegment(previous, segment)) {
-      previous.end = Math.max(previous.end, segment.end);
-      continue;
-    }
-    merged.push({ ...segment });
-  }
-  return merged;
-}
-
-function canMergeAdjacentDuplicateAsrSegment(previous, current) {
-  const previousText = normalizedAsrDuplicateText(previous?.text);
-  const currentText = normalizedAsrDuplicateText(current?.text);
-  if (!previousText || previousText !== currentText) {
-    return false;
-  }
-  const gap = Number(current?.start) - Number(previous?.end);
-  return Number.isFinite(gap) && gap >= -0.05 && gap <= ASR_ADJACENT_DUPLICATE_MAX_GAP_SECONDS;
-}
-
-function normalizedAsrDuplicateText(text) {
-  return cleanVttText(text || "").replace(/\s+/g, " ").trim();
 }
 
 function tagSegmentsWithChunkOrder(segments, chunkIndex) {
@@ -2966,18 +1633,24 @@ function updateChunkStatus(record, index, patch) {
     stageStartedAt: nextStage !== current.stage ? now : (current.stageStartedAt || now),
     updatedAt: now
   };
-  const completed = statuses.filter(item => ["completed", "failed"].includes(item.stage)).length;
+  const completed = statuses.filter(item => ["completed", "completed_with_warnings", "failed"].includes(item.stage)).length;
   const failed = statuses.filter(item => item.stage === "failed").length;
   const asrRunning = statuses.filter(item => item.stage === "asr").length;
   const translating = statuses.filter(item => item.stage === "translation").length;
+  const asrPartialFailed = statuses.filter(item => item?.stage !== "failed" && chunkStatusAsrFailureCount(item) > 0).length;
   record.job.translation.chunksDone = completed;
   record.job.translation.chunksFailed = failed;
   record.job.translation.failed = failed;
+  record.job.translation.chunksAsrPartialFailed = asrPartialFailed;
   record.job.translation.chunksAsr = asrRunning;
   record.job.translation.asrRunning = asrRunning;
   record.job.translation.chunksTranslating = translating;
   record.job.translation.translationRunning = translating;
   publishBrowserPreloadJob(record);
+}
+
+function chunkStatusAsrFailureCount(status) {
+  return Math.max(0, Number(status?.asrFailures || status?.asr_failures || 0) || 0);
 }
 
 function publishBrowserSubtitle(record) {
@@ -3060,13 +1733,58 @@ function browserFailureSummary(record) {
 function finalizeBrowserCompletionState(record) {
   const failed = record.job.translation.chunkStatuses.filter(item => item.stage === "failed").length;
   const coverageWarning = browserSubtitleCoverageWarning(record);
-  const messages = [failed ? browserFailureSummary(record) : "", coverageWarning].filter(Boolean);
+  const asrPartialWarning = browserAsrPartialFailureSummary(record);
+  const partialWarning = browserPartialTranslationSummary(record);
+  const messages = [failed ? browserFailureSummary(record) : "", asrPartialWarning, partialWarning, coverageWarning].filter(Boolean);
   record.job.status = "completed";
   record.job.stage = messages.length ? "completed_with_warnings" : "completed";
   record.job.error = messages.join(" ");
   record.job.extract.elapsedSeconds = elapsedSeconds(record.startedAt);
   publishBrowserPreloadJob(record);
-  return { failed, coverageWarning };
+  return { failed, asrPartialFailure: Boolean(asrPartialWarning), partialWarning, coverageWarning };
+}
+
+function browserPartialTranslationChunkMessage(failures) {
+  const count = Array.isArray(failures) ? failures.length : 0;
+  return count ? `部分句子翻译失败，已显示可用译文并保留 ${count} 条原文供重试。` : "";
+}
+
+function browserAsrPartialChunkMessage(count) {
+  const failed = Math.max(0, Number(count || 0) || 0);
+  return failed ? `有 ${failed} 个识别音频分段失败，已翻译可用原文；可重试失败识别分段。` : "";
+}
+
+function browserCompletedChunkWarningMessage(translationFailures, asrFailures = 0) {
+  return [
+    browserPartialTranslationChunkMessage(translationFailures),
+    browserAsrPartialChunkMessage(asrFailures)
+  ].filter(Boolean).join(" ");
+}
+
+function browserAsrPartialFailureSummary(record) {
+  const partialStatuses = (record?.job?.translation?.chunkStatuses || [])
+    .filter(item => item?.stage !== "failed" && chunkStatusAsrFailureCount(item) > 0);
+  if (!partialStatuses.length) {
+    return "";
+  }
+  const failedAudioChunks = partialStatuses.reduce((sum, item) => sum + chunkStatusAsrFailureCount(item), 0);
+  return `有 ${partialStatuses.length} 个字幕分段存在 ${failedAudioChunks} 个失败音频分段，已先显示可用字幕；可重试失败识别分段。`;
+}
+
+function browserPartialTranslationSummary(record) {
+  const partialStatuses = (record?.job?.translation?.chunkStatuses || [])
+    .filter(item => item?.stage === "completed_with_warnings" && Math.max(0, Number(item.translationFailures || 0) || 0) > 0);
+  if (!partialStatuses.length) {
+    return "";
+  }
+  const failedSentences = partialStatuses.reduce((sum, item) => sum + Math.max(0, Number(item.translationFailures || 0) || 0), 0);
+  return failedSentences
+    ? `有 ${partialStatuses.length} 个翻译分段只完成部分句子，${failedSentences} 条失败句子已保留原文供重试。`
+    : `有 ${partialStatuses.length} 个翻译分段只完成部分句子，失败句子已保留原文供重试。`;
+}
+
+function browserCompletionAllowsAudioRelease(completion) {
+  return !completion?.failed && !completion?.coverageWarning && !completion?.asrPartialFailure;
 }
 
 function browserSubtitleCoverageWarning(record) {
@@ -3161,6 +1879,9 @@ async function attachBrowserJobVttIfReady(record) {
   if (!record.tabId || !record.job.translation.vttText || !(await isSubtitleOverlayEnabled())) {
     return;
   }
+  if (!browserPreloadRecordMatchesCurrentPage(record)) {
+    return;
+  }
   if (hasManualVttAttachment(record.tabId)) {
     return;
   }
@@ -3168,6 +1889,9 @@ async function attachBrowserJobVttIfReady(record) {
     return;
   }
   const attachment = await buildBrowserVttAttachment(record.job);
+  if (!attachment.vtt) {
+    return;
+  }
   const signature = browserVttAttachmentSignature(record.job, attachment);
   const state = getState(record.tabId);
   if (state.attachedVttSignature === signature && await hasAttachedSubtitleSignature(record.tabId, signature)) {
@@ -3188,13 +1912,23 @@ async function attachBrowserJobVttIfReady(record) {
 
 async function buildBrowserVttAttachment(job) {
   const mode = await getSubtitleDisplayMode();
+  const transcript = job.translation?.transcript;
+  const allowSourcePreview = browserJobAllowsSourcePreview(job);
   if (mode === "bilingual") {
-    const bilingual = transcriptToBilingualVtt(job.translation?.transcript);
+    const bilingual = transcriptToBilingualVtt(transcript, { allowSourcePreview });
     if (bilingual) {
       return { mode, vtt: bilingual };
     }
   }
-  return { mode: "translated", vtt: job.translation?.vttText || "" };
+  const translated = transcriptToTranslatedVtt(transcript, { allowSourcePreview });
+  if (translated) {
+    return { mode: "translated", vtt: translated };
+  }
+  return { mode: "translated", vtt: transcript ? "" : (job.translation?.vttText || "") };
+}
+
+function browserJobAllowsSourcePreview(job) {
+  return !["done", "completed", "error", "failed", "cancelled"].includes(String(job?.status || ""));
 }
 
 function browserVttAttachmentSignature(job, attachment) {
@@ -3207,6 +1941,117 @@ function browserVttAttachmentSignature(job, attachment) {
   ].join(":");
 }
 
+function findBrowserPreloadRecordForTabPage(tabId, pageUrl) {
+  if (!tabId || !normalizeBrowserPageIdentity(pageUrl)) {
+    return null;
+  }
+  return [...browserPreloadJobs.values()]
+    .filter(record => record?.tabId === tabId && !record.cancelled && browserPreloadRecordMatchesPageUrl(record, pageUrl))
+    .sort((left, right) => Number(right.job?.updatedAt || 0) - Number(left.job?.updatedAt || 0))[0] || null;
+}
+
+function browserPreloadRecordMatchesCurrentPage(record) {
+  if (!record?.tabId) {
+    return false;
+  }
+  const state = tabState.get(record.tabId);
+  const currentPageUrl = state?.page?.url || state?.context?.href || "";
+  return browserPreloadRecordMatchesPageUrl(record, currentPageUrl);
+}
+
+function browserPreloadRecordMatchesPageUrl(record, pageUrl) {
+  if (!record) {
+    return false;
+  }
+  return browserPreloadJobMatchesPageUrl(record.job, pageUrl)
+    || browserPageIdentitiesMatch(record.metadata?.pageUrl || record.candidate?.pageUrl || "", pageUrl);
+}
+
+function browserPreloadJobMatchesPageUrl(job, pageUrl) {
+  if (!job) {
+    return false;
+  }
+  return browserPageIdentitiesMatch(
+    job.metadata?.pageUrl || job.translation?.transcript?.metadata?.pageUrl || "",
+    pageUrl
+  );
+}
+
+function browserPageIdentitiesMatch(left, right) {
+  const expected = normalizeBrowserPageIdentity(left);
+  if (!expected) {
+    return false;
+  }
+  const actual = normalizeBrowserPageIdentity(right);
+  return Boolean(actual && actual === expected);
+}
+
+function normalizeBrowserPageIdentity(rawUrl) {
+  try {
+    const url = new URL(String(rawUrl || ""));
+    url.hash = "";
+    normalizeBilibiliBrowserPageIdentity(url);
+    for (const key of [...url.searchParams.keys()]) {
+      if (isBrowserPageTrackingParam(key) || isBrowserPageSensitiveParam(key)) {
+        url.searchParams.delete(key);
+      }
+    }
+    url.searchParams.sort();
+    return url.toString();
+  } catch {
+    return stripBrowserPageSensitiveQuery(rawUrl, { removeTracking: true });
+  }
+}
+
+function normalizeBilibiliBrowserPageIdentity(url) {
+  if (!/(^|\.)bilibili\.com$/i.test(url.hostname)) {
+    return;
+  }
+  const match = url.pathname.match(/^\/video\/([A-Za-z0-9_-]+)\/?$/);
+  if (!match) {
+    return;
+  }
+  const part = url.searchParams.get("p");
+  url.pathname = `/video/${match[1]}`;
+  url.search = "";
+  if (part && /^\d+$/.test(part)) {
+    url.searchParams.set("p", part);
+  }
+}
+
+function stripBrowserPageSensitiveQuery(rawUrl, { removeTracking = false } = {}) {
+  const text = String(rawUrl || "").trim();
+  const [withoutHash] = text.split("#");
+  const queryStart = withoutHash.indexOf("?");
+  if (queryStart < 0) {
+    return withoutHash;
+  }
+  const base = withoutHash.slice(0, queryStart);
+  const query = withoutHash.slice(queryStart + 1);
+  const params = query.split("&").filter(Boolean).filter(part => {
+    const key = decodeBrowserPageQueryKey(part.split("=")[0] || "");
+    return !isBrowserPageSensitiveParam(key) && !(removeTracking && isBrowserPageTrackingParam(key));
+  });
+  params.sort();
+  return params.length ? `${base}?${params.join("&")}` : base;
+}
+
+function decodeBrowserPageQueryKey(value) {
+  try {
+    return decodeURIComponent(String(value || "").replace(/\+/g, " "));
+  } catch {
+    return String(value || "");
+  }
+}
+
+function isBrowserPageTrackingParam(key) {
+  return /^(utm_|spm_|vd_source$|from$|share_|fbclid$|gclid$|trackid$)/i.test(String(key || ""));
+}
+
+function isBrowserPageSensitiveParam(key) {
+  return /^(token$|access_?token$|auth(?:_key)?$|authorization$|signature$|sign$|sig$|policy$|key-pair-id$|awsaccesskeyid$|expires?$|expiration$|deadline$|timestamp$|ts$|nonce$|session(?:id)?$|sid$|x-amz-|x-oss-|x-goog-)/i.test(String(key || ""));
+}
+
 function publishBrowserPreloadJob(record) {
   record.job.updatedAt = Date.now();
   record.job.extract.elapsedSeconds = elapsedSeconds(record.startedAt);
@@ -3215,6 +2060,9 @@ function publishBrowserPreloadJob(record) {
   record.job.translation.reusableAudioChunks = record.job.reusableAudioChunks;
   record.job.translation.reusableSourceChunks = record.job.reusableSourceChunks;
   record.job.progress = browserJobProgress(record.job);
+  if (!browserPreloadRecordMatchesCurrentPage(record)) {
+    return;
+  }
   setTabStatus(record.tabId, {
     preload: record.job.status,
     preloadJob: record.job,
@@ -3296,20 +2144,6 @@ function normalizeApiBaseUrl(value) {
   return String(value || "").replace(/\/+$/, "");
 }
 
-function normalizeTargetLanguage(value) {
-  const text = String(value || "").trim();
-  if (!text) {
-    return DEFAULT_MODEL_SETTINGS.targetLanguage;
-  }
-  const key = text.toLowerCase().replace("_", "-");
-  return TARGET_LANGUAGE_ALIASES.get(key) || DEFAULT_MODEL_SETTINGS.targetLanguage;
-}
-
-function targetLanguageName(value) {
-  const normalized = normalizeTargetLanguage(value);
-  return TARGET_LANGUAGE_NAMES.get(normalized) || TARGET_LANGUAGE_NAMES.get(DEFAULT_MODEL_SETTINGS.targetLanguage);
-}
-
 function browserAsrUploadChunkSeconds(modelConfig = {}) {
   return normalizeBrowserAsrUploadChunkSeconds(modelConfig.asrUploadChunkSeconds);
 }
@@ -3350,6 +2184,16 @@ function browserTranslationSegmentSeconds(record) {
   return Number.isFinite(seconds) && seconds > 0 ? seconds : DEFAULT_MODEL_SETTINGS.chunkMinutes * 60;
 }
 
+function browserTranslationBatchWorkers(record) {
+  const configuredWorkers = Number(record?.modelConfig?.workers || DEFAULT_MODEL_SETTINGS.translationWorkers);
+  return Math.max(1, Math.min(2, Number.isFinite(configuredWorkers) ? Math.floor(configuredWorkers) : 1));
+}
+
+function browserTranslationSplitWorkers(record) {
+  const configuredWorkers = Number(record?.modelConfig?.workers || DEFAULT_MODEL_SETTINGS.translationWorkers);
+  return Math.max(1, Math.min(2, Number.isFinite(configuredWorkers) ? Math.floor(configuredWorkers) : 1));
+}
+
 function roundTime(value) {
   return Math.round((Number(value) || 0) * 1000) / 1000;
 }
@@ -3376,7 +2220,7 @@ async function retryPreload(tabId, chunkIndexes = []) {
   if (failedChunkCount <= 0) {
     throw new Error("当前任务没有失败识别分段可重试。需要重新抽取时请点击“重新抽取”。");
   }
-  throw new Error("这个任务不是当前浏览器内预加载任务，不能重试失败识别分段。请重新抽取。");
+  throw new Error("后台任务状态已过期或这个任务不是当前浏览器内预加载任务，不能重试失败识别分段。请重新抽取。");
 }
 
 async function retranslatePreload(tabId, chunkIndexes = []) {
@@ -3397,7 +2241,7 @@ async function retranslatePreload(tabId, chunkIndexes = []) {
       message: "当前任务仍在运行，已忽略重复重翻译请求。"
     };
   }
-  throw new Error("这个任务不是当前浏览器内预加载任务，不能只重翻译。请重新抽取。");
+  throw new Error("后台任务状态已过期或这个任务不是当前浏览器内预加载任务，不能只重翻译。请重新抽取。");
 }
 
 async function retryBrowserFailedPreload(record, chunkIndexes = []) {
@@ -3407,7 +2251,10 @@ async function retryBrowserFailedPreload(record, chunkIndexes = []) {
   if (!retryIndexes.length) {
     throw new Error("当前任务没有可继续处理的识别分段。");
   }
-  const sourceRetryIndexes = retryIndexes.filter(index => reusableBrowserSourceSegments(record, index).length);
+  const sourceRetryIndexes = retryIndexes.filter(index => {
+    const status = statuses[index] || {};
+    return reusableBrowserSourceSegments(record, index).length && chunkStatusAsrFailureCount(status) <= 0;
+  });
   const asrRetryIndexes = retryIndexes.filter(index => !sourceRetryIndexes.includes(index));
   const asrRetryHasAudio = asrRetryIndexes.every(index => browserAudioChunksForTranslationGroup(record, index).length);
   if (asrRetryIndexes.length && !asrRetryHasAudio) {
@@ -3426,7 +2273,7 @@ async function retryBrowserFailedPreload(record, chunkIndexes = []) {
   });
   publishBrowserSubtitle(record);
   const completion = finalizeBrowserCompletionState(record);
-  if (!completion.failed && !completion.coverageWarning) {
+  if (browserCompletionAllowsAudioRelease(completion)) {
     await releaseBrowserAudioChunks(record);
   }
   return { preload: record.job.status, job: record.job };
@@ -3455,7 +2302,7 @@ function collectBrowserRetryIndexes(record, requested) {
       if (!status) {
         return true;
       }
-      if (status.stage === "completed" && reusableBrowserSourceSegments(record, index).length) {
+      if (status.stage === "completed" && reusableBrowserSourceSegments(record, index).length && chunkStatusAsrFailureCount(status) <= 0) {
         return false;
       }
       return status.stage !== "completed";
@@ -3531,6 +2378,8 @@ async function retryBrowserAsrGroup(record, groupIndex) {
       attempts: attempt,
       sourceCount: 0,
       translatedCount: 0,
+      asrFailures: errors.length,
+      asrErrors: errors.slice(0, 5),
       error: `第 ${index + 1} 个识别分段连续 ${attempt} 次失败：${errors[0]}`
     });
     publishBrowserSubtitle(record);
@@ -3544,6 +2393,8 @@ async function retryBrowserAsrGroup(record, groupIndex) {
       attempts: attempt,
       sourceCount: 0,
       translatedCount: 0,
+      asrFailures: 0,
+      asrErrors: [],
       message: empty ? `无语音 · 跳过 ${empty} 个音频分段` : "无语音"
     });
     publishBrowserSubtitle(record);
@@ -3552,6 +2403,11 @@ async function retryBrowserAsrGroup(record, groupIndex) {
   const suffix = errors.length
     ? `重试识别后翻译，${errors.length} 个音频分段失败，先用可用原文`
     : "重试识别后翻译";
+  updateChunkStatus(record, index, {
+    asrFailures: errors.length,
+    asrErrors: errors.slice(0, 5),
+    error: errors.length ? `有 ${errors.length} 个识别音频分段失败，先翻译可用原文。` : ""
+  });
   await translateBrowserChunkFromSource(record, index, normalizedSource, suffix);
 }
 
@@ -3596,6 +2452,8 @@ function reusableBrowserSourceSegments(record, index) {
 async function translateBrowserChunkFromSource(record, index, sourceSegments, message) {
   const statuses = record.job.translation?.chunkStatuses || [];
   const current = statuses[index] || {};
+  const asrFailures = chunkStatusAsrFailureCount(current);
+  const asrErrors = Array.isArray(current.asrErrors) ? current.asrErrors : [];
   const attempt = (current.attempts || 0) + 1;
   updateChunkStatus(record, index, {
     stage: "translation",
@@ -3613,6 +2471,8 @@ async function translateBrowserChunkFromSource(record, index, sourceSegments, me
       record.modelConfig.targetLanguage,
       record.metadata,
       {
+        batchWorkers: browserTranslationBatchWorkers(record),
+        splitWorkers: browserTranslationSplitWorkers(record),
         onProgress(progress) {
           updateChunkStatus(record, index, {
             stage: "translation",
@@ -3629,7 +2489,7 @@ async function translateBrowserChunkFromSource(record, index, sourceSegments, me
     if (Array.isArray(previous) && previous.length) {
       translatedSegments = previous;
     } else {
-      translatedSegments = sourceSegments.map(segment => ({ ...segment }));
+      translatedSegments = [];
       record.translatedSegmentsByChunk.set(index, translatedSegments);
     }
     updateChunkStatus(record, index, {
@@ -3637,17 +2497,25 @@ async function translateBrowserChunkFromSource(record, index, sourceSegments, me
       status: "失败",
       sourceCount: sourceSegments.length,
       translatedCount: translatedSegments.length,
-      error: `重翻译失败，已保留已有字幕：${error.message || String(error)}`
+      error: translatedSegments.length
+        ? `重翻译失败，已保留已有译文：${error.message || String(error)}`
+        : `重翻译失败，未生成译文，已保留原文供重试：${error.message || String(error)}`
     });
     publishBrowserSubtitle(record);
     return;
   }
   record.translatedSegmentsByChunk.set(index, translatedSegments);
+  const translationFailures = browserTranslationFailures(translatedSegments);
+  const warningMessage = browserCompletedChunkWarningMessage(translationFailures, asrFailures);
   updateChunkStatus(record, index, {
-    stage: "completed",
-    status: "完成",
+    stage: warningMessage ? "completed_with_warnings" : "completed",
+    status: warningMessage ? "部分完成" : "完成",
     sourceCount: sourceSegments.length,
     translatedCount: translatedSegments.length,
+    translationFailures: translationFailures.length,
+    asrFailures,
+    asrErrors,
+    error: warningMessage,
     message: `原文 ${sourceSegments.length} · 译文 ${translatedSegments.length}`
   });
   publishBrowserSubtitle(record);
@@ -3658,7 +2526,7 @@ function countFailedChunks(job) {
   if (!Array.isArray(statuses)) {
     return 0;
   }
-  return statuses.filter(status => status?.stage === "failed").length;
+  return statuses.filter(status => status?.stage === "failed" || chunkStatusAsrFailureCount(status) > 0).length;
 }
 
 async function cancelPreload(tabId, jobId) {
@@ -3894,6 +2762,10 @@ async function checkPreloadJob(jobId, tabId) {
   const browserRecord = browserPreloadJobs.get(jobId);
   if (browserRecord) {
     if (tabId) {
+      await refreshTabInfo(tabId);
+      if (!browserPreloadRecordMatchesPageUrl(browserRecord, getState(tabId).page?.url || getState(tabId).context?.href || "")) {
+        return { job: null, missing: true, pageMismatch: true };
+      }
       setTabStatus(tabId, { preload: browserRecord.job.status || "running", preloadJob: browserRecord.job || null });
       if (browserRecord.job.translation?.vttText) {
         await attachBrowserJobVttIfReady(browserRecord);
@@ -3979,23 +2851,36 @@ async function isSubtitleOverlayEnabled() {
   return stored.subtitleOverlayEnabled !== false;
 }
 
-function transcriptToBilingualVtt(transcript) {
+function transcriptToTranslatedVtt(transcript, options = {}) {
+  const source = Array.isArray(transcript?.source) ? transcript.source : [];
+  const translated = Array.isArray(transcript?.translated) ? transcript.translated : [];
+  if (source.length) {
+    return segmentsToVtt(mergeTranslatedDisplaySegments(source, translated));
+  }
+  if (translated.length) {
+    return segmentsToVtt(translated);
+  }
+  return "";
+}
+
+function transcriptToBilingualVtt(transcript, options = {}) {
   const source = Array.isArray(transcript?.source) ? transcript.source : [];
   const translated = Array.isArray(transcript?.translated) ? transcript.translated : [];
   const blocks = ["WEBVTT", ""];
   for (const { sourceSegment, translatedSegment } of mergeTranscriptSegmentsForBilingualVtt(source, translated)) {
     const start = firstFiniteNumber(translatedSegment.start, sourceSegment.start);
     const end = firstFiniteNumber(translatedSegment.end, sourceSegment.end);
-    const translatedText = cleanVttText(translatedSegment.text || sourceSegment.text);
+    const translatedText = cleanVttText(translatedSegment.text);
     const sourceText = cleanVttText(sourceSegment.text);
-    if (!Number.isFinite(start) || !Number.isFinite(end) || !translatedText) {
+    const displayText = translatedText || sourceText;
+    if (!Number.isFinite(start) || !Number.isFinite(end) || !displayText) {
       continue;
     }
     const lines = [];
-    if (sourceText && sourceText !== translatedText) {
+    if (translatedText && sourceText && sourceText !== translatedText) {
       lines.push(sourceText);
     }
-    lines.push(translatedText);
+    lines.push(displayText);
     blocks.push(`${formatVttTimestamp(start)} --> ${formatVttTimestamp(end)}`);
     blocks.push(lines.join("\n"));
     blocks.push("");
@@ -4345,125 +3230,6 @@ function validateSelectedModelProfiles(asrProfile, llmProfile) {
   }
 }
 
-function findProfile(profiles, selectedId, fallbackId) {
-  return profiles.find(profile => profile.id === selectedId) ||
-    profiles.find(profile => profile.id === fallbackId) ||
-    profiles[0] ||
-    {};
-}
-
-function normalizeSelectedProfileId(profiles, selectedId, fallbackId) {
-  if (profiles.some(profile => profile.id === selectedId)) {
-    return selectedId;
-  }
-  if (profiles.some(profile => profile.id === fallbackId)) {
-    return fallbackId;
-  }
-  return profiles[0]?.id || "";
-}
-
-function normalizeStoredProfiles(kind, storedProfiles) {
-  const profilesById = new Map(defaultProfiles(kind).map(profile => [profile.id, profile]));
-  for (const rawProfile of Array.isArray(storedProfiles) ? storedProfiles : []) {
-    const profile = normalizeProfile(rawProfile);
-    if (!profile.id) {
-      continue;
-    }
-    const knownProfile = profilesById.get(profile.id);
-    if (knownProfile) {
-      profilesById.set(profile.id, mergeProfileDefaults(knownProfile, profile));
-    } else if (hasProfileContent(profile)) {
-      profilesById.set(profile.id, profile);
-    }
-  }
-  return uniqueProfiles([...profilesById.values()]);
-}
-
-function normalizeProfile(rawProfile = {}) {
-  return {
-    id: String(rawProfile.id || "").trim(),
-    name: String(rawProfile.name || "").trim(),
-    providerType: normalizeProviderType(rawProfile.providerType || rawProfile.provider_type),
-    baseUrl: String(rawProfile.baseUrl || rawProfile.base_url || "").trim(),
-    model: String(rawProfile.model || "").trim(),
-    vadFilter: normalizeAsrVadFilterMode(rawProfile.vadFilter || rawProfile.vad_filter || rawProfile.vadFilterMode),
-    apiKey: String(rawProfile.apiKey || rawProfile.api_key || "").trim()
-  };
-}
-
-function normalizeProviderType(providerType) {
-  const value = String(providerType || "").trim();
-  return ["openai", "groq", "xai", "anthropic"].includes(value) ? value : "openai";
-}
-
-function mergeProfileDefaults(defaultProfile, storedProfile) {
-  return {
-    id: storedProfile.id || defaultProfile.id,
-    name: storedProfile.name || defaultProfile.name || "",
-    providerType: storedProfile.providerType || defaultProfile.providerType || "openai",
-    baseUrl: storedProfile.baseUrl || defaultProfile.baseUrl || "",
-    model: storedProfile.model || defaultProfile.model || "",
-    vadFilter: storedProfile.vadFilter || defaultProfile.vadFilter || "auto",
-    apiKey: storedProfile.apiKey || defaultProfile.apiKey || ""
-  };
-}
-
-function hasProfileContent(profile) {
-  if (profile.id === DEFAULT_LLM_PROFILE_ID && !profile.apiKey && !profile.baseUrl && !profile.model) {
-    return false;
-  }
-  return Boolean(profile.apiKey || profile.baseUrl || profile.model || profile.name);
-}
-
-function uniqueProfiles(profiles) {
-  const seen = new Set();
-  const output = [];
-  for (const profile of profiles) {
-    if (seen.has(profile.id)) {
-      continue;
-    }
-    seen.add(profile.id);
-    output.push({
-      ...profile,
-      name: profile.name || profile.model || "未命名档案"
-    });
-  }
-  return output;
-}
-
-function defaultProfiles(kind) {
-  return knownProfileDefaults(kind).map(cloneProfile);
-}
-
-function knownProfileDefaults(kind) {
-  return kind === "asr" ? KNOWN_ASR_PROFILES : KNOWN_LLM_PROFILES;
-}
-
-function cloneProfile(profile) {
-  return {
-    id: profile.id,
-    name: profile.name || "",
-    providerType: profile.providerType || "openai",
-    baseUrl: profile.baseUrl || "",
-    model: profile.model || "",
-    vadFilter: profile.vadFilter || "auto",
-    apiKey: profile.apiKey || ""
-  };
-}
-
-function compactProviderConfig(config) {
-  const output = {};
-  for (const [key, value] of Object.entries(config || {})) {
-    if (key === "id" || key === "name") {
-      continue;
-    }
-    if (value !== undefined && value !== null && String(value).trim()) {
-      output[key] = String(value).trim();
-    }
-  }
-  return output;
-}
-
 function persistMigratedModelSettings(stored, asrProfiles, llmProfiles, selectedAsrId, selectedLlmId) {
   const needsVersionMigration = stored.modelSettingsVersion !== MODEL_SETTINGS_VERSION;
   const needsSelectionMigration =
@@ -4620,653 +3386,32 @@ function normalizeFrameId(value) {
 
 function addCandidate(tabId, candidate) {
   const state = getState(tabId);
-  const fingerprint = candidateFingerprint(candidate);
+  const safeCandidate = sanitizeCandidateRequestHeaders(candidate);
+  const fingerprint = candidateFingerprint(safeCandidate);
   if (state.candidateFingerprints.has(fingerprint)) {
     state.candidates = state.candidates.map(item => {
       if (candidateFingerprint(item) !== fingerprint) {
         return item;
       }
-      return mergeCandidate(item, candidate);
+      return mergeCandidate(item, safeCandidate);
     });
     return;
   }
   state.candidateFingerprints.add(fingerprint);
-  state.candidates.unshift(candidate);
+  state.candidates.unshift(safeCandidate);
   state.candidates = state.candidates.slice(0, MAX_CANDIDATES_PER_TAB);
 }
 
-function candidateFingerprint(candidate) {
-  const urlKey = canonicalStreamUrl(candidate.url);
-  if (candidate.url && isAsrSameContentCandidate(candidate)) {
-    return `media:${urlKey}`;
-  }
-  return `${candidate.kind}:${urlKey || candidate.url || ""}`;
-}
-
-function mergeCandidate(existing, incoming) {
-  const merged = { ...existing };
-  for (const [key, value] of Object.entries(incoming)) {
-    if (key === "requestHeaders" || key === "responseHeaders") {
-      continue;
-    }
-    if (shouldUseIncomingCandidateField(key, value, merged[key])) {
-      merged[key] = value;
-    }
-  }
+function sanitizeCandidateRequestHeaders(candidate = {}) {
   return {
-    ...merged,
-    requestHeaders: {
-      ...(existing.requestHeaders || {}),
-      ...(incoming.requestHeaders || {})
-    },
-    responseHeaders: {
-      ...(existing.responseHeaders || {}),
-      ...(incoming.responseHeaders || {})
-    },
-    firstSeenAt: existing.firstSeenAt || existing.seenAt,
-    seenAt: incoming.seenAt || Date.now()
+    ...candidate,
+    requestHeaders: sanitizeInternalRequestHeaders(candidate.requestHeaders)
   };
-}
-
-function shouldUseIncomingCandidateField(key, value, existingValue) {
-  if (key === "seenAt") {
-    return true;
-  }
-  if (value === undefined || value === null) {
-    return false;
-  }
-  if (typeof value === "string" && !value.trim()) {
-    return false;
-  }
-  if (typeof value === "number" && !Number.isFinite(value)) {
-    return false;
-  }
-  if (["duration", "size", "videoWidth", "videoHeight", "bandwidth"].includes(key)) {
-    return Number(value) > 0;
-  }
-  if (key === "source") {
-    return candidateSourceRank(value) >= candidateSourceRank(existingValue);
-  }
-  return true;
-}
-
-function candidateSourceRank(source) {
-  return {
-    "bilibili-playurl": 9,
-    "media-element": 8,
-    "json-parse": 7,
-    "xhr-body": 6,
-    response: 5,
-    request: 4,
-    "request-headers": 3,
-    "performance-entry": 2,
-    page: 1
-  }[source] || 0;
-}
-
-function getCandidates(tabId) {
-  return getState(tabId).candidates || [];
 }
 
 function getDisplayCandidates(tabId) {
   const state = getState(tabId);
-  return groupCandidatesForAsr(
-    getCandidates(tabId)
-      .filter(candidate => !isIgnoredMediaUrl(candidate.url))
-      .map(candidate => enrichCandidate(candidate, state))
-  );
-}
-
-function enrichCandidate(candidate, state) {
-  const urlInfo = parseUrlInfo(candidate.url);
-  const responseHeaders = candidate.responseHeaders || {};
-  const contentType = normalizeContentType(candidate.contentType || responseHeaders.type || "");
-  const size = Number(responseHeaders.size || candidate.size || 0) || 0;
-  const inheritDuration = shouldInheritPageDuration(candidate, contentType, urlInfo, state);
-  const inheritDimensions = shouldInheritPageDimensions(candidate, contentType, urlInfo);
-  const pageTitle = pickCandidateDisplayTitle(candidate, state);
-  const pageUrl = pickCandidatePageUrl(candidate, state);
-  const duration = pickFinite(candidate.duration, inheritDuration ? state.context?.duration : null);
-  const videoWidth = Number(candidate.videoWidth || (inheritDimensions ? state.context?.videoWidth : 0) || 0) || null;
-  const videoHeight = Number(candidate.videoHeight || (inheritDimensions ? state.context?.videoHeight : 0) || 0) || null;
-  const resolution = videoWidth && videoHeight ? `${videoWidth}x${videoHeight}` : "";
-  const role = inferMediaRole(candidate, contentType, urlInfo, videoWidth, videoHeight);
-  const quality = inferQuality(candidate.url, videoWidth, videoHeight);
-  if (candidate.bandwidth) {
-    quality.bandwidth = Number(candidate.bandwidth);
-  }
-  if (candidate.qualityLabel) {
-    quality.label = candidate.qualityLabel;
-  }
-  return {
-    ...candidate,
-    pageUrl,
-    title: pageTitle,
-    filename: candidate.filename || urlInfo.filename,
-    origin: urlInfo.origin,
-    contentType,
-    size,
-    duration,
-    videoWidth,
-    videoHeight,
-    resolution,
-    role,
-    quality,
-    asrScore: scoreCandidateForAsr(candidate, role, quality, size, duration)
-  };
-}
-
-function pickCandidateDisplayTitle(candidate, state) {
-  return firstUsefulTitle(
-    state.page?.title,
-    state.context?.title,
-    candidate.title
-  );
-}
-
-function pickCandidatePageUrl(candidate, state) {
-  return (
-    state.page?.url ||
-    state.context?.href ||
-    candidate.pageUrl ||
-    candidate.initiator ||
-    ""
-  );
-}
-
-function firstUsefulTitle(...titles) {
-  for (const title of titles) {
-    const cleaned = normalizeTitle(title);
-    if (cleaned && !isNonVideoFrameTitle(cleaned)) {
-      return cleaned;
-    }
-  }
-  return "";
-}
-
-function normalizeTitle(title = "") {
-  return String(title || "").trim().replace(/\s+/g, " ");
-}
-
-function isNonVideoFrameTitle(title) {
-  return /^(cross origin local storage|about:blank|iframe)$/i.test(title);
-}
-
-function groupCandidatesForAsr(candidates) {
-  const groups = new Map();
-  for (const candidate of candidates) {
-    const key = getSimilarityKey(candidate);
-    if (!groups.has(key)) {
-      groups.set(key, []);
-    }
-    groups.get(key).push(candidate);
-  }
-  return [...groups.values()]
-    .map(buildCandidateGroup)
-    .sort((a, b) => a.asrScore - b.asrScore || (b.seenAt || 0) - (a.seenAt || 0));
-}
-
-function buildCandidateGroup(group) {
-  const variants = [...group].sort((a, b) =>
-    a.asrScore - b.asrScore ||
-    compareCandidateSourceForAsr(a, b) ||
-    compareSizeForAsr(a, b)
-  );
-  const selected = variants[0];
-  const hiddenCount = Math.max(variants.length - 1, 0);
-  const variantStats = summarizeVariants(variants);
-  const mergedHeaders = mergeVariantHeaders(variants);
-  return {
-    ...selected,
-    requestHeaders: mergedHeaders.requestHeaders,
-    responseHeaders: mergedHeaders.responseHeaders,
-    variants: variants.map(summarizeVariant),
-    hiddenCount,
-    variantStats,
-    selectionReason: describeSelection(selected, hiddenCount, variantStats)
-  };
-}
-
-function mergeVariantHeaders(variants) {
-  return variants.reduce(
-    (headers, candidate) => ({
-      requestHeaders: {
-        ...headers.requestHeaders,
-        ...(candidate.requestHeaders || {})
-      },
-      responseHeaders: {
-        ...headers.responseHeaders,
-        ...(candidate.responseHeaders || {})
-      }
-    }),
-    { requestHeaders: {}, responseHeaders: {} }
-  );
-}
-
-function summarizeVariants(variants) {
-  return variants.reduce(
-    (stats, candidate) => {
-      stats.total += 1;
-      stats[candidate.role] = (stats[candidate.role] || 0) + 1;
-      if (candidate.kind === "hls" || candidate.kind === "dash") {
-        stats.manifest += 1;
-      }
-      return stats;
-    },
-    { total: 0, audio: 0, video: 0, media: 0, playlist: 0, manifest: 0 }
-  );
-}
-
-function summarizeVariant(candidate) {
-  return {
-    url: candidate.url,
-    kind: candidate.kind,
-    ext: candidate.ext,
-    role: candidate.role,
-    source: candidate.source,
-    size: candidate.size,
-    contentType: candidate.contentType,
-    quality: candidate.quality,
-    filename: candidate.filename
-  };
-}
-
-function describeSelection(candidate, hiddenCount, stats) {
-  if (!hiddenCount) {
-    return candidate.role === "audio" ? "直接音频轨" : "单一候选";
-  }
-  if (candidate.role === "audio") {
-    return `已折叠 ${hiddenCount} 条相似候选，自动选择适合 ASR 的音频轨`;
-  }
-  if (stats.manifest > 1) {
-    return `已折叠 ${hiddenCount} 条清晰度变体，选择较轻的流用于语音识别`;
-  }
-  return `已折叠 ${hiddenCount} 条相似候选`;
-}
-
-function getSimilarityKey(candidate) {
-  const urlInfo = parseUrlInfo(candidate.url);
-  const pageKey = normalizeText(candidate.pageUrl || candidate.title || candidate.origin);
-  const bilibiliMediaKey = getBilibiliMediaIdentity(urlInfo);
-  if (bilibiliMediaKey) {
-    return `asr:bilibili:${bilibiliMediaKey}`;
-  }
-  const durationKey = candidate.duration ? Math.round(candidate.duration / 5) * 5 : "";
-  if (pageKey && durationKey && isAsrSameContentCandidate(candidate)) {
-    return `asr:page-duration:${pageKey}:${durationKey}`;
-  }
-  const familyPath = canonicalAsrFamilyPath(candidate);
-  if (pageKey && familyPath) {
-    return `asr:${pageKey}:${familyPath}`;
-  }
-  if (pageKey && durationKey) {
-    return `asr:${pageKey}:${durationKey}`;
-  }
-  return `${candidate.kind}:${canonicalStreamUrl(candidate.url)}`;
-}
-
-function isAsrSameContentCandidate(candidate) {
-  return ["audio", "video", "playlist", "media"].includes(candidate.role) ||
-    ["audio", "video", "hls", "dash", "media"].includes(candidate.kind);
-}
-
-function canonicalAsrFamilyPath(candidate) {
-  let path = canonicalMediaFamilyPath(candidate.url);
-  if (candidate.role === "audio" || candidate.kind === "audio") {
-    path = path.replace(/\.(?:aac|flac|m4a|mp3|mp4|oga|ogg|opus|wav|weba)(?=$)/i, ".{audio}");
-  }
-  return path;
-}
-
-function scoreCandidateForAsr(candidate, role, quality, size, duration) {
-  if (role === "audio") {
-    return audioSuitabilityForAsr(candidate, quality, size, duration);
-  }
-  if (candidate.kind === "hls") {
-    return 10 + qualityForAsr(quality) + (candidate.playlistType === "master" ? 5 : 0);
-  }
-  if (candidate.kind === "dash") {
-    return 20 + qualityForAsr(quality);
-  }
-  if (candidate.ext === "m4s") {
-    return 30 + Math.min(size / 1024 / 1024, 60);
-  }
-  if (role === "video") {
-    return 40 + qualityForAsr(quality);
-  }
-  return 50;
-}
-
-function compareSizeForAsr(a, b) {
-  if (a.role === "audio" && b.role === "audio") {
-    return audioSuitabilityForAsr(a, a.quality, a.size, a.duration) -
-      audioSuitabilityForAsr(b, b.quality, b.size, b.duration) ||
-      compareKnownSizeAscending(a, b);
-  }
-  if (a.kind === "hls" && b.kind === "hls") {
-    return qualityForAsr(a.quality) - qualityForAsr(b.quality);
-  }
-  return (a.size || 0) - (b.size || 0);
-}
-
-function compareCandidateSourceForAsr(a, b) {
-  return candidateSourceRank(b.source) - candidateSourceRank(a.source);
-}
-
-function audioSuitabilityForAsr(candidate, quality, size, duration) {
-  const bitrate = inferAudioBitrate(candidate, quality, size, duration);
-  let score = bitrate ? audioBitratePenalty(bitrate) : 2;
-  score += audioContainerPenalty(candidate);
-  if (!bitrate && size) {
-    score += Math.min(size / 1024 / 1024 / 50, 6);
-  }
-  return score;
-}
-
-function inferAudioBitrate(candidate, quality, size, duration) {
-  const bilibili = inferBilibiliAudioBitrate(candidate);
-  if (bilibili) {
-    return bilibili;
-  }
-  const explicit = positiveNumber(candidate.audioBitrate || candidate.bitrate || candidate.averageBitrate || quality?.bandwidth);
-  if (explicit) {
-    return explicit;
-  }
-  const seconds = positiveNumber(duration || candidate.duration);
-  const bytes = positiveNumber(size || candidate.size);
-  if (seconds && bytes) {
-    return (bytes * 8) / seconds;
-  }
-  return 0;
-}
-
-function inferBilibiliAudioBitrate(candidate) {
-  const urlInfo = parseUrlInfo(candidate.url || "");
-  const match = urlInfo.filename.match(/(?:^|-)302(16|32|80)(?=\.m4s$)/i);
-  if (!match) {
-    return 0;
-  }
-  if (match[1] === "16") {
-    return 64_000;
-  }
-  if (match[1] === "32") {
-    return 132_000;
-  }
-  return 192_000;
-}
-
-function audioBitratePenalty(bitrate) {
-  if (bitrate < ASR_AUDIO_ACCEPTABLE_LOW_BPS) {
-    return 8 + (ASR_AUDIO_ACCEPTABLE_LOW_BPS - bitrate) / ASR_AUDIO_ACCEPTABLE_LOW_BPS;
-  }
-  if (bitrate < ASR_AUDIO_IDEAL_MIN_BPS) {
-    return 1 + (ASR_AUDIO_IDEAL_MIN_BPS - bitrate) / ASR_AUDIO_IDEAL_MIN_BPS;
-  }
-  if (bitrate <= ASR_AUDIO_IDEAL_MAX_BPS) {
-    return 0;
-  }
-  if (bitrate <= ASR_AUDIO_ACCEPTABLE_HIGH_BPS) {
-    return 1 + (bitrate - ASR_AUDIO_IDEAL_MAX_BPS) / ASR_AUDIO_IDEAL_MAX_BPS;
-  }
-  return 5 + Math.min((bitrate - ASR_AUDIO_ACCEPTABLE_HIGH_BPS) / ASR_AUDIO_ACCEPTABLE_HIGH_BPS, 12);
-}
-
-function audioContainerPenalty(candidate) {
-  const ext = String(candidate.ext || parseUrlInfo(candidate.url || "").filename.split(".").pop() || "").toLowerCase();
-  if (["flac", "wav", "aiff", "aif", "alac"].includes(ext)) {
-    return 6;
-  }
-  if (["aac", "m4a", "mp3", "mp4", "m4s", "oga", "ogg", "opus", "weba"].includes(ext)) {
-    return 0;
-  }
-  return 1;
-}
-
-function positiveNumber(value) {
-  const number = Number(value);
-  return Number.isFinite(number) && number > 0 ? number : 0;
-}
-
-function compareKnownSizeAscending(a, b) {
-  const sizeA = positiveNumber(a.size);
-  const sizeB = positiveNumber(b.size);
-  if (sizeA && sizeB) {
-    return sizeA - sizeB;
-  }
-  if (sizeA) {
-    return -1;
-  }
-  if (sizeB) {
-    return 1;
-  }
-  return 0;
-}
-
-function qualityForAsr(quality) {
-  if (!quality?.height && !quality?.bandwidth) {
-    return 0;
-  }
-  return (quality.height || 0) / 1000 + (quality.bandwidth || 0) / 10_000_000;
-}
-
-function inferMediaRole(candidate, contentType, urlInfo, videoWidth, videoHeight) {
-  if (candidate.kind === "audio" || contentType.startsWith("audio/") || AUDIO_EXTENSIONS.has(candidate.ext)) {
-    return "audio";
-  }
-  if (isLikelyBilibiliAudio(urlInfo)) {
-    return "audio";
-  }
-  if (candidate.kind === "hls" || candidate.kind === "dash") {
-    return "playlist";
-  }
-  if (contentType.startsWith("video/") || videoWidth || videoHeight) {
-    return "video";
-  }
-  return "media";
-}
-
-function shouldInheritPageDuration(candidate, contentType, urlInfo, state = null) {
-  if (isIgnoredMediaUrl(candidate.url)) {
-    return false;
-  }
-  if (candidate.duration) {
-    return true;
-  }
-  if (candidate.source === "media-element") {
-    return true;
-  }
-  if (candidate.kind === "hls" || candidate.kind === "dash") {
-    return true;
-  }
-  if (candidate.ext === "m4s" || isLikelyBilibiliMedia(urlInfo)) {
-    return true;
-  }
-  if (hasTrustedPageMediaContext(candidate, contentType, urlInfo, state)) {
-    return true;
-  }
-  return false;
-}
-
-function hasTrustedPageMediaContext(candidate, contentType, urlInfo, state) {
-  const duration = Number(state?.context?.duration);
-  if (!state?.context?.hasMedia || !Number.isFinite(duration) || duration <= 0) {
-    return false;
-  }
-  if (!isLikelyDirectPlayableMedia(candidate, contentType, urlInfo)) {
-    return false;
-  }
-  const currentPageUrl = state.page?.url || state.context?.href || "";
-  const initiator = candidate.pageUrl || candidate.initiator || "";
-  if (!initiator || !currentPageUrl) {
-    return true;
-  }
-  return normalizePageUrlForGrouping(initiator) === normalizePageUrlForGrouping(currentPageUrl) ||
-    (initiator.startsWith("http") && currentPageUrl.startsWith("http"));
-}
-
-function isLikelyDirectPlayableMedia(candidate, contentType, urlInfo) {
-  if (contentType.startsWith("audio/") || contentType.startsWith("video/")) {
-    return true;
-  }
-  return AUDIO_EXTENSIONS.has(candidate.ext) || ["mp4", "webm"].includes(candidate.ext) ||
-    /\.(?:m4a|mp3|aac|opus|oga|ogg|weba|mp4|webm)$/i.test(urlInfo.pathname || "");
-}
-
-function normalizePageUrlForGrouping(rawUrl) {
-  try {
-    const url = new URL(rawUrl);
-    url.hash = "";
-    return `${url.origin}${url.pathname}`;
-  } catch {
-    return String(rawUrl || "");
-  }
-}
-
-function shouldInheritPageDimensions(candidate, contentType, urlInfo) {
-  if (isIgnoredMediaUrl(candidate.url)) {
-    return false;
-  }
-  if (candidate.videoWidth || candidate.videoHeight) {
-    return true;
-  }
-  if (candidate.kind === "hls" || candidate.kind === "dash") {
-    return true;
-  }
-  if (contentType.startsWith("video/") && !isLikelyBilibiliAudio(urlInfo)) {
-    return true;
-  }
-  return candidate.source === "media-element" && !contentType.startsWith("audio/");
-}
-
-function isLikelyBilibiliAudio(urlInfo) {
-  return /(?:^|-)302(?:16|32|80)(?=\.m4s$)/i.test(urlInfo.filename) || /\/audio\//i.test(urlInfo.pathname);
-}
-
-function isLikelyBilibiliMedia(urlInfo) {
-  return (
-    isLikelyBilibiliAudio(urlInfo) ||
-    /(?:^|\.)bilibili(?:video)?\.com$/i.test(urlInfo.hostname) ||
-    /(?:^|\.)bilivideo\.(?:com|cn)$/i.test(urlInfo.hostname) ||
-    /\/upgcxcode\//i.test(urlInfo.pathname)
-  );
-}
-
-function getBilibiliMediaIdentity(urlInfo) {
-  if (!isLikelyBilibiliMedia(urlInfo)) {
-    return "";
-  }
-  const filenameMatch = urlInfo.filename.match(/^(\d+-\d+)-\d+\.(?:m4s|mp4)$/i);
-  if (filenameMatch) {
-    return filenameMatch[1];
-  }
-  const pathMatch = urlInfo.pathname.match(/\/upgcxcode\/(?:[^/]+\/){0,4}(\d+)(?:\/|$)/i);
-  if (pathMatch) {
-    return pathMatch[1];
-  }
-  return canonicalMediaFamilyPath(urlInfo.pathname || "");
-}
-
-function inferQuality(rawUrl, videoWidth, videoHeight) {
-  const quality = {
-    width: videoWidth || null,
-    height: videoHeight || null,
-    label: videoWidth && videoHeight ? `${videoHeight}p` : ""
-  };
-  try {
-    const url = new URL(rawUrl);
-    const text = `${url.pathname} ${url.search}`.toLowerCase();
-    const heightMatch = text.match(/(?:^|[^\d])(\d{3,4})p(?:[^\d]|$)/);
-    if (heightMatch) {
-      quality.height = Number(heightMatch[1]);
-      quality.label = `${quality.height}p`;
-    }
-    const resolutionMatch = text.match(/(\d{3,5})[x_](\d{3,5})/);
-    if (resolutionMatch) {
-      quality.width = Number(resolutionMatch[1]);
-      quality.height = Number(resolutionMatch[2]);
-      quality.label = `${quality.height}p`;
-    }
-    const bandwidthMatch = text.match(/(?:bandwidth|bw|br)=(\d+)/);
-    if (bandwidthMatch) {
-      quality.bandwidth = Number(bandwidthMatch[1]);
-    }
-  } catch {
-    return quality;
-  }
-  return quality;
-}
-
-function parseUrlInfo(rawUrl) {
-  try {
-    const url = new URL(rawUrl);
-    const filename = decodeURIComponent(url.pathname.split("/").pop() || "");
-    return {
-      hostname: url.hostname,
-      origin: url.origin,
-      pathname: url.pathname,
-      filename
-    };
-  } catch {
-    return {
-      hostname: "",
-      origin: "",
-      pathname: "",
-      filename: rawUrl || ""
-    };
-  }
-}
-
-function canonicalStreamUrl(rawUrl) {
-  try {
-    const url = new URL(rawUrl);
-    return `${url.host}${canonicalPathname(url.pathname)}`;
-  } catch {
-    return rawUrl || "";
-  }
-}
-
-function canonicalStreamPath(rawUrl) {
-  try {
-    return canonicalPathname(new URL(rawUrl).pathname);
-  } catch {
-    return rawUrl || "";
-  }
-}
-
-function canonicalMediaFamilyPath(rawUrl) {
-  const path = canonicalStreamPath(rawUrl);
-  return path
-    .replace(/\/\d{3,5}x\d{3,5}(?=\/)/g, "/{resolution}")
-    .replace(/\/(?:\d{3,4}p|[1-9]\d{1,3}k|[48]k)(?=\/)/gi, "/{quality}")
-    .replace(/(?:^|[-_/])\d{3,4}p(?=[-_/.]|$)/gi, "-{quality}")
-    .replace(/(?:^|[-_/])(?:[1-9]\d{1,3}k|[48]k)(?=[-_/.])/gi, "-{quality}");
-}
-
-function canonicalPathname(pathname) {
-  return pathname
-    .replace(/\/\d{3,5}x\d{3,5}(?=\/)/g, "/{resolution}")
-    .replace(/\/(?:\d{3,4}p|[1-9]\d{1,3}k|[48]k)(?=\/)/gi, "/{quality}")
-    .replace(/(?:^|[-_/])\d{3,4}p(?=[-_/.]|$)/gi, "-{quality}")
-    .replace(/(?:^|[-_/])(?:[1-9]\d{1,3}k|[48]k)(?=[-_/.])/gi, "-{quality}")
-    .replace(/-\d{5,6}(?=\.m4s$)/i, "-{track}");
-}
-
-function normalizeText(value = "") {
-  return String(value).trim().toLowerCase().replace(/\s+/g, " ");
-}
-
-function normalizeContentType(value = "") {
-  return String(value).split(";")[0].trim().toLowerCase();
-}
-
-function pickFinite(...values) {
-  for (const value of values) {
-    const number = Number(value);
-    if (Number.isFinite(number) && number > 0) {
-      return number;
-    }
-  }
-  return null;
+  return getGroupedCandidatesForState(state).map(stripCandidateRequestHeaders);
 }
 
 function setTabStatus(tabId, patch) {
@@ -5289,144 +3434,4 @@ function getState(tabId) {
     });
   }
   return tabState.get(tabId);
-}
-
-function classifyUrl(rawUrl) {
-  let url;
-  try {
-    url = new URL(rawUrl);
-  } catch {
-    return null;
-  }
-  if (isIgnoredMediaUrl(url.href)) {
-    return null;
-  }
-  const ext = url.pathname.split(".").pop()?.toLowerCase() || "";
-  const mime = normalizeContentType(url.searchParams.get("mime") || url.searchParams.get("mimeType") || "");
-  if (mime.startsWith("audio/")) {
-    return { kind: "audio", ext: extFromMime(mime, ext) };
-  }
-  if (mime.startsWith("video/")) {
-    return { kind: "media", ext: extFromMime(mime, ext) };
-  }
-  if (mime.includes("mpegurl")) {
-    return { kind: "hls", ext: "m3u8" };
-  }
-  if (mime.includes("dash+xml")) {
-    return { kind: "dash", ext: "mpd" };
-  }
-  if (isYoutubePlaybackUrl(url)) {
-    return { kind: "media", ext: ext || "" };
-  }
-  if (!MEDIA_EXTENSIONS.has(ext)) {
-    return null;
-  }
-  if (AUDIO_EXTENSIONS.has(ext)) {
-    return { kind: "audio", ext };
-  }
-  if (MANIFEST_EXTENSIONS.has(ext)) {
-    return { kind: ext === "mpd" ? "dash" : "hls", ext };
-  }
-  return { kind: "media", ext };
-}
-
-function inferKindFromContentType(contentType) {
-  const type = contentType.toLowerCase();
-  if (type.startsWith("audio/")) {
-    return "audio";
-  }
-  if (type.includes("dash+xml")) {
-    return "dash";
-  }
-  if (type.includes("mpegurl")) {
-    return "hls";
-  }
-  return "media";
-}
-
-function isMediaContentType(contentType) {
-  const normalized = contentType.toLowerCase();
-  return MEDIA_CONTENT_TYPES.some(type => normalized.includes(type));
-}
-
-function isIgnoredMediaUrl(rawUrl) {
-  try {
-    const url = new URL(rawUrl);
-    const pathname = url.pathname.toLowerCase();
-    if (url.hostname === "cdn.plyr.io" && pathname === "/static/blank.mp4") {
-      return true;
-    }
-    if (isYoutubePlaceholderAudio(url)) {
-      return true;
-    }
-    return false;
-  } catch {
-    return false;
-  }
-}
-
-function isYoutubePlaceholderAudio(url) {
-  const hostname = url.hostname.toLowerCase();
-  const pathname = url.pathname.toLowerCase();
-  return hostname.endsWith("youtube.com") && pathname === "/s/search/audio/no_input.mp3";
-}
-
-function isYoutubePlaybackUrl(url) {
-  return /(^|\.)googlevideo\.com$/i.test(url.hostname) && /\/videoplayback$/i.test(url.pathname);
-}
-
-function extFromMime(mime, fallback = "") {
-  if (mime.includes("mp4")) {
-    return "mp4";
-  }
-  if (mime.includes("webm")) {
-    return "webm";
-  }
-  if (mime.includes("mp3") || mime.includes("mpeg")) {
-    return "mp3";
-  }
-  if (mime.includes("ogg")) {
-    return "ogg";
-  }
-  return fallback || "";
-}
-
-function isGenericBinaryContentType(contentType) {
-  return normalizeContentType(contentType) === "application/octet-stream";
-}
-
-function getHeader(headers = [], name) {
-  return headers.find(header => header.name.toLowerCase() === name)?.value || "";
-}
-
-function compactRequestHeaders(headers = []) {
-  const keep = new Set(["authorization", "cookie", "origin", "referer", "user-agent"]);
-  const output = {};
-  for (const header of headers) {
-    const name = header.name.toLowerCase();
-    if (keep.has(name)) {
-      output[name] = header.value;
-    }
-  }
-  return output;
-}
-
-function compactResponseHeaders(headers = []) {
-  const output = {};
-  for (const header of headers || []) {
-    const name = header.name.toLowerCase();
-    if (name === "content-length") {
-      output.size = Number(header.value) || undefined;
-    } else if (name === "content-type") {
-      output.type = header.value.split(";")[0].toLowerCase();
-    } else if (name === "content-disposition") {
-      output.attachment = header.value;
-    } else if (name === "content-range") {
-      const size = header.value.split("/")[1];
-      if (size && size !== "*") {
-        output.size = Number(size) || output.size;
-      }
-    }
-  }
-  return output;
 }

@@ -48,6 +48,22 @@
   }
 
   function handleRuntimeMessage(message, _sender, sendResponse) {
+    if (!isActiveOwner()) {
+      if (message?.type === MESSAGE.DETACH_PRELOAD_VTT) {
+        detachActiveVttController();
+        clearCaption();
+        sendResponse({ ok: false, stale: true });
+        return false;
+      }
+      if (
+        message?.type === MESSAGE.ATTACH_VTT ||
+        message?.type === MESSAGE.GET_VIDEO_STATE ||
+        message?.type === MESSAGE.SEEK_MEDIA
+      ) {
+        sendResponse({ ok: false, stale: true, state: null });
+        return false;
+      }
+    }
     if (message?.type === MESSAGE.DETACH_PRELOAD_VTT) {
       detachActiveVttController();
       clearCaption();
@@ -550,7 +566,8 @@
       lastCue: null,
       pendingSeekCue: null,
       pendingSeekUntil: 0,
-      signature: String(signature || "")
+      signature: String(signature || ""),
+      mediaSignature: ""
     };
     const updateCaption = () => {
       const media = bindControllerToMedia(controller);
@@ -566,7 +583,7 @@
         renderControllerCue(controller, cue);
       } else if (hasPendingSeekCue) {
         renderControllerCue(controller, controller.pendingSeekCue);
-      } else if (media.seeking && controller.lastCue) {
+      } else if (media.seeking && controller.lastCue && findCueAt([controller.lastCue], media.currentTime)) {
         renderControllerCue(controller, controller.lastCue);
       } else {
         controller.lastCue = null;
@@ -618,6 +635,12 @@
     if (!next) {
       return null;
     }
+    const nextSignature = mediaElementSignature(next);
+    if (controller.mediaSignature && nextSignature && controller.mediaSignature !== nextSignature) {
+      detachActiveVttController();
+      clearCaption();
+      return null;
+    }
     if (next === controller.media) {
       return controller.media;
     }
@@ -625,8 +648,19 @@
       controller.events.forEach(event => controller.media.removeEventListener(event, controller.updateCaption));
     }
     controller.media = next;
+    if (nextSignature) {
+      controller.mediaSignature = nextSignature;
+    }
     controller.events.forEach(event => next.addEventListener(event, controller.updateCaption));
     return next;
+  }
+
+  function mediaElementSignature(media) {
+    const source = String(media?.currentSrc || media?.src || "").trim();
+    if (source) {
+      return `src:${source}`;
+    }
+    return "";
   }
 
   function detachActiveVttController() {
@@ -710,6 +744,7 @@
       paused: media.paused,
       playbackRate: media.playbackRate,
       subtitleSignature: activeVttController?.signature || "",
+      mediaSignature: activeVttController?.mediaSignature || mediaElementSignature(media),
       subtitleCueCount: activeVttController?.cues?.length || 0
     };
   }

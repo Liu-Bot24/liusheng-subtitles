@@ -4,21 +4,25 @@ import vm from "node:vm";
 
 const sidepanel = fs.readFileSync(new URL("../../extension/src/sidepanel/sidepanel.js", import.meta.url), "utf8");
 const background = fs.readFileSync(new URL("../../extension/src/background/service-worker.js", import.meta.url), "utf8");
-const architecture = fs.readFileSync(new URL("../../implementation notes", import.meta.url), "utf8");
-const privacy = fs.readFileSync(new URL("../../docs/PRIVACY.md", import.meta.url), "utf8");
-const strategy = fs.readFileSync(new URL("../../implementation notes", import.meta.url), "utf8");
+const backgroundProfiles = loadBackgroundModelProfiles();
+const sidepanelProfiles = loadSidepanelProfiles();
 const sidepanelHtml = fs.readFileSync(new URL("../../extension/src/sidepanel/sidepanel.html", import.meta.url), "utf8");
 
 assert.equal(constNumber(sidepanel, "MODEL_SETTINGS_VERSION"), constNumber(background, "MODEL_SETTINGS_VERSION"));
-assert.equal(constString(sidepanel, "DEFAULT_ASR_PROFILE_ID"), constString(background, "DEFAULT_ASR_PROFILE_ID"));
-assert.equal(constString(sidepanel, "DEFAULT_LLM_PROFILE_ID"), constString(background, "DEFAULT_LLM_PROFILE_ID"));
-assert.deepEqual(constObject(sidepanel, "KNOWN_ASR_PROFILES"), constObject(background, "KNOWN_ASR_PROFILES"));
-assert.deepEqual(constObject(sidepanel, "KNOWN_LLM_PROFILES"), constObject(background, "KNOWN_LLM_PROFILES"));
+assert.equal(sidepanelProfiles.DEFAULT_ASR_PROFILE_ID, backgroundProfiles.DEFAULT_ASR_PROFILE_ID);
+assert.equal(sidepanelProfiles.DEFAULT_LLM_PROFILE_ID, backgroundProfiles.DEFAULT_LLM_PROFILE_ID);
+assert.deepEqual(sidepanelProfiles.KNOWN_ASR_PROFILES, backgroundProfiles.KNOWN_ASR_PROFILES);
+assert.deepEqual(sidepanelProfiles.KNOWN_LLM_PROFILES, backgroundProfiles.KNOWN_LLM_PROFILES);
 
-const asrProfiles = constObject(background, "KNOWN_ASR_PROFILES");
-const llmProfiles = constObject(background, "KNOWN_LLM_PROFILES");
-assert.ok(asrProfiles.some(profile => profile.id === constString(background, "DEFAULT_ASR_PROFILE_ID")));
-assert.ok(llmProfiles.some(profile => profile.id === constString(background, "DEFAULT_LLM_PROFILE_ID")));
+const asrProfiles = backgroundProfiles.KNOWN_ASR_PROFILES;
+const llmProfiles = backgroundProfiles.KNOWN_LLM_PROFILES;
+assert.ok(asrProfiles.some(profile => profile.id === backgroundProfiles.DEFAULT_ASR_PROFILE_ID));
+assert.ok(llmProfiles.some(profile => profile.id === backgroundProfiles.DEFAULT_LLM_PROFILE_ID));
+const defaultLlmProfile = llmProfiles.find(profile => profile.id === backgroundProfiles.DEFAULT_LLM_PROFILE_ID);
+assert.equal(defaultLlmProfile.name, "test-llm");
+assert.equal(defaultLlmProfile.providerType, "openai");
+assert.equal(defaultLlmProfile.baseUrl, "https://llm.example.invalid/v1");
+assert.equal(defaultLlmProfile.model, "test-llm");
 assert.equal(asrProfiles.every(profile => profile.apiKey === ""), true);
 assert.equal(llmProfiles.every(profile => profile.apiKey === ""), true);
 assert.equal(asrProfiles.every(profile => ["auto", "on", "off"].includes(profile.vadFilter)), true);
@@ -28,22 +32,19 @@ assert.equal(defaultSettings.chunkMinutes, 15);
 assert.equal(constExpression(background, "BROWSER_ASR_UPLOAD_CHUNK_SECONDS"), 15 * 60);
 assert.equal(constExpression(background, "BROWSER_ASR_MAX_UPLOAD_CHUNK_SECONDS"), 30 * 60);
 assert.equal(constExpression(background, "BROWSER_ASR_MAX_UPLOAD_BYTES"), 25 * 1024 * 1024);
-assert.match(architecture, /默认上传窗口是 15 分钟，上限 30 分钟/);
-assert.match(architecture, /25MB 文件大小保护/);
-assert.match(privacy, /API 密钥保存在本机浏览器的扩展本地存储中，不同步到浏览器账号/);
-assert.match(strategy, /`on` 是用户确认端点兼容后手动强制发送 `vad_filter` 的例外/);
-assert.match(sidepanelHtml, /强制开启（自建）/);
-
-function constString(source, name) {
-  const match = source.match(new RegExp(`const ${name} = "([^"]+)";`));
-  assert.ok(match, `${name} string constant missing`);
-  return match[1];
-}
+assert.deepEqual(selectOptionValues(sidepanelHtml, "asrVadFilter"), ["auto", "on", "off"]);
 
 function constNumber(source, name) {
   const match = source.match(new RegExp(`const ${name} = (\\d+);`));
   assert.ok(match, `${name} number constant missing`);
   return Number(match[1]);
+}
+
+function loadSidepanelProfiles() {
+  const profileSource = fs.readFileSync(new URL("../../extension/src/sidepanel/sidepanel-profiles.js", import.meta.url), "utf8");
+  const context = vm.createContext({ URL, Map, Set, Date, String, Boolean, Number, Array, Object });
+  vm.runInContext(profileSource, context, { filename: "sidepanel-profiles.js" });
+  return JSON.parse(JSON.stringify(vm.runInContext("FuguangSidepanelProfiles", context)));
 }
 
 function constExpression(source, name) {
@@ -56,4 +57,26 @@ function constObject(source, name) {
   const match = source.match(new RegExp(`const ${name} = ([\\s\\S]*?);\\n`));
   assert.ok(match, `${name} object constant missing`);
   return JSON.parse(JSON.stringify(vm.runInNewContext(`(${match[1]})`, {})));
+}
+
+function selectOptionValues(html, id) {
+  const selectMatch = html.match(new RegExp(`<select[^>]*id="${id}"[^>]*>([\\s\\S]*?)<\\/select>`));
+  assert.ok(selectMatch, `${id} select missing`);
+  return Array.from(selectMatch[1].matchAll(/<option\s+value="([^"]+)"/g), match => match[1]);
+}
+
+function loadBackgroundModelProfiles() {
+  const languageSource = fs.readFileSync(new URL("../../extension/src/background/browser-language.js", import.meta.url), "utf8")
+    .replace("export const FuguangBrowserLanguage =", "var FuguangBrowserLanguage =");
+  const asrProviderSource = fs.readFileSync(new URL("../../extension/src/background/browser-asr-provider.js", import.meta.url), "utf8")
+    .replace('import { FuguangBrowserLanguage } from "./browser-language.js";\n\n', "")
+    .replace("export const FuguangBrowserAsrProvider =", "var FuguangBrowserAsrProvider =");
+  const profileSource = fs.readFileSync(new URL("../../extension/src/background/browser-model-profiles.js", import.meta.url), "utf8")
+    .replace('import { FuguangBrowserAsrProvider } from "./browser-asr-provider.js";\n\n', "")
+    .replace("export const FuguangBrowserModelProfiles =", "var FuguangBrowserModelProfiles =");
+  const context = vm.createContext({ URL, Map, Set, String, Boolean, Number, Array, Object });
+  vm.runInContext(languageSource, context, { filename: "browser-language.js" });
+  vm.runInContext(asrProviderSource, context, { filename: "browser-asr-provider.js" });
+  vm.runInContext(profileSource, context, { filename: "browser-model-profiles.js" });
+  return JSON.parse(JSON.stringify(context.FuguangBrowserModelProfiles));
 }

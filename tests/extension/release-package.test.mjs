@@ -16,11 +16,18 @@ try {
   } else {
     childProcess.execFileSync("zip", ["-qr", zipPath, "."], { cwd: extensionRoot });
   }
-  const entries = childProcess.execFileSync("unzip", ["-Z1", zipPath], { encoding: "utf8" })
-    .split("\n")
-    .map(entry => entry.trim())
-    .filter(Boolean)
-    .sort();
+  verifyReleaseZip(zipPath);
+  verifyZipOnlyExtraEntryIsRejected();
+} finally {
+  if (tmpDir) {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
+
+function verifyReleaseZip(targetZipPath) {
+  const entries = zipEntries(targetZipPath);
+  const fileEntries = entries.filter(entry => !entry.endsWith("/")).sort();
+  const expectedFiles = listExtensionFiles(extensionRoot).sort();
 
   assert.ok(entries.includes("manifest.json"));
   assert.ok(entries.includes("src/background/service-worker.js"));
@@ -39,9 +46,82 @@ try {
     assert.equal(entry.endsWith(".tmp"), false, `tmp file packaged: ${entry}`);
     assert.equal(entry.endsWith(".zip"), false, `zip file packaged: ${entry}`);
     assert.equal(entry.endsWith(".DS_Store"), false, `OS noise packaged: ${entry}`);
+    assert.equal(isAllowedReleaseEntry(entry), true, `unexpected release zip entry: ${entry}`);
   }
-} finally {
-  if (tmpDir) {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+
+  assert.deepEqual(fileEntries, expectedFiles, releaseFileListDiffMessage(expectedFiles, fileEntries));
+
+  for (const entry of expectedFiles) {
+    const packaged = childProcess.execFileSync("unzip", ["-p", targetZipPath, entry], { maxBuffer: 64 * 1024 * 1024 });
+    const current = fs.readFileSync(path.join(extensionRoot, entry));
+    assert.deepEqual(packaged, current, `release zip content differs from current extension file: ${entry}`);
   }
+}
+
+function zipEntries(targetZipPath) {
+  return childProcess.execFileSync("unzip", ["-Z1", targetZipPath], { encoding: "utf8" })
+    .split("\n")
+    .map(entry => entry.trim())
+    .filter(Boolean)
+    .sort();
+}
+
+function listExtensionFiles(root) {
+  const files = [];
+  function walk(dir, prefix = "") {
+    const entries = fs.readdirSync(dir, { withFileTypes: true })
+      .sort((left, right) => left.name.localeCompare(right.name));
+    for (const entry of entries) {
+      const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name;
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(fullPath, relativePath);
+      } else if (entry.isFile()) {
+        files.push(relativePath);
+      }
+    }
+  }
+  walk(root);
+  return files;
+}
+
+function releaseFileListDiffMessage(expectedFiles, actualFiles) {
+  const expected = new Set(expectedFiles);
+  const actual = new Set(actualFiles);
+  const extra = actualFiles.filter(entry => !expected.has(entry));
+  const missing = expectedFiles.filter(entry => !actual.has(entry));
+  return [
+    "release zip file list must match current extension",
+    `unexpected release zip files: ${extra.join(", ") || "(none)"}`,
+    `missing release zip files: ${missing.join(", ") || "(none)"}`
+  ].join("\n");
+}
+
+function verifyZipOnlyExtraEntryIsRejected() {
+  const badZipTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fuguang-release-bad-"));
+  try {
+    const badZipPath = path.join(badZipTmpDir, "bad-extension.zip");
+    childProcess.execFileSync("zip", ["-qr", badZipPath, "."], { cwd: extensionRoot });
+    const injectRoot = path.join(badZipTmpDir, "inject");
+    const injectedFile = path.join(injectRoot, "src", "unused-helper.js");
+    fs.mkdirSync(path.dirname(injectedFile), { recursive: true });
+    fs.writeFileSync(injectedFile, "console.log('unused helper');\n");
+    childProcess.execFileSync("zip", ["-q", badZipPath, "src/unused-helper.js"], { cwd: injectRoot });
+    assert.throws(
+      () => verifyReleaseZip(badZipPath),
+      /unexpected release zip files: src\/unused-helper\.js/
+    );
+  } finally {
+    fs.rmSync(badZipTmpDir, { recursive: true, force: true });
+  }
+}
+
+function isAllowedReleaseEntry(entry) {
+  return entry === "manifest.json"
+    || entry === "assets/"
+    || entry.startsWith("assets/")
+    || entry === "src/"
+    || entry.startsWith("src/")
+    || entry === "web-ffmpeg/"
+    || entry.startsWith("web-ffmpeg/");
 }

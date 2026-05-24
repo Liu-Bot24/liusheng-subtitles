@@ -27,6 +27,9 @@ for (const file of syntaxFiles) {
 run("node", ["tests/smoke/local-e2e-smoke.mjs"], {
   env: { ...process.env, OPENAPI_CALLS: "0" }
 });
+run("node", ["tests/smoke/local-hls-e2e-smoke.mjs"], {
+  env: { ...process.env, OPENAPI_CALLS: "0" }
+});
 
 if (process.env.FUGUANG_RELEASE_ZIP) {
   run("node", ["tests/extension/release-package.test.mjs"], {
