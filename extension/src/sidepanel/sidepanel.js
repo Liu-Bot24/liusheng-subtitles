@@ -11,6 +11,7 @@ const MESSAGE = {
   CHECK_PRELOAD_JOB: "FUGUANG_CHECK_PRELOAD_JOB",
   GET_PRELOAD_VTT: "FUGUANG_GET_PRELOAD_VTT",
   GET_PRELOAD_TRANSCRIPT: "FUGUANG_GET_PRELOAD_TRANSCRIPT",
+  GET_PRELOAD_DIAGNOSTICS: "FUGUANG_GET_PRELOAD_DIAGNOSTICS",
   GET_VIDEO_STATE: "FUGUANG_GET_VIDEO_STATE",
   ATTACH_VTT_TEXT: "FUGUANG_ATTACH_VTT_TEXT",
   DETACH_PRELOAD_VTT: "FUGUANG_DETACH_PRELOAD_VTT",
@@ -87,6 +88,7 @@ const elements = {
   subtitleOverlayToggle: document.querySelector("#subtitleOverlayToggle"),
   subtitleModeToggle: document.querySelector("#subtitleModeToggle"),
   exportSubtitle: document.querySelector("#exportSubtitle"),
+  exportDiagnostics: document.querySelector("#exportDiagnostics"),
   importSubtitle: document.querySelector("#importSubtitle"),
   clearSubtitleCache: document.querySelector("#clearSubtitleCache"),
   subtitleImportFile: document.querySelector("#subtitleImportFile"),
@@ -182,6 +184,7 @@ elements.refreshCandidates.addEventListener("click", () => refreshCandidates());
 elements.subtitleOverlayToggle.addEventListener("click", () => toggleSubtitleOverlay());
 elements.subtitleModeToggle.addEventListener("click", () => toggleSubtitleMode());
 elements.exportSubtitle.addEventListener("click", () => exportCurrentSubtitle());
+elements.exportDiagnostics.addEventListener("click", () => exportCurrentDiagnostics());
 elements.importSubtitle.addEventListener("click", () => elements.subtitleImportFile.click());
 elements.clearSubtitleCache.addEventListener("click", () => clearCurrentSubtitleCache());
 elements.subtitleImportFile.addEventListener("change", () => importSubtitleFile());
@@ -1687,6 +1690,32 @@ async function exportCurrentSubtitle() {
   setMessage("SRT 字幕已导出。");
 }
 
+async function exportCurrentDiagnostics() {
+  const jobId = currentJobId || renderedSubtitleJobId;
+  if (!jobId) {
+    setMessage("还没有可导出的诊断任务。");
+    return;
+  }
+  const response = await send({ type: MESSAGE.GET_PRELOAD_DIAGNOSTICS, jobId });
+  if (!response.ok || !response.diagnostics) {
+    setMessage(response.error || "ASR 诊断导出失败。");
+    return;
+  }
+  const baseName = `${safeFilename(elements.pageTitle.textContent || "fuguang-subtitle")}-asr-diagnostics`;
+  const audioFiles = normalizeDiagnosticAudioFiles(response.audioFiles);
+  if (audioFiles.length) {
+    const archive = buildDiagnosticsTarArchive(response.diagnostics, audioFiles);
+    const blob = new Blob([archive], { type: "application/x-tar" });
+    await downloadBlob(blob, `${baseName}.tar`);
+    setMessage(`ASR 诊断已导出（含 ${audioFiles.length} 个音频分段）。`);
+    return;
+  }
+  const json = JSON.stringify(response.diagnostics, null, 2);
+  const blob = new Blob([json], { type: "application/json;charset=utf-8" });
+  await downloadBlob(blob, `${baseName}.json`);
+  setMessage("ASR 诊断已导出。");
+}
+
 function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
@@ -1694,6 +1723,128 @@ function downloadBlob(blob, filename) {
   anchor.download = filename;
   anchor.click();
   URL.revokeObjectURL(url);
+}
+
+function normalizeDiagnosticAudioFiles(files) {
+  if (!Array.isArray(files)) {
+    return [];
+  }
+  return files
+    .map((file, index) => {
+      const bytes = diagnosticFileBytes(file?.buffer) || diagnosticBase64FileBytes(file?.base64);
+      if (!bytes?.byteLength) {
+        return null;
+      }
+      return {
+        path: safeTarPath(file.path || `audio/chunk-${String(index).padStart(4, "0")}.mp3`),
+        bytes
+      };
+    })
+    .filter(Boolean);
+}
+
+function diagnosticFileBytes(buffer) {
+  if (buffer instanceof ArrayBuffer) {
+    return new Uint8Array(buffer);
+  }
+  if (ArrayBuffer.isView(buffer)) {
+    return new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+  }
+  return null;
+}
+
+function diagnosticBase64FileBytes(value) {
+  const text = String(value || "").replace(/\s+/g, "");
+  if (!text) {
+    return null;
+  }
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  const clean = text.replace(/=+$/, "");
+  const bytes = [];
+  for (let index = 0; index < clean.length; index += 4) {
+    const first = alphabet.indexOf(clean[index]);
+    const second = alphabet.indexOf(clean[index + 1]);
+    const third = alphabet.indexOf(clean[index + 2]);
+    const fourth = alphabet.indexOf(clean[index + 3]);
+    if (first < 0 || second < 0) {
+      return null;
+    }
+    const triplet = (first << 18)
+      | (second << 12)
+      | ((third >= 0 ? third : 0) << 6)
+      | (fourth >= 0 ? fourth : 0);
+    bytes.push((triplet >> 16) & 255);
+    if (third >= 0 && index + 2 < clean.length) {
+      bytes.push((triplet >> 8) & 255);
+    }
+    if (fourth >= 0 && index + 3 < clean.length) {
+      bytes.push(triplet & 255);
+    }
+  }
+  return new Uint8Array(bytes);
+}
+
+function buildDiagnosticsTarArchive(diagnostics, audioFiles) {
+  const encoder = new TextEncoder();
+  const jsonBytes = encoder.encode(JSON.stringify(diagnostics, null, 2));
+  const entries = [
+    { path: "diagnostics.json", bytes: jsonBytes },
+    ...audioFiles
+  ];
+  const totalBytes = entries.reduce((sum, entry) => sum + 512 + tarPaddedSize(entry.bytes.byteLength), 1024);
+  const archive = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const entry of entries) {
+    writeTarHeader(archive, offset, entry.path, entry.bytes.byteLength);
+    offset += 512;
+    archive.set(entry.bytes, offset);
+    offset += tarPaddedSize(entry.bytes.byteLength);
+  }
+  return archive;
+}
+
+function tarPaddedSize(size) {
+  return Math.ceil(Math.max(0, Number(size) || 0) / 512) * 512;
+}
+
+function writeTarHeader(archive, offset, path, size) {
+  const header = archive.subarray(offset, offset + 512);
+  writeTarString(header, 0, 100, safeTarPath(path));
+  writeTarOctal(header, 100, 8, 0o644);
+  writeTarOctal(header, 108, 8, 0);
+  writeTarOctal(header, 116, 8, 0);
+  writeTarOctal(header, 124, 12, size);
+  writeTarOctal(header, 136, 12, Math.floor(Date.now() / 1000));
+  for (let index = 148; index < 156; index += 1) {
+    header[index] = 32;
+  }
+  header[156] = 48;
+  writeTarString(header, 257, 6, "ustar");
+  writeTarString(header, 263, 2, "00");
+  const checksum = header.reduce((sum, byte) => sum + byte, 0);
+  writeTarOctal(header, 148, 8, checksum);
+}
+
+function writeTarString(header, offset, length, value) {
+  const bytes = new TextEncoder().encode(String(value || ""));
+  header.set(bytes.slice(0, length), offset);
+}
+
+function writeTarOctal(header, offset, length, value) {
+  const text = Math.max(0, Number(value) || 0)
+    .toString(8)
+    .padStart(length - 1, "0")
+    .slice(-(length - 1));
+  writeTarString(header, offset, length - 1, text);
+  header[offset + length - 1] = 0;
+}
+
+function safeTarPath(value = "") {
+  return String(value || "")
+    .replace(/^\/+/, "")
+    .replace(/\.\.(?:\/|$)/g, "")
+    .replace(/[\\\u0000-\u001f]+/g, "_")
+    .slice(0, 100) || "diagnostics.bin";
 }
 
 async function importSubtitleFile() {

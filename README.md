@@ -18,12 +18,13 @@
 3. 在“设置”里配置 ASR 和翻译模型档案。
 4. 在“任务与字幕”里选择媒体源；必要时指定原音频语言，再开始预加载。
 5. 生成后的字幕会显示在侧边栏，并可开启页面浮层字幕。
+6. 真实长视频识别异常时，可在字幕区域导出 ASR 诊断归档；归档内包含 `diagnostics.json` 和可离线对照的音频 chunk，用于核对 VAD 区间、原始 ASR 返回和后处理结果。
 
 ASR 和翻译接口可以是公网服务，也可以是局域网内的 OpenAI 兼容接口。插件只按用户填写的 URL 发起请求，不区分服务部署在公网还是局域网。
 
 原音频语言默认自动识别。用户在任务入口指定语言时，插件会把规范化后的语言码作为 ASR 请求的 `language` 字段发送给用户配置的 ASR 接口，用于减少自动语言检测误判。
 
-ASR 档案包含 VAD 过滤策略：默认“自动”。标准 OpenAI、Groq、xAI 请求不会被附加非标准参数；自建 OpenAI-compatible 接口只会在 `openapi.json` 确认支持 `vad_filter` 后自动开启。自定义兼容接口可在确认兼容后手动强制开启或关闭。浏览器内 FFmpeg 还会记录语音区间，用于跳过无语音分段、按长静音语音边界拆开 ASR 上传窗口，并过滤静音幻觉。
+ASR 档案包含 VAD 过滤策略：默认“自动”。标准 OpenAI、Groq、xAI 请求不会被附加非标准参数；自建 OpenAI-compatible 接口只会在 `openapi.json` 确认支持后自动开启兼容 VAD 字段，并使用 `threshold=0.5`、`max_speech_duration_s=30`、`min_silence_duration_ms=160`、`speech_pad_ms=400` 这一组 Speaches/faster-whisper 成熟参数。若兼容端点同时暴露 Speaches 风格的 `/audio/speech/timestamps`，插件会先请求可靠语音区间，再决定是否跳过无语音分段并作为后处理证据。浏览器内 FFmpeg 记录的 `silencedetect` 区间只作为弱提示，不会单独跳过 ASR 或删除字幕。
 
 对本地或局域网 OpenAI-compatible ASR，插件会读取同源 `openapi.json`。如果接口明确声明支持 Whisper/faster-whisper 常见抑制参数，插件会自动附加 `condition_on_previous_text=false`、`no_speech_threshold` 等兼容字段，用于减少长视频静音、音乐或片尾段幻觉。标准 OpenAI、Groq、xAI 请求不会附加这些非标准字段。
 

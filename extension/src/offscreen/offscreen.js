@@ -1,5 +1,6 @@
 const MESSAGE = {
   OFFSCREEN_WEB_FFMPEG_EXTRACT_AUDIO: "FUGUANG_OFFSCREEN_WEB_FFMPEG_EXTRACT_AUDIO",
+  OFFSCREEN_WEB_FFMPEG_COLLECT_SPEECH_AUDIO: "FUGUANG_OFFSCREEN_WEB_FFMPEG_COLLECT_SPEECH_AUDIO",
   OFFSCREEN_WEB_FFMPEG_PROGRESS: "FUGUANG_OFFSCREEN_WEB_FFMPEG_PROGRESS",
   OFFSCREEN_WEB_FFMPEG_CHUNK_READY: "FUGUANG_OFFSCREEN_WEB_FFMPEG_CHUNK_READY",
   UPDATE_MEDIA_HEADER_RULE_DOMAINS: "FUGUANG_UPDATE_MEDIA_HEADER_RULE_DOMAINS"
@@ -16,7 +17,7 @@ const WEB_FFMPEG_HLS_TS_MAX_SEGMENTS_PER_CHUNK = 360;
 const WEB_FFMPEG_HLS_SEGMENT_DOWNLOAD_CONCURRENCY = 10;
 const WEB_FFMPEG_ASR_LOGICAL_CHUNK_MIN_SECONDS = 10;
 const WEB_FFMPEG_ASR_LOGICAL_CHUNK_MAX_SECONDS = 30 * 60;
-const WEB_FFMPEG_ASR_CONTEXT_OVERLAP_SECONDS = 8;
+const WEB_FFMPEG_ASR_CONTEXT_OVERLAP_SECONDS = 2;
 const WEB_FFMPEG_ASR_VAD_SPLIT_MIN_SILENCE_SECONDS = 2;
 const WEB_FFMPEG_WORKER_RECYCLE_INTERNAL_CHUNKS = 48;
 const WEB_FFMPEG_READY_TIMEOUT_MS = 30 * 1000;
@@ -29,6 +30,12 @@ const webFfmpegPending = new Map();
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === MESSAGE.OFFSCREEN_WEB_FFMPEG_EXTRACT_AUDIO) {
     extractAudioWithWebFfmpeg(message)
+      .then(result => sendResponse({ ok: true, result }))
+      .catch(error => sendResponse({ ok: false, error: error.message }));
+    return true;
+  }
+  if (message?.type === MESSAGE.OFFSCREEN_WEB_FFMPEG_COLLECT_SPEECH_AUDIO) {
+    collectSpeechAudioWithWebFfmpeg(message)
       .then(result => sendResponse({ ok: true, result }))
       .catch(error => sendResponse({ ok: false, error: error.message }));
     return true;
@@ -117,6 +124,7 @@ async function extractAudioWithWebFfmpeg(message) {
     options: {
       format: "mp3",
       chunkSeconds: message.asrChunkSeconds || message.chunkSeconds,
+      overlapSeconds: WEB_FFMPEG_ASR_CONTEXT_OVERLAP_SECONDS,
       duration: message.duration
     }
   }, [buffer], progress => {
@@ -124,6 +132,49 @@ async function extractAudioWithWebFfmpeg(message) {
       phase: "ffmpeg",
       percent: 50 + (Number(progress.percent || 0) * 0.49),
       message: "正在用 Web FFmpeg 提取音频"
+    });
+  });
+  return persistWebFfmpegAudioResult(result, message.cacheNamespace || id);
+}
+
+async function collectSpeechAudioWithWebFfmpeg(message) {
+  const file = message.file || {};
+  const buffer = file.buffer instanceof ArrayBuffer
+    ? file.buffer
+    : await readPersistedWebFfmpegAudioFile(file).catch(() => null);
+  if (!buffer) {
+    throw new Error("缺少可收集语音窗口的音频文件。");
+  }
+  reportWebFfmpegExtractionProgress(message, {
+    phase: "loading",
+    percent: 1,
+    message: "正在准备 Web FFmpeg 语音窗口"
+  });
+  await ensureWebFfmpegFrame(message.webFfmpegUrl);
+  warmWebFfmpegFrame();
+  const id = `collect-speech-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const result = await requestWebFfmpeg({
+    app: WEB_FFMPEG_APP,
+    type: "collect-speech-audio",
+    id,
+    file: {
+      name: file.name || "asr-source.mp3",
+      mime: file.mime || "audio/mpeg",
+      buffer
+    },
+    outputName: message.outputName || "speech-only.mp3",
+    options: {
+      format: "mp3",
+      duration: message.duration,
+      sourceStart: message.sourceStart,
+      maxChunkSeconds: message.maxChunkSeconds || 30,
+      speechIntervals: Array.isArray(message.speechIntervals) ? message.speechIntervals : []
+    }
+  }, [buffer], progress => {
+    reportWebFfmpegExtractionProgress(message, {
+      phase: "collect",
+      percent: 92 + (Number(progress.percent || 0) / 100) * 6,
+      message: progress.message || "正在按 VAD 收集语音窗口"
     });
   });
   return persistWebFfmpegAudioResult(result, message.cacheNamespace || id);
@@ -370,24 +421,28 @@ async function extractHlsAudioWithWebFfmpeg(message) {
       coreStart: group.coreStart,
       coreEnd: group.coreEnd,
       coreDuration: group.coreDuration,
-      speechIntervals: offsetSpeechIntervals(result?.speechIntervals, group.start),
+      speechIntervals: result?.speechIntervalsReliable === false ? undefined : offsetSpeechIntervals(result?.speechIntervals, group.start),
+      speechIntervalsReliable: result?.speechIntervalsReliable === false ? false : undefined,
       file: persisted.file,
       buffer: rawAudioBuffer,
       bytes: persisted.bytes || persisted.file?.bytes || 0
     };
     internalChunks.push(internalChunk);
     bytes += persisted.bytes || persisted.file?.bytes || 0;
-    const readyGroups = collectHlsLogicalPartGroups(logicalState, internalChunk, false);
-    for (const parts of readyGroups) {
-      const logicalChunk = await buildHlsLogicalAudioChunk(message, logicalState.nextIndex, parts, groups.length);
-      logicalState.nextIndex += 1;
-      logicalChunks.push(logicalChunk);
-      await reportWebFfmpegChunkReady(message, logicalChunk, {
-        duration: media.duration,
-        logicalChunkSeconds,
-        internalChunksDone: index + 1,
-        internalChunksTotal: groups.length
-      });
+    const asrParts = await splitHlsInternalChunkForAsr(message, internalChunk, logicalChunkSeconds, groups.length);
+    for (const asrPart of asrParts) {
+      const readyGroups = collectHlsLogicalPartGroups(logicalState, asrPart, false);
+      for (const parts of readyGroups) {
+        const logicalChunk = await buildHlsLogicalAudioChunk(message, logicalState.nextIndex, parts, groups.length);
+        logicalState.nextIndex += 1;
+        logicalChunks.push(logicalChunk);
+        await reportWebFfmpegChunkReady(message, logicalChunk, {
+          duration: media.duration,
+          logicalChunkSeconds,
+          internalChunksDone: index + 1,
+          internalChunksTotal: groups.length
+        });
+      }
     }
     reportWebFfmpegExtractionProgress(message, {
       phase: "ready",
@@ -470,6 +525,98 @@ async function runHlsAudioExtraction(message, options) {
   });
 }
 
+async function splitHlsInternalChunkForAsr(message, internalChunk, logicalChunkSeconds, groupCount) {
+  const coreStart = hlsChunkCoreStart(internalChunk);
+  const coreEnd = hlsChunkCoreEnd(internalChunk);
+  const coreDuration = Math.max(0, coreEnd - coreStart);
+  const uploadSeconds = normalizeHlsLogicalChunkSeconds(logicalChunkSeconds);
+  if (!coreDuration || coreDuration <= uploadSeconds + 0.001) {
+    return [internalChunk];
+  }
+  const buffer = internalChunk.buffer instanceof ArrayBuffer
+    ? internalChunk.buffer
+    : await readPersistedWebFfmpegAudioFile(internalChunk.file);
+  const inputName = `hls-internal-${String(internalChunk.index + 1).padStart(3, "0")}.mp3`;
+  const result = await requestWebFfmpeg({
+    app: WEB_FFMPEG_APP,
+    type: "extract-audio",
+    id: `split-hls-${Date.now()}-${internalChunk.index}-${Math.random().toString(16).slice(2)}`,
+    file: {
+      name: inputName,
+      mime: "audio/mpeg",
+      buffer
+    },
+    outputName: `asr-${String(internalChunk.index + 1).padStart(3, "0")}.mp3`,
+    options: {
+      format: "mp3",
+      chunkSeconds: uploadSeconds,
+      overlapSeconds: WEB_FFMPEG_ASR_CONTEXT_OVERLAP_SECONDS,
+      duration: Math.max(0, Number(internalChunk.duration || (internalChunk.end - internalChunk.start)) || 0),
+      coreStart: Math.max(0, coreStart - pickFiniteNumber(internalChunk.start, coreStart)),
+      coreEnd: Math.max(0, coreEnd - pickFiniteNumber(internalChunk.start, coreStart))
+    }
+  }, [buffer], progress => {
+    reportWebFfmpegExtractionProgress(message, {
+      phase: "split",
+      percent: hlsExtractionPercent(internalChunk.index, 0.91 + (Number(progress.percent || 0) / 100) * 0.05, groupCount),
+      internalChunksDone: internalChunk.index,
+      internalChunksTotal: groupCount,
+      readySeconds: Math.round(coreStart),
+      message: progress.message
+        ? `正在生成第 ${internalChunk.index + 1}/${groupCount} 个内部媒体切片的 ASR 短窗：${progress.message}`
+        : `正在生成第 ${internalChunk.index + 1}/${groupCount} 个内部媒体切片的 ASR 短窗`
+    });
+  });
+  const persisted = await persistWebFfmpegAudioResult(result, `${message.cacheNamespace || "hls"}-asr-${internalChunk.index}`);
+  const chunks = (persisted.chunks || []).map((chunk, index) => hlsAsrSubchunkToAbsoluteChunk(internalChunk, chunk, index));
+  if (!chunks.length) {
+    throw new Error("Web FFmpeg 没有生成可上传 ASR 的 HLS 短窗。");
+  }
+  await deletePersistedWebFfmpegAudioFiles([internalChunk.file]);
+  if (message.webFfmpegUrl) {
+    reportWebFfmpegExtractionProgress(message, {
+      phase: "split",
+      percent: hlsExtractionPercent(internalChunk.index, 0.97, groupCount),
+      internalChunksDone: internalChunk.index + 1,
+      internalChunksTotal: groupCount,
+      readySeconds: Math.round(coreEnd),
+      message: `已生成第 ${internalChunk.index + 1}/${groupCount} 个内部媒体切片的 ASR 短窗，正在回收 Web FFmpeg 工作区`
+    });
+    await reloadWebFfmpegFrame(message.webFfmpegUrl);
+  }
+  return chunks;
+}
+
+function hlsAsrSubchunkToAbsoluteChunk(internalChunk, chunk, fallbackIndex = 0) {
+  const baseStart = pickFiniteNumber(internalChunk.start, 0);
+  const relativeStart = pickFiniteNumber(chunk.start, 0);
+  const relativeEnd = pickFiniteNumber(chunk.end, relativeStart + Number(chunk.duration || 0));
+  const relativeCoreStart = pickFiniteNumber(chunk.coreStart, relativeStart);
+  const relativeCoreEnd = pickFiniteNumber(chunk.coreEnd, relativeEnd);
+  const start = roundHlsSecond(baseStart + relativeStart);
+  const end = roundHlsSecond(baseStart + relativeEnd);
+  const coreStart = roundHlsSecond(baseStart + relativeCoreStart);
+  const coreEnd = roundHlsSecond(baseStart + relativeCoreEnd);
+  const speechIntervals = chunk.speechIntervalsReliable === false
+    ? undefined
+    : offsetSpeechIntervals(chunk.speechIntervals, baseStart);
+  return {
+    index: (Number(internalChunk.index || 0) * 10000) + (Number.isInteger(Number(chunk.index)) ? Number(chunk.index) : fallbackIndex),
+    start,
+    end,
+    duration: Math.max(0, end - start),
+    coreStart,
+    coreEnd,
+    coreDuration: Math.max(0, coreEnd - coreStart),
+    speechIntervals,
+    speechIntervalsReliable: chunk.speechIntervalsReliable === false ? false : undefined,
+    file: chunk.file,
+    bytes: chunk.bytes || chunk.file?.bytes || 0,
+    internalChunkIndex: internalChunk.index,
+    internalSubchunkIndex: Number.isInteger(Number(chunk.index)) ? Number(chunk.index) : fallbackIndex
+  };
+}
+
 function collectHlsLogicalPartGroups(state, chunk, final = false) {
   const ready = [];
   const pushPending = () => {
@@ -483,20 +630,27 @@ function collectHlsLogicalPartGroups(state, chunk, final = false) {
   };
 
   if (chunk) {
-    const chunkDuration = Math.max(0, Number(chunk.duration || (chunk.end - chunk.start) || 0) || 0);
-    const chunkSpeechIntervals = normalizeSpeechIntervals(chunk.speechIntervals);
+    const chunkStart = hlsChunkCoreStart(chunk);
+    const chunkEnd = hlsChunkCoreEnd(chunk);
+    const chunkDuration = Math.max(0, chunkEnd - chunkStart);
+    const chunkSpeechIntervals = chunk.speechIntervalsReliable === false ? null : normalizeSpeechIntervals(chunk.speechIntervals);
     if (Array.isArray(chunkSpeechIntervals) && !chunkSpeechIntervals.length) {
       pushPending();
       return ready;
     }
-    const hasOverlapContext =
-      pickFiniteNumber(chunk.start, 0) < pickFiniteNumber(chunk.coreStart, chunk.start) ||
-      pickFiniteNumber(chunk.end, 0) > pickFiniteNumber(chunk.coreEnd, chunk.end);
-    if (hasOverlapContext && state.pendingParts.length) {
-      pushPending();
-    }
-    if (hasOverlapContext) {
+    const chunkStartWithContext = pickFiniteNumber(chunk.start, chunkStart);
+    const chunkEndWithContext = pickFiniteNumber(chunk.end, chunkEnd);
+    const hasOverlapContext = chunkStartWithContext < chunkStart || chunkEndWithContext > chunkEnd;
+    const hasLogicalBoundaryContext =
+      (chunkStartWithContext < chunkStart && hlsTimeIsLogicalBoundary(chunkStart, state.logicalChunkSeconds, 0))
+      || (chunkEndWithContext > chunkEnd && hlsTimeIsLogicalBoundary(chunkEnd, state.logicalChunkSeconds, 0));
+    if (hasOverlapContext && !hasLogicalBoundaryContext) {
+      if (state.pendingParts.length) {
+        pushPending();
+      }
       state.pendingParts.push(chunk);
+      state.pendingStart = chunkStart;
+      state.pendingEnd = chunkEnd;
       pushPending();
       return ready;
     }
@@ -510,11 +664,11 @@ function collectHlsLogicalPartGroups(state, chunk, final = false) {
       pushPending();
     }
     if (!state.pendingParts.length) {
-      state.pendingStart = chunk.start;
-      state.pendingEnd = chunk.start;
+      state.pendingStart = chunkStart;
+      state.pendingEnd = chunkStart;
     }
     state.pendingParts.push(chunk);
-    state.pendingEnd = chunk.end;
+    state.pendingEnd = chunkEnd;
     if (Math.max(0, Number(state.pendingEnd || 0) - Number(state.pendingStart || 0)) >= state.logicalChunkSeconds) {
       pushPending();
     }
@@ -525,8 +679,19 @@ function collectHlsLogicalPartGroups(state, chunk, final = false) {
   return ready;
 }
 
+function hlsChunkCoreStart(chunk = {}) {
+  return pickFiniteNumber(chunk.coreStart, chunk.start, 0);
+}
+
+function hlsChunkCoreEnd(chunk = {}) {
+  return pickFiniteNumber(chunk.coreEnd, chunk.end, hlsChunkCoreStart(chunk));
+}
+
 function hlsShouldSplitLogicalChunkAtVadGap(pendingParts, nextSpeechIntervals) {
   if (!pendingParts?.length || !Array.isArray(nextSpeechIntervals) || !nextSpeechIntervals.length) {
+    return false;
+  }
+  if (pendingParts.some(part => part?.speechIntervalsReliable === false)) {
     return false;
   }
   const currentSpeech = mergeSpeechIntervals(pendingParts.flatMap(part => normalizeSpeechIntervals(part.speechIntervals) || []));
@@ -540,10 +705,58 @@ function hlsShouldSplitLogicalChunkAtVadGap(pendingParts, nextSpeechIntervals) {
 
 function buildHlsInternalExtractionGroups(media, logicalChunkSeconds) {
   const coreGroups = groupHlsSegments(media.segments, {
-    maxDurationSeconds: Math.min(WEB_FFMPEG_HLS_EXTRACT_CHUNK_SECONDS, logicalChunkSeconds),
+    maxDurationSeconds: WEB_FFMPEG_HLS_EXTRACT_CHUNK_SECONDS,
     maxSegments: hlsMaxSegmentsPerExtractChunk(media)
   });
-  return addHlsAsrContextOverlapToGroups(coreGroups, media.segments, 0);
+  return addHlsLogicalBoundaryContextToGroups(coreGroups, media.segments, logicalChunkSeconds);
+}
+
+function addHlsLogicalBoundaryContextToGroups(groups, segments, logicalChunkSeconds) {
+  const overlap = WEB_FFMPEG_ASR_CONTEXT_OVERLAP_SECONDS;
+  const logicalSeconds = normalizeHlsLogicalChunkSeconds(logicalChunkSeconds);
+  const mediaEnd = Array.isArray(segments) && segments.length
+    ? pickFiniteNumber(segments.at(-1).end, 0)
+    : 0;
+  const allSegments = Array.isArray(segments) ? segments : [];
+  return addHlsAsrContextOverlapToGroups(
+    (groups || []).map(group => {
+      const coreStart = pickFiniteNumber(group.coreStart, group.start);
+      const coreEnd = pickFiniteNumber(group.coreEnd, group.end);
+      const wantedStart = hlsTimeIsLogicalBoundary(coreStart, logicalSeconds, mediaEnd)
+        ? Math.max(0, coreStart - overlap)
+        : coreStart;
+      const wantedEnd = hlsTimeIsLogicalBoundary(coreEnd, logicalSeconds, mediaEnd)
+        ? coreEnd + overlap
+        : coreEnd;
+      const groupSegments = allSegments.filter(segment => {
+        const segmentStart = pickFiniteNumber(segment.start);
+        const segmentEnd = pickFiniteNumber(segment.end, segmentStart + Number(segment.duration || 0));
+        return segmentEnd > wantedStart && segmentStart < wantedEnd;
+      });
+      return {
+        ...group,
+        start: pickFiniteNumber(groupSegments[0]?.start, coreStart),
+        end: pickFiniteNumber(groupSegments.at(-1)?.end, coreEnd),
+        coreStart,
+        coreEnd,
+        segments: groupSegments.length ? groupSegments : group.segments
+      };
+    }),
+    segments,
+    0
+  );
+}
+
+function hlsTimeIsLogicalBoundary(value, logicalChunkSeconds, mediaEnd) {
+  const time = Number(value);
+  const logical = Number(logicalChunkSeconds);
+  if (!Number.isFinite(time) || !Number.isFinite(logical) || logical <= 0) {
+    return false;
+  }
+  if (time <= 0.001 || (Number.isFinite(mediaEnd) && mediaEnd > 0 && time >= mediaEnd - 0.001)) {
+    return false;
+  }
+  return Math.abs((time / logical) - Math.round(time / logical)) <= 0.001;
 }
 
 async function buildHlsLogicalAudioChunk(message, index, parts, groupCount) {
@@ -554,6 +767,7 @@ async function buildHlsLogicalAudioChunk(message, index, parts, groupCount) {
   const coreEnd = pickFiniteNumber(normalizedParts[normalizedParts.length - 1]?.coreEnd, end);
   const coreDuration = Math.max(0, coreEnd - coreStart);
   const duration = Math.max(0, end - start);
+  const speechIntervalsReliable = normalizedParts.every(part => part.speechIntervalsReliable !== false);
   if (normalizedParts.length === 1) {
     const part = normalizedParts[0];
     return {
@@ -567,7 +781,8 @@ async function buildHlsLogicalAudioChunk(message, index, parts, groupCount) {
       coreDuration,
       file: part.file,
       bytes: part.bytes || part.file?.bytes || 0,
-      speechIntervals: normalizeSpeechIntervals(part.speechIntervals),
+      speechIntervals: part.speechIntervalsReliable === false ? undefined : normalizeSpeechIntervals(part.speechIntervals),
+      speechIntervalsReliable: part.speechIntervalsReliable === false ? false : undefined,
       internalChunkCount: 1
     };
   }
@@ -622,7 +837,10 @@ async function buildHlsLogicalAudioChunk(message, index, parts, groupCount) {
     coreDuration,
     file: persisted.file,
     bytes: persisted.bytes || persisted.file?.bytes || 0,
-    speechIntervals: mergeSpeechIntervals(normalizedParts.flatMap(part => normalizeSpeechIntervals(part.speechIntervals))),
+    speechIntervals: speechIntervalsReliable
+      ? mergeSpeechIntervals(normalizedParts.flatMap(part => normalizeSpeechIntervals(part.speechIntervals)))
+      : undefined,
+    speechIntervalsReliable: speechIntervalsReliable ? undefined : false,
     internalChunkCount: normalizedParts.length
   };
 }
@@ -1310,8 +1528,9 @@ function startsNewHlsExtractionGroup(previous, segment) {
   return false;
 }
 
-function addHlsAsrContextOverlapToGroups(groups, segments, overlapSeconds = WEB_FFMPEG_ASR_CONTEXT_OVERLAP_SECONDS) {
+function addHlsAsrContextOverlapToGroups(groups, segments, overlapSeconds = WEB_FFMPEG_ASR_CONTEXT_OVERLAP_SECONDS, options = {}) {
   const overlap = Math.max(0, Number(overlapSeconds) || 0);
+  const maxDurationSeconds = Math.max(0, Number(options?.maxDurationSeconds || 0) || 0);
   const allSegments = Array.isArray(segments) ? segments : [];
   return (groups || []).map(group => {
     const coreStart = pickFiniteNumber(group.coreStart, group.start);
@@ -1335,7 +1554,8 @@ function addHlsAsrContextOverlapToGroups(groups, segments, overlapSeconds = WEB_
     const groupSegments = capOverlappedHlsSegments(
       selectedSegments.length ? selectedSegments : group.segments || [],
       group.segments || [],
-      WEB_FFMPEG_HLS_MAX_SEGMENTS_PER_CHUNK
+      WEB_FFMPEG_HLS_MAX_SEGMENTS_PER_CHUNK,
+      maxDurationSeconds
     );
     const start = pickFiniteNumber(groupSegments[0]?.start, coreStart);
     const end = pickFiniteNumber(groupSegments[groupSegments.length - 1]?.end, coreEnd);
@@ -1352,38 +1572,97 @@ function addHlsAsrContextOverlapToGroups(groups, segments, overlapSeconds = WEB_
   });
 }
 
-function capOverlappedHlsSegments(selectedSegments, coreSegments, maxSegments) {
+function capOverlappedHlsSegments(selectedSegments, coreSegments, maxSegments, maxDurationSeconds = 0) {
   const selected = Array.isArray(selectedSegments) ? selectedSegments : [];
   const core = Array.isArray(coreSegments) ? coreSegments : [];
   const totalLimit = Math.max(core.length || 1, Math.floor(Number(maxSegments) || 0) || selected.length || core.length || 1);
   const limit = totalLimit;
-  if (!selected.length || selected.length <= limit) {
+  const durationLimit = Math.max(0, Number(maxDurationSeconds) || 0);
+  if (!selected.length || (selected.length <= limit && (!durationLimit || hlsSegmentsDuration(selected) <= durationLimit + 0.001))) {
     return selected;
   }
   if (!core.length) {
-    return selected.slice(0, limit);
+    return capHlsSegmentsByDuration(selected.slice(0, limit), durationLimit);
   }
   const firstCore = core[0];
   const lastCore = core[core.length - 1];
   const firstIndex = selected.indexOf(firstCore);
   const lastIndex = selected.indexOf(lastCore);
   if (firstIndex < 0 || lastIndex < 0) {
-    return selected.slice(0, limit);
+    return capHlsSegmentsByDuration(selected.slice(0, limit), durationLimit);
   }
   let left = firstIndex;
   let right = lastIndex + 1;
+  while (right - left > limit) {
+    if (left < firstIndex) {
+      left += 1;
+    } else if (right > lastIndex + 1) {
+      right -= 1;
+    } else {
+      break;
+    }
+  }
+  let capped = selected.slice(left, right);
+  if (!durationLimit) {
+    return capped;
+  }
+  left = firstIndex;
+  right = lastIndex + 1;
+  capped = selected.slice(left, right);
+  if (hlsSegmentsDuration(capped) >= durationLimit - 0.001) {
+    return capped;
+  }
   while (right - left < limit && (left > 0 || right < selected.length)) {
+    let expanded = false;
     if (left > 0) {
-      left -= 1;
+      const candidate = selected.slice(left - 1, right);
+      if (hlsSegmentsDuration(candidate) <= durationLimit + 0.001) {
+        left -= 1;
+        capped = candidate;
+        expanded = true;
+      }
     }
     if (right - left >= limit) {
       break;
     }
     if (right < selected.length) {
-      right += 1;
+      const candidate = selected.slice(left, right + 1);
+      if (hlsSegmentsDuration(candidate) <= durationLimit + 0.001) {
+        right += 1;
+        capped = candidate;
+        expanded = true;
+      }
+    }
+    if (!expanded) {
+      break;
     }
   }
-  return selected.slice(left, right);
+  return capped;
+}
+
+function hlsSegmentsDuration(segments) {
+  if (!Array.isArray(segments) || !segments.length) {
+    return 0;
+  }
+  const start = pickFiniteNumber(segments[0]?.start);
+  const end = pickFiniteNumber(segments[segments.length - 1]?.end, start);
+  return Math.max(0, end - start);
+}
+
+function capHlsSegmentsByDuration(segments, maxDurationSeconds = 0) {
+  const limit = Math.max(0, Number(maxDurationSeconds) || 0);
+  if (!limit || hlsSegmentsDuration(segments) <= limit + 0.001) {
+    return segments;
+  }
+  const capped = [];
+  for (const segment of segments) {
+    const next = [...capped, segment];
+    if (capped.length && hlsSegmentsDuration(next) > limit + 0.001) {
+      break;
+    }
+    capped.push(segment);
+  }
+  return capped.length ? capped : segments.slice(0, 1);
 }
 
 function hlsExtractionPercent(groupIndex, groupLocalRatio, groupCount) {
@@ -1400,6 +1679,11 @@ function pickFiniteNumber(...values) {
     }
   }
   return 0;
+}
+
+function roundHlsSecond(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.round(number * 1000) / 1000 : 0;
 }
 
 function internalChunksReadySeconds(internalChunks) {

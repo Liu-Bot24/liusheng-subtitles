@@ -8,7 +8,7 @@ const addListener = () => {};
 const chrome = {
   action: { onClicked: { addListener } },
   offscreen: { hasDocument: async () => false, createDocument: async () => {} },
-  runtime: { getURL: value => `chrome-extension://test-extension/${value}`, onMessage: { addListener }, sendMessage: async () => ({}) },
+  runtime: { getURL: value => `chrome-extension://test-extension/${value}`, getContexts: async () => [], onMessage: { addListener }, sendMessage: async () => ({}) },
   sidePanel: { setPanelBehavior: async () => {}, open: async () => {} },
   storage: {
     local: {
@@ -174,6 +174,15 @@ vm.runInContext(pipelineSource, context, { filename: "browser-translation-pipeli
 Object.assign(context, context.FuguangBrowserTranslationPipeline);
 vm.runInContext(mediaHeaderRulesSource, context, { filename: "media-header-rules.js" });
 vm.runInContext(source, context, { filename: "service-worker.js" });
+
+{
+  assert.equal(
+    context.browserAsrUploadChunkSeconds({}),
+    900,
+    "默认 ASR 逻辑上传块应保持 15 分钟；成熟方案的 30 秒是 ASR 服务端 VAD/模型窗口，不是插件端强制碎片上传"
+  );
+  assert.equal(context.normalizeBrowserAsrUploadChunkSeconds(120), 120);
+}
 
 {
   assert.ok(webNavigationCommittedListeners.length > 0, "top-level committed listener should be registered");
@@ -416,13 +425,51 @@ vm.runInContext(source, context, { filename: "service-worker.js" });
   ]));
   assert.equal(JSON.stringify(context.browserAsrRequestFields({
     providerType: "openai",
+    baseUrl: "http://[::1]:8000/v1",
+    model: "whisper-1",
+    vadFilter: "auto"
+  }, "zh-CN", {
+    supportedRequestFields: new Set(["vad_filter"]),
+    clientSpeechIntervalsAvailable: true
+  })), JSON.stringify([
+    ["model", "whisper-1"],
+    ["response_format", "verbose_json"],
+    ["timestamp_granularities[]", "segment"],
+    ["timestamp_granularities[]", "word"],
+    ["vad_filter", "true"],
+    ["language", "zh"]
+  ]));
+  assert.equal(JSON.stringify(context.browserAsrRequestFields({
+    providerType: "openai",
+    baseUrl: "http://[::1]:8000/v1",
+    model: "whisper-1",
+    vadFilter: "on"
+  }, "zh-CN", {
+    supportedRequestFields: new Set(["vad_filter"]),
+    clientSpeechIntervalsAvailable: true
+  })), JSON.stringify([
+    ["model", "whisper-1"],
+    ["response_format", "verbose_json"],
+    ["timestamp_granularities[]", "segment"],
+    ["timestamp_granularities[]", "word"],
+    ["vad_filter", "true"],
+    ["language", "zh"]
+  ]));
+  assert.equal(JSON.stringify(context.browserAsrRequestFields({
+    providerType: "openai",
     baseUrl: "http://127.0.0.1:8000/v1",
     model: "Systran/faster-whisper-large-v3"
   }, "ja", {
     supportedRequestFields: new Set([
       "vad_filter",
+      "threshold",
+      "min_speech_duration_ms",
+      "max_speech_duration_s",
+      "min_silence_duration_ms",
+      "speech_pad_ms",
       "condition_on_previous_text",
       "no_speech_threshold",
+      "without_timestamps",
       "compression_ratio_threshold",
       "log_prob_threshold",
       "hallucination_silence_threshold",
@@ -434,12 +481,134 @@ vm.runInContext(source, context, { filename: "service-worker.js" });
     ["timestamp_granularities[]", "segment"],
     ["timestamp_granularities[]", "word"],
     ["vad_filter", "true"],
+    ["threshold", "0.5"],
+    ["min_speech_duration_ms", "0"],
+    ["max_speech_duration_s", "30"],
+    ["min_silence_duration_ms", "160"],
+    ["speech_pad_ms", "400"],
     ["word_timestamps", "true"],
     ["condition_on_previous_text", "false"],
-    ["no_speech_threshold", "0.45"],
+    ["without_timestamps", "false"],
+    ["no_speech_threshold", "0.6"],
     ["compression_ratio_threshold", "2.4"],
     ["log_prob_threshold", "-1"],
-    ["hallucination_silence_threshold", "1"],
+    ["language", "ja"]
+  ]));
+  assert.equal(JSON.stringify(context.browserAsrRequestFields({
+    providerType: "openai",
+    baseUrl: "http://127.0.0.1:8000/v1",
+    model: "Systran/faster-whisper-large-v3"
+  }, "ja", {
+    supportedRequestFields: new Set([
+      "vad_filter",
+      "vad_parameters",
+      "threshold",
+      "min_speech_duration_ms",
+      "max_speech_duration_s",
+      "min_silence_duration_ms",
+      "speech_pad_ms"
+    ])
+  })), JSON.stringify([
+    ["model", "Systran/faster-whisper-large-v3"],
+    ["response_format", "verbose_json"],
+    ["timestamp_granularities[]", "segment"],
+    ["timestamp_granularities[]", "word"],
+    ["vad_filter", "true"],
+    ["vad_parameters", "{\"threshold\":0.5,\"min_speech_duration_ms\":0,\"max_speech_duration_s\":30,\"min_silence_duration_ms\":160,\"speech_pad_ms\":400}"],
+    ["language", "ja"]
+  ]));
+  assert.equal(
+    context.browserAsrClipTimestampsValue([
+      { start: 31, end: 33.2 },
+      { start: 37, end: 39 }
+    ], { start: 30, end: 60 }),
+    "1,9"
+  );
+  assert.equal(
+    context.browserAsrClipTimestampsValue([
+      { start: 31, end: 32 },
+      { start: 65, end: 66 }
+    ], { start: 30, end: 90 }),
+    "1,2,35,36"
+  );
+  assert.equal(
+    context.browserAsrClipTimestampsValue([
+      { start: 0, end: 29.8 },
+      { start: 29.7, end: 40 }
+    ], { start: 0, end: 60 }),
+    "0,29.4,29.7,40"
+  );
+  assert.equal(
+    context.browserAsrClipTimestampsValue([
+      { start: 1, end: 35 }
+    ], { start: 0, end: 60 }),
+    "1,35"
+  );
+  assert.equal(JSON.stringify(
+    context.normalizeBrowserAsrSpeechTimestampsPayload([
+      { start_ms: 1000, end_ms: 1500 }
+    ], { start: 0, end: 1800, duration: 1800 })
+  ), JSON.stringify(
+    [{ start: 1, end: 1.5 }]
+  ));
+  assert.equal(JSON.stringify(
+    context.normalizeBrowserAsrSpeechTimestampsPayload([
+      { start: 1000, end: 1500 }
+    ], { start: 0, end: 1800, duration: 1800 })
+  ), JSON.stringify(
+    [{ start: 1, end: 1.5 }]
+  ));
+  assert.equal(JSON.stringify(
+    context.normalizeBrowserAsrSpeechTimestampsPayload([
+      { start: 1, end: 1.5 }
+    ], { start: 0, end: 1800, duration: 1800 })
+  ), JSON.stringify(
+    [{ start: 1, end: 1.5 }]
+  ));
+  assert.equal(JSON.stringify(
+    context.normalizeBrowserAsrSpeechTimestampsPayload([
+      { start: 1000, end: 1500 }
+    ], { start: 900, end: 2700, duration: 1800 })
+  ), JSON.stringify(
+    [{ start: 901, end: 901.5 }]
+  ));
+  assert.equal(JSON.stringify(
+    context.normalizeBrowserAsrSpeechTimestampsPayload([
+      { start: 100, end: 170 }
+    ], { start: 900, end: 2700, duration: 1800 })
+  ), JSON.stringify(
+    [{ start: 1000, end: 1070 }]
+  ));
+  assert.equal(JSON.stringify(
+    context.normalizeBrowserAsrSpeechTimestampsPayload([
+      { start_time: 10, end_time: 12 }
+    ], { start: 0, end: 1800, duration: 1800 })
+  ), JSON.stringify(
+    [{ start: 10, end: 12 }]
+  ));
+  assert.equal(JSON.stringify(
+    context.normalizeBrowserAsrSpeechTimestampsPayload([
+      { start_time: 0, end_time: 1.25 },
+      { end_time: 2.5 }
+    ], { start: 0, end: 1800, duration: 1800 })
+  ), JSON.stringify(
+    [{ start: 0, end: 1.25 }]
+  ));
+  assert.equal(JSON.stringify(context.browserAsrRequestFields({
+    providerType: "openai",
+    baseUrl: "https://clip-compatible.example/v1",
+    model: "Systran/faster-whisper-large-v3",
+    vadFilter: "auto"
+  }, "ja", {
+    supportedRequestFields: new Set(["clip_timestamps", "vad_filter", "vad_parameters"]),
+    clipTimestamps: "1,9"
+  })), JSON.stringify([
+    ["model", "Systran/faster-whisper-large-v3"],
+    ["response_format", "verbose_json"],
+    ["timestamp_granularities[]", "segment"],
+    ["timestamp_granularities[]", "word"],
+    ["clip_timestamps", "1,9"],
+    ["vad_filter", "false"],
     ["language", "ja"]
   ]));
   assert.equal(JSON.stringify(context.browserAsrRequestFields({
@@ -451,8 +620,17 @@ vm.runInContext(source, context, { filename: "service-worker.js" });
     ["model", "whisper-1"],
     ["response_format", "verbose_json"],
     ["timestamp_granularities[]", "segment"],
-    ["timestamp_granularities[]", "word"]
+    ["timestamp_granularities[]", "word"],
+    ["temperature", "0"]
   ]));
+  assert.equal(
+    context.browserAsrRequestFields({
+      providerType: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      model: "whisper-1"
+    }, "").some(([name, value]) => name === "temperature" && value === "0"),
+    true
+  );
   assert.equal(JSON.stringify(context.browserAsrRequestFields({
     providerType: "openai",
     baseUrl: "https://api.openai.com/v1",
@@ -465,6 +643,7 @@ vm.runInContext(source, context, { filename: "service-worker.js" });
     ["response_format", "verbose_json"],
     ["timestamp_granularities[]", "segment"],
     ["timestamp_granularities[]", "word"],
+    ["temperature", "0"],
     ["language", "ja"]
   ]));
   assert.equal(JSON.stringify(context.browserAsrRequestFields({
@@ -488,7 +667,8 @@ vm.runInContext(source, context, { filename: "service-worker.js" });
     ["model", "whisper-large-v3-turbo"],
     ["response_format", "verbose_json"],
     ["timestamp_granularities[]", "segment"],
-    ["timestamp_granularities[]", "word"]
+    ["timestamp_granularities[]", "word"],
+    ["temperature", "0"]
   ]));
   assert.equal(JSON.stringify(context.browserAsrRequestFields({
     providerType: "openai",
@@ -502,6 +682,7 @@ vm.runInContext(source, context, { filename: "service-worker.js" });
     ["response_format", "verbose_json"],
     ["timestamp_granularities[]", "segment"],
     ["timestamp_granularities[]", "word"],
+    ["temperature", "0"],
     ["language", "ja"]
   ]));
   assert.equal(JSON.stringify(context.browserAsrRequestFields({
@@ -583,6 +764,12 @@ vm.runInContext(source, context, { filename: "service-worker.js" });
   }, 1800, 2700);
   assert.equal(absoluteSegments[0].start, 1801.5);
   assert.equal(absoluteSegments[0].end, 1804);
+
+  const ambiguousRelativeSegments = context.normalizeAsrSegments({
+    segments: [{ start: 899.2, end: 901, text: "ambiguous relative tail" }]
+  }, 898, 1800);
+  assert.equal(ambiguousRelativeSegments[0].start, 1797.2);
+  assert.equal(ambiguousRelativeSegments[0].end, 1799);
 
   const sortedSegments = context.normalizeAsrSegments({
     segments: [
@@ -673,6 +860,149 @@ vm.runInContext(source, context, { filename: "service-worker.js" });
   assert.equal(topLevelWordBoundaries[0].end, 46.1);
   assert.equal(topLevelWordBoundaries[0].text, "何意味");
 
+  const longWordGapSegments = context.normalizeAsrSegments({
+    segments: [{
+      start: 0,
+      end: 307.55,
+      text: "気持ちいい",
+      words: [
+        { word: "気", start: 0.00, end: 0.38 },
+        { word: "持", start: 307.13, end: 307.33 },
+        { word: "ち", start: 307.33, end: 307.49 },
+        { word: "いい", start: 307.49, end: 307.55 }
+      ]
+    }]
+  }, 2700, 3600);
+  assert.equal(longWordGapSegments.length, 1);
+  assert.equal(longWordGapSegments[0].text, "気持ちいい");
+  assert.equal(longWordGapSegments[0].start, 3007.13);
+  assert.equal(longWordGapSegments[0].end, 3007.55);
+
+  const splitWordGapSegments = context.normalizeAsrSegments({
+    segments: [{
+      start: 0,
+      end: 307.55,
+      text: "気持ちいい",
+      words: [
+        { word: "気", start: 0.00, end: 0.42 },
+        { word: "持", start: 0.42, end: 1.30 },
+        { word: "ち", start: 307.13, end: 307.33 },
+        { word: "いい", start: 307.33, end: 307.55 }
+      ]
+    }]
+  }, 2700, 3600);
+  assert.equal(splitWordGapSegments.length, 1);
+  assert.equal(splitWordGapSegments[0].text, "気持ちいい");
+  assert.equal(splitWordGapSegments[0].start, 3007.13);
+  assert.equal(splitWordGapSegments[0].end, 3007.55);
+
+  const meaningfulLongWordGapSegments = context.normalizeAsrSegments({
+    segments: [{
+      start: 0,
+      end: 75,
+      text: "もう 待って",
+      words: [
+        { word: "もう", start: 0.00, end: 0.40 },
+        { word: "待って", start: 72.20, end: 73.00 }
+      ]
+    }]
+  }, 0, 60);
+  assert.equal(JSON.stringify(meaningfulLongWordGapSegments.map(segment => segment.text)), JSON.stringify(["もう", "待って"]));
+  assert.equal(meaningfulLongWordGapSegments[0].start, 0.00);
+  assert.equal(meaningfulLongWordGapSegments[1].start, 72.20);
+
+  const naturalWordGapSegments = context.normalizeAsrSegments({
+    segments: [{
+      start: 0,
+      end: 2.95,
+      text: "少し待って",
+      words: [
+        { word: "少し", start: 0.00, end: 0.40 },
+        { word: "待って", start: 2.20, end: 2.95 }
+      ]
+    }]
+  }, 0, 60);
+  assert.equal(naturalWordGapSegments.length, 1);
+  assert.equal(naturalWordGapSegments[0].text, "少し待って");
+
+  const mediumWordGapSegments = context.normalizeAsrSegments({
+    segments: [{
+      start: 0,
+      end: 7.3,
+      text: "少し待って",
+      words: [
+        { word: "少し", start: 0.00, end: 0.40 },
+        { word: "待って", start: 6.50, end: 7.30 }
+      ]
+    }]
+  }, 0, 60);
+  assert.equal(mediumWordGapSegments.length, 1);
+  assert.equal(mediumWordGapSegments[0].text, "少し待って");
+
+  const matureShortWordGapSegments = context.normalizeAsrSegments({
+    segments: [{
+      start: 0,
+      end: 36,
+      text: "嗯开始结束",
+      words: [
+        { word: "嗯", start: 0.00, end: 0.30 },
+        { word: "开始", start: 12.00, end: 12.50 },
+        { word: "结束", start: 34.00, end: 35.00 }
+      ]
+    }]
+  }, 0, 60, { disableCustomRunFilters: true, disableCustomQualityFilters: true });
+  assert.equal(JSON.stringify(matureShortWordGapSegments.map(segment => segment.text)), JSON.stringify(["嗯", "开始", "结束"]));
+  assert.equal(matureShortWordGapSegments[0].start, 0.00);
+  assert.equal(matureShortWordGapSegments[1].start, 12.00);
+  assert.equal(matureShortWordGapSegments[2].start, 34.00);
+
+  assert.equal(JSON.stringify(
+    context.normalizeAsrSegments({
+      segments: [{
+        start: 11.76,
+        end: 12.2,
+        text: "ご視聴ありがとうございました",
+        no_speech_prob: 0.66,
+        avg_logprob: -0.98
+      }]
+    }, 334, 362, { disableCustomQualityFilters: true })
+  ),
+    JSON.stringify([])
+  );
+  assert.equal(JSON.stringify(
+    context.normalizeAsrSegments({
+      segments: [{
+        start: 0,
+        end: 5.64,
+        text: "おやすみなさい",
+        no_speech_prob: 0.26,
+        words: [
+          { word: "お", start: 0, end: 0.08, probability: 0.06 },
+          { word: "や", start: 0.08, end: 1.34, probability: 0.17 },
+          { word: "す", start: 1.34, end: 2.58, probability: 0.84 },
+          { word: "み", start: 2.58, end: 5.16, probability: 0.99 }
+        ]
+      }]
+    }, 1594, 1622, { disableCustomQualityFilters: true })
+  ),
+    JSON.stringify([])
+  );
+  assert.equal(
+    context.normalizeAsrSegments({
+      segments: [{
+        start: 0,
+        end: 1.2,
+        text: "おやすみなさい",
+        no_speech_prob: 0.2,
+        words: [
+          { word: "おやすみ", start: 0, end: 0.7, probability: 0.9 },
+          { word: "なさい", start: 0.7, end: 1.2, probability: 0.9 }
+        ]
+      }]
+    }, 0, 30, { disableCustomQualityFilters: true })[0].text,
+    "おやすみなさい"
+  );
+
   assert.throws(() => context.normalizeAsrSegments({
     words: [{ word: "hello without timestamp" }]
   }, 0, 30), /时间戳/);
@@ -685,32 +1015,50 @@ vm.runInContext(source, context, { filename: "service-worker.js" });
     { start: 30.5, end: 31.2, text: "核心句" },
     { start: 60.1, end: 61.2, text: "下一段" }
   ], { start: 28, end: 62, coreStart: 30, coreEnd: 60 });
-  assert.deepEqual(ownedBoundarySegments.map(segment => segment.text), ["核心句"]);
+  assert.deepEqual(ownedBoundarySegments.map(segment => segment.text), ["跨界句", "核心句", "下一段"]);
+  assert.equal(ownedBoundarySegments[0].start, 28.2);
+  assert.equal(ownedBoundarySegments[0].end, 30.2);
 
   const previousBoundarySegments = context.filterAsrSegmentsByChunkOwnership([
     { start: 28.2, end: 30.2, text: "跨界句" },
     { start: 29.2, end: 29.8, text: "上一段" },
     { start: 29.6, end: 30.4, text: "正中边界句" }
   ], { start: 0, end: 32, coreStart: 0, coreEnd: 30 });
-  assert.deepEqual(previousBoundarySegments.map(segment => segment.text), ["跨界句", "上一段"]);
-  assert.equal(previousBoundarySegments[0].end, 30);
+  assert.deepEqual(previousBoundarySegments.map(segment => segment.text), ["跨界句", "上一段", "正中边界句"]);
+  assert.equal(previousBoundarySegments[0].end, 30.2);
 
   const nextBoundarySegments = context.filterAsrSegmentsByChunkOwnership([
     { start: 29.6, end: 30.4, text: "正中边界句" }
   ], { start: 22, end: 68, coreStart: 30, coreEnd: 60 });
   assert.deepEqual(nextBoundarySegments.map(segment => segment.text), ["正中边界句"]);
-  assert.equal(nextBoundarySegments[0].start, 30);
+  assert.equal(nextBoundarySegments[0].start, 29.6);
 
   const longBoundarySegments = context.filterAsrSegmentsByChunkOwnership([
     { start: 58.4, end: 61.4, text: "长句跨右边界" }
   ], { start: 52, end: 68, coreStart: 30, coreEnd: 60 });
-  assert.equal(JSON.stringify(longBoundarySegments), JSON.stringify([{ start: 58.4, end: 60, text: "长句跨右边界" }]));
+  assert.equal(JSON.stringify(longBoundarySegments), JSON.stringify([{ start: 58.4, end: 61.4, text: "长句跨右边界" }]));
+
+  const driftedBoundarySegments = context.filterAsrSegmentsByChunkOwnership([
+    { start: 28.7, end: 29.7, text: "左侧漂移真实句" },
+    { start: 60.2, end: 61.1, text: "右侧漂移真实句" },
+    { start: 62.4, end: 63.1, text: "远端越界幻觉" },
+    { start: 0, end: 300, text: "异常长越界幻觉" }
+  ], { start: 28, end: 62, coreStart: 30, coreEnd: 60 });
+  assert.deepEqual(driftedBoundarySegments.map(segment => segment.text), ["左侧漂移真实句", "右侧漂移真实句"]);
 
   const noOverlapBoundarySegments = context.filterAsrSegmentsByChunkOwnership([
     { start: 0.2, end: 1.6, text: "核心短句" },
     { start: 60, end: 61, text: "无重叠越界幻觉" }
   ], { start: 0, end: 2, coreStart: 0, coreEnd: 2 });
   assert.deepEqual(noOverlapBoundarySegments.map(segment => segment.text), ["核心短句"]);
+
+  const mergedOverlapDuplicates = context.mergeAdjacentDuplicateAsrSegments([
+    { start: 29.6, end: 30.4, text: "边界重复句" },
+    { start: 29.7, end: 30.5, text: "边界重复句" }
+  ]);
+  assert.deepEqual(JSON.parse(JSON.stringify(mergedOverlapDuplicates)), [
+    { start: 29.6, end: 30.5, text: "边界重复句" }
+  ]);
 
   assert.equal(context.filterAsrSegmentsBySpeechActivity([
     { start: 0, end: 29.98, text: "由 Amara.org 社群提供的字幕" }
@@ -727,6 +1075,13 @@ vm.runInContext(source, context, { filename: "service-worker.js" });
   assert.equal(
     context.filterAsrSegmentsBySpeechActivity([{ start: 0, end: 2, text: "未知语音区间保留" }], {}).length,
     1
+  );
+  assert.deepEqual(
+    context.filterAsrSegmentsBySpeechActivity(
+      [{ start: 0, end: 2, text: "弱 VAD 判空但 ASR 识别到的语音" }],
+      { speechIntervals: [], speechIntervalsReliable: false }
+    ).map(segment => segment.text),
+    ["弱 VAD 判空但 ASR 识别到的语音"]
   );
   assert.equal(JSON.stringify(
     context.filterAsrSegmentsByHallucinationGuard(
@@ -766,7 +1121,33 @@ vm.runInContext(source, context, { filename: "service-worker.js" });
       { start: 1.3, end: 2.4, text: "正常な発話" }
     ]).map(segment => segment.text)
   ), JSON.stringify(["正常な発話", "正常な発話"]));
+  assert.equal(JSON.stringify(
+    context.filterAsrSegmentsByHallucinationGuard([
+      { start: 0, end: 0.6, text: "あー" },
+      { start: 1.1, end: 1.7, text: "あー" },
+      { start: 2.2, end: 2.8, text: "あー" },
+      { start: 4.0, end: 5.2, text: "あー、 あー" },
+      { start: 7.0, end: 8.8, text: "あー" },
+      { start: 12.0, end: 14.5, text: "あー" }
+    ], { speechIntervals: [{ start: 0, end: 15 }] }).map(segment => segment.text)
+  ), JSON.stringify([]));
+  assert.equal(JSON.stringify(
+    context.filterAsrSegmentsByHallucinationGuard([
+      { start: 0, end: 1, text: "、" },
+      { start: 1, end: 2, text: "、" },
+      { start: 2, end: 3, text: "、" },
+      { start: 3, end: 4, text: "、" }
+    ], { speechIntervals: [{ start: 0, end: 4 }] }).map(segment => segment.text)
+  ), JSON.stringify([]));
+  assert.equal(JSON.stringify(
+    context.filterAsrSegmentsByHallucinationGuard([
+      { start: 0, end: 1, text: "待って" },
+      { start: 1.1, end: 1.6, text: "うん" },
+      { start: 1.8, end: 2.8, text: "行くよ" }
+    ], { speechIntervals: [{ start: 0, end: 3 }] }).map(segment => segment.text)
+  ), JSON.stringify(["待って", "うん", "行くよ"]));
   assert.equal(context.shouldSkipBrowserAsrChunk({ speechIntervals: [] }), true);
+  assert.equal(context.shouldSkipBrowserAsrChunk({ speechIntervals: [], speechIntervalsReliable: false }), false);
   assert.equal(context.shouldSkipBrowserAsrChunk({ speechIntervals: [{ start: 10, end: 16.7 }] }), false);
   assert.equal(context.shouldSkipBrowserAsrChunk({}), false);
 
@@ -785,6 +1166,22 @@ vm.runInContext(source, context, { filename: "service-worker.js" });
   assert.equal(speechSuppressed[0].start, 15);
   assert.equal(speechSuppressed[0].end, 16);
   assert.equal(speechSuppressed[0].text, "real");
+
+  const shortJapaneseWordPreserved = context.filterAsrSegmentsBySpeechActivity([
+    {
+      start: 285.86,
+      end: 286.58,
+      text: "面白いよ",
+      words: [
+        { text: "面", start: 285.86, end: 286.08, probability: 0.53 },
+        { text: "白", start: 286.08, end: 286.28, probability: 1 },
+        { text: "い", start: 286.28, end: 286.34, probability: 0.66 },
+        { text: "よ", start: 286.34, end: 286.58, probability: 0.33 }
+      ]
+    }
+  ], { speechIntervals: [{ start: 285.856, end: 287.2 }] });
+  assert.equal(shortJapaneseWordPreserved.length, 1);
+  assert.equal(shortJapaneseWordPreserved[0].text, "面白いよ");
 }
 
 {
@@ -793,6 +1190,115 @@ vm.runInContext(source, context, { filename: "service-worker.js" });
   assert.equal(context.browserAsrUploadChunkSeconds({ asrUploadChunkSeconds: 9999 }), 1800);
   assert.equal(context.browserAsrMaxUploadBytes({}), 25 * 1024 * 1024);
   assert.equal(context.browserAsrMaxUploadBytes({ maxUploadMb: 100 }), 100 * 1024 * 1024);
+}
+
+{
+  const originalFetch = context.fetch;
+  context.fetch = async url => {
+    const host = new URL(String(url)).hostname;
+    const withClip = host === "speaches-clip.example";
+    const withSpeechTimestamps = host === "speaches-vad-endpoint.example";
+    const fullVadFields = host === "speaches-full-vad.example";
+    return {
+      ok: true,
+      json: async () => ({
+        paths: {
+          "/v1/audio/transcriptions": {
+            post: {
+              requestBody: {
+                content: {
+                  "application/x-www-form-urlencoded": {
+                    schema: {
+                      properties: {
+                        vad_filter: { type: "boolean" },
+                        ...(withClip ? { clip_timestamps: { type: "string" } } : {}),
+                        ...(fullVadFields ? {
+                          threshold: { type: "number" },
+                          min_speech_duration_ms: { type: "integer" },
+                          max_speech_duration_s: { type: "number" },
+                          min_silence_duration_ms: { type: "integer" },
+                          speech_pad_ms: { type: "integer" }
+                        } : {})
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          ...(withSpeechTimestamps ? {
+            "/v1/audio/speech/timestamps": {
+              post: {
+                requestBody: {
+                  content: {
+                    "application/x-www-form-urlencoded": {
+                      schema: { properties: { file: { type: "string", format: "binary" } } }
+                    }
+                  }
+                }
+              }
+            }
+          } : {})
+        }
+      })
+    };
+  };
+  assert.equal(await context.browserAsrEffectiveUploadChunkSeconds({
+    asr: {
+      providerType: "openai",
+      baseUrl: "https://speaches-vad-endpoint.example/v1",
+      model: "Systran/faster-whisper-large-v3",
+      apiKey: "test",
+      vadFilter: "auto"
+    }
+  }), 30);
+  assert.equal(await context.browserAsrEffectiveUploadChunkSeconds({
+    asr: {
+      providerType: "openai",
+      baseUrl: "https://speaches-vad-only.example/v1",
+      model: "Systran/faster-whisper-large-v3",
+      apiKey: "test",
+      vadFilter: "auto"
+    }
+  }), 30);
+  assert.equal(await context.browserAsrEffectiveUploadChunkSeconds({
+    asr: {
+      providerType: "openai",
+      baseUrl: "https://speaches-full-vad.example/v1",
+      model: "Systran/faster-whisper-large-v3",
+      apiKey: "test",
+      vadFilter: "auto"
+    }
+  }), 900);
+  assert.equal(await context.browserAsrEffectiveUploadChunkSeconds({
+    asrUploadChunkSeconds: 20,
+    asr: {
+      providerType: "openai",
+      baseUrl: "https://speaches-vad-only.example/v1",
+      model: "Systran/faster-whisper-large-v3",
+      apiKey: "test",
+      vadFilter: "auto"
+    }
+  }), 20);
+  assert.equal(await context.browserAsrEffectiveUploadChunkSeconds({
+    asr: {
+      providerType: "openai",
+      baseUrl: "https://speaches-clip.example/v1",
+      model: "Systran/faster-whisper-large-v3",
+      apiKey: "test",
+      vadFilter: "auto"
+    }
+  }), 900);
+  assert.equal(await context.browserAsrEffectiveUploadChunkSeconds({
+    asr: {
+      providerType: "openai",
+      baseUrl: "https://speaches-vad-only.example/v1",
+      model: "Systran/faster-whisper-large-v3",
+      apiKey: "test",
+      vadFilter: "off"
+    }
+  }), 900);
+  context.fetch = originalFetch;
 }
 
 {
@@ -822,7 +1328,12 @@ vm.runInContext(source, context, { filename: "service-worker.js" });
               properties: {
                 vad_filter: { type: "boolean" },
                 condition_on_previous_text: { type: "boolean" },
-                no_speech_threshold: { type: "number" }
+                no_speech_threshold: { type: "number" },
+                max_speech_duration_s: { type: "number" },
+                min_silence_duration_ms: { type: "integer" },
+                speech_pad_ms: { type: "integer" },
+                vad_parameters: { type: "string" },
+                without_timestamps: { type: "boolean" }
               }
             }
           }
@@ -839,7 +1350,16 @@ vm.runInContext(source, context, { filename: "service-worker.js" });
     providerType: "openai",
     baseUrl: "https://selfhosted.example/v1",
     model: "whisper-1"
-  })).sort()), JSON.stringify(["condition_on_previous_text", "no_speech_threshold", "vad_filter"]));
+  })).sort()), JSON.stringify([
+    "condition_on_previous_text",
+    "max_speech_duration_s",
+    "min_silence_duration_ms",
+    "no_speech_threshold",
+    "speech_pad_ms",
+    "vad_filter",
+    "vad_parameters",
+    "without_timestamps"
+  ]));
   assert.deepEqual(probedUrls, ["https://selfhosted.example/openapi.json"]);
   probedUrls.length = 0;
   assert.equal((await context.resolveBrowserAsrSupportedRequestFields({
@@ -1657,10 +2177,24 @@ vm.runInContext(source, context, { filename: "service-worker.js" });
       end: 30,
       text: "Thank you for watching.",
       compression_ratio: 1.12,
-      no_speech_prob: 0.88
+      no_speech_prob: 0.88,
+      avg_logprob: -1.2
     }]
   }, 900, 930);
   assert.equal(noSpeechHallucination.length, 0);
+
+  const noSpeechButConfidentSpeech = context.normalizeAsrSegments({
+    segments: [{
+      start: 0,
+      end: 3,
+      text: "これは本当の発話です",
+      compression_ratio: 1.12,
+      no_speech_prob: 0.88,
+      avg_logprob: -0.2
+    }]
+  }, 900, 930);
+  assert.equal(noSpeechButConfidentSpeech.length, 1);
+  assert.equal(noSpeechButConfidentSpeech[0].text, "これは本当の発話です");
 
   const filteredHallucination = context.normalizeAsrSegments({
     segments: [
@@ -1674,6 +2208,45 @@ vm.runInContext(source, context, { filename: "service-worker.js" });
     ]
   }, 900, 1200);
   assert.equal(JSON.stringify(filteredHallucination.map(segment => segment.text)), JSON.stringify(["正常第一句", "正常第二句"]));
+
+  const repeatedSoundLabel = context.normalizeAsrSegments({
+    segments: Array.from({ length: 15 }, (_, index) => ({
+      start: 874.83 + index * 0.8,
+      end: 875.43 + index * 0.8,
+      text: "笑い声",
+      compression_ratio: 9.85,
+      no_speech_prob: 0.2
+    }))
+  }, 0, 900);
+  assert.equal(repeatedSoundLabel.length, 0);
+
+  const longSingleVocalization = context.normalizeAsrSegments({
+    segments: [{
+      start: 2108,
+      end: 2124.25,
+      text: "うううううううううううううううううううううううううううう"
+    }]
+  }, 2108, 2138);
+  assert.equal(longSingleVocalization.length, 0);
+
+  const longSingleRepeatedPhrase = context.normalizeAsrSegments({
+    segments: [{
+      start: 1490,
+      end: 1518.58,
+      text: "お腹が空いたら、お腹が空いたら、お腹が空いたら、お腹が空いたら、お腹が空いたら、"
+    }]
+  }, 1490, 1520);
+  assert.equal(longSingleRepeatedPhrase.length, 0);
+
+  const shortSpokenJapanese = context.normalizeAsrSegments({
+    segments: [{
+      start: 285.86,
+      end: 286.58,
+      text: "面白いよ"
+    }]
+  }, 270, 300);
+  assert.equal(shortSpokenJapanese.length, 1);
+  assert.equal(shortSpokenJapanese[0].text, "面白いよ");
 }
 
 function seedPage(tabId, { title = "Video", url = "https://example.test/watch/1", duration = 600 } = {}) {
@@ -2128,6 +2701,21 @@ function add(tabId, candidate) {
 }
 
 {
+  assert.equal(context.browserAudioResultHasOnlyKnownNonspeech({
+    sourceType: "direct",
+    duration: 120,
+    knownNonspeech: true,
+    speechIntervals: [],
+    chunks: []
+  }), true);
+  assert.equal(context.browserAudioResultHasOnlyKnownNonspeech({
+    sourceType: "direct",
+    duration: 120,
+    chunks: []
+  }), false);
+}
+
+{
   const buffer = vm.runInContext("new ArrayBuffer(8)", context);
   const chunks = context.normalizeBrowserAudioChunks({
     duration: 120,
@@ -2355,6 +2943,48 @@ function add(tabId, candidate) {
   assert.equal((record.audioChunks || []).length, 0);
   assert.equal(record.browserAsrQueue.items.length, 0);
   assert.equal(context.browserPreloadRecordHasOnlyKnownNonspeechAudio(record), true);
+}
+
+{
+  const record = {
+    tabId: 718,
+    startedAt: Date.now() - 1000,
+    modelConfig: { chunkSeconds: 900 },
+    browserAsrChunkSeconds: 900,
+    job: {
+      id: "browser-weak-vad-empty-test",
+      status: "running",
+      stage: "extracting",
+      extract: { status: "running", progress: 50, elapsedSeconds: 0 },
+      translation: { chunkStatuses: [], chunksTotal: 0, chunksDone: 0 }
+    },
+    sourceSegmentsByChunk: new Map(),
+    translatedSegmentsByChunk: new Map()
+  };
+  const weakEmptyChunk = index => ({
+    index,
+    start: index * 30,
+    end: (index + 1) * 30,
+    duration: 30,
+    speechIntervals: [],
+    speechIntervalsReliable: false,
+    file: {
+      name: `weak-vad-empty-${index}.mp3`,
+      mime: "audio/mpeg",
+      cacheUrl: `https://fuguang.local/audio/weak-vad-empty-${index}`,
+      bytes: 1024
+    },
+    bytes: 1024
+  });
+
+  assert.equal(context.appendBrowserInternalAudioChunk(record, weakEmptyChunk(0)).length, 0);
+  assert.equal(context.appendBrowserInternalAudioChunk(record, weakEmptyChunk(1)).length, 0);
+  const emitted = context.flushBrowserInternalAudioChunks(record, true);
+  assert.equal(emitted.length, 1);
+  assert.equal(record.audioChunks.length, 1);
+  assert.equal(record.audioChunks[0].speechIntervalsReliable, false);
+  assert.equal(context.shouldSkipBrowserAsrChunk(record.audioChunks[0]), false);
+  assert.equal(record.browserAsrQueue.items.length, 1);
 }
 
 {
@@ -2796,6 +3426,11 @@ function add(tabId, candidate) {
   assert.equal(record.job.status, "completed");
   assert.equal(record.job.stage, "completed");
   assert.equal(record.job.error, "");
+  assert.equal(
+    context.browserCompletionAllowsAudioRelease(result),
+    false,
+    "成功完成后仍应保留音频缓存供诊断导出和失败复盘，直到用户显式清理"
+  );
 }
 
 {
@@ -3634,6 +4269,1883 @@ function add(tabId, candidate) {
 
 {
   const originalFetch = context.fetch;
+  const postedFields = [];
+  context.fetch = async (url, init = {}) => {
+    if (!init.method) {
+      return {
+        ok: true,
+        json: async () => ({
+          paths: {
+            "/v1/audio/transcriptions": {
+              post: {
+                requestBody: {
+                  content: {
+                    "multipart/form-data": {
+                      schema: {
+                        properties: {
+                          vad_filter: { type: "boolean" },
+                          word_timestamps: { type: "boolean" },
+                          condition_on_previous_text: { type: "boolean" },
+                          no_speech_threshold: { type: "number" },
+                          min_speech_duration_ms: { type: "integer" },
+                          max_speech_duration_s: { type: "number" },
+                          min_silence_duration_ms: { type: "integer" },
+                          speech_pad_ms: { type: "integer" },
+                          vad_parameters: { type: "string" },
+                          temperature: { type: "number" },
+                          without_timestamps: { type: "boolean" },
+                          hallucination_silence_threshold: { type: "number" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        })
+      };
+    }
+    postedFields.push(...Array.from(init.body.entries()).map(([name, value]) => [name, value instanceof Blob ? "[blob]" : String(value)]));
+    return {
+      ok: true,
+      json: async () => ({
+        segments: [{ start: 0, end: 1, text: "ok" }]
+      })
+    };
+  };
+  const clientVadSegments = await context.transcribeBrowserAudioChunk(
+    {
+      index: 0,
+      start: 0,
+      end: 120,
+      speechIntervals: [{ start: 0, end: 120 }],
+      file: { name: "chunk.wav", buffer: new ArrayBuffer(1), mime: "audio/wav" }
+    },
+    {
+      providerType: "openai",
+      baseUrl: "https://client-vad-compatible.example/v1",
+      model: "Systran/faster-whisper-large-v3",
+      apiKey: "test",
+      vadFilter: "auto"
+    }
+  );
+  assert.equal(clientVadSegments.length, 1);
+  assert.equal(postedFields.some(([name, value]) => name === "vad_filter" && value === "true"), true);
+  assert.equal(postedFields.some(([name, value]) => name === "word_timestamps" && value === "true"), true);
+  assert.equal(postedFields.some(([name, value]) => name === "condition_on_previous_text" && value === "false"), true);
+  assert.equal(postedFields.some(([name, value]) => name === "without_timestamps" && value === "false"), true);
+  assert.equal(postedFields.some(([name, value]) => name === "temperature" && value === "0"), true);
+  assert.equal(postedFields.some(([name, value]) => name === "vad_parameters" && value === "{\"threshold\":0.5,\"min_speech_duration_ms\":0,\"max_speech_duration_s\":30,\"min_silence_duration_ms\":160,\"speech_pad_ms\":400}"), true);
+  assert.equal(postedFields.some(([name]) => name === "threshold"), false);
+  assert.equal(postedFields.some(([name]) => name === "min_speech_duration_ms"), false);
+  assert.equal(postedFields.some(([name]) => name === "max_speech_duration_s"), false);
+  assert.equal(postedFields.some(([name]) => name === "min_silence_duration_ms"), false);
+  assert.equal(postedFields.some(([name]) => name === "speech_pad_ms"), false);
+  assert.equal(postedFields.some(([name, value]) => name === "no_speech_threshold" && value === "0.6"), true);
+  assert.equal(postedFields.some(([name]) => name === "hallucination_silence_threshold"), false);
+  context.fetch = originalFetch;
+}
+
+{
+  const originalFetch = context.fetch;
+  const requested = [];
+  const postedFields = [];
+  context.fetch = async (url, init = {}) => {
+    requested.push([String(url), init.method || "GET"]);
+    if (!init.method) {
+      return {
+        ok: true,
+        json: async () => ({
+          paths: {
+            "/v1/audio/transcriptions": {
+              post: {
+                requestBody: {
+                  content: {
+                    "multipart/form-data": {
+                      schema: {
+                        properties: {
+                          clip_timestamps: { type: "string" },
+                          vad_filter: { type: "boolean" },
+                          vad_parameters: { type: "string" },
+                          without_timestamps: { type: "boolean" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "/v1/audio/speech/timestamps": {
+              post: {
+                requestBody: {
+                  content: {
+                    "multipart/form-data": {
+                      schema: {
+                        properties: {
+                          file: { type: "string", format: "binary" },
+                          min_speech_duration_ms: { type: "integer" },
+                          max_speech_duration_s: { type: "number" },
+                          min_silence_duration_ms: { type: "integer" },
+                          speech_pad_ms: { type: "integer" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        })
+      };
+    }
+    if (String(url).endsWith("/v1/audio/speech/timestamps")) {
+      return { ok: true, json: async () => [] };
+    }
+    postedFields.push(...Array.from(init.body.entries()).map(([name, value]) => [name, value instanceof Blob ? "[blob]" : String(value)]));
+    return {
+      ok: true,
+      json: async () => ({
+        segments: [{ start: 1, end: 2, text: "speech missed by precheck" }]
+      })
+    };
+  };
+  const emptyVadSegments = await context.transcribeBrowserAudioChunk(
+    {
+      index: 0,
+      start: 0,
+      end: 30,
+      duration: 30,
+      file: { name: "silent.wav", buffer: new ArrayBuffer(4), mime: "audio/wav" }
+    },
+    {
+      providerType: "openai",
+      baseUrl: "https://speaches-vad-empty.example/v1",
+      model: "Systran/faster-whisper-large-v3",
+      apiKey: "test",
+      vadFilter: "auto"
+    }
+  );
+  assert.equal(Array.isArray(emptyVadSegments), true);
+  assert.equal(emptyVadSegments.length, 1);
+  assert.equal(emptyVadSegments[0].text, "speech missed by precheck");
+  assert.equal(postedFields.some(([name, value]) => name === "vad_filter" && value === "true"), true);
+  assert.deepEqual(requested.map(([url, method]) => [new URL(url).pathname, method]), [
+    ["/openapi.json", "GET"],
+    ["/v1/audio/speech/timestamps", "POST"],
+    ["/v1/audio/transcriptions", "POST"]
+  ]);
+  context.fetch = originalFetch;
+}
+
+{
+  const originalFetch = context.fetch;
+  const transcriptionRequests = [];
+  let recoveryDiagnostics = null;
+  context.fetch = async (url, init = {}) => {
+    if (!init.method) {
+      return {
+        ok: true,
+        json: async () => ({
+          paths: {
+            "/v1/audio/transcriptions": {
+              post: {
+                requestBody: {
+                  content: {
+                    "multipart/form-data": {
+                      schema: {
+                        properties: {
+                          vad_filter: { type: "boolean" },
+                          word_timestamps: { type: "boolean" },
+                          condition_on_previous_text: { type: "boolean" },
+                          no_speech_threshold: { type: "number" },
+                          temperature: { type: "number" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "/v1/audio/speech/timestamps": {
+              post: {
+                requestBody: {
+                  content: {
+                    "multipart/form-data": {
+                      schema: { properties: { file: { type: "string", format: "binary" } } }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        })
+      };
+    }
+    if (String(url).endsWith("/v1/audio/speech/timestamps")) {
+      return { ok: true, json: async () => [] };
+    }
+    const fields = Array.from(init.body.entries()).map(([name, value]) => [name, value instanceof Blob ? "[blob]" : String(value)]);
+    transcriptionRequests.push(fields);
+    if (fields.some(([name, value]) => name === "vad_filter" && value === "true")) {
+      return { ok: true, json: async () => ({ segments: [] }) };
+    }
+    return {
+      ok: true,
+      json: async () => ({
+        segments: [
+          { start: 9.94, end: 29.98, text: "ご視聴ありがとうございました" },
+          { start: 8.12, end: 8.96, text: "早く" },
+          { start: 13.44, end: 15.06, text: "そうしても見れば分かる" }
+        ]
+      })
+    };
+  };
+  const recoveredEmptyVadSegments = await context.transcribeBrowserAudioChunk(
+    {
+      index: 25,
+      start: 642,
+      end: 672,
+      duration: 30,
+      coreStart: 644,
+      coreEnd: 670,
+      file: { name: "empty-vad-recovery.wav", buffer: new ArrayBuffer(4), mime: "audio/wav" }
+    },
+    {
+      providerType: "openai",
+      baseUrl: "https://speaches-empty-vad-recovery.example/v1",
+      model: "Systran/faster-whisper-large-v3",
+      apiKey: "test",
+      vadFilter: "auto"
+    },
+    { onDiagnostics: diagnostics => { recoveryDiagnostics = diagnostics; } }
+  );
+  assert.equal(transcriptionRequests.length, 2);
+  assert.equal(transcriptionRequests[0].some(([name, value]) => name === "vad_filter" && value === "true"), true);
+  assert.equal(transcriptionRequests[1].some(([name]) => name === "vad_filter"), false);
+  assert.equal(recoveredEmptyVadSegments.length, 2);
+  assert.equal(JSON.stringify(recoveredEmptyVadSegments.map(segment => segment.text)), JSON.stringify([
+    "早く",
+    "そうしても見れば分かる"
+  ]));
+  assert.equal(recoveryDiagnostics.retry.postprocess.strictVadRecoveryFilterApplied, true);
+  assert.equal(recoveryDiagnostics.retry.postprocess.strictVadRecoveryInputFinalCount, 3);
+  assert.equal(recoveryDiagnostics.retry.postprocess.strictVadRecoveryFinalCount, 2);
+  context.fetch = originalFetch;
+}
+
+{
+  const originalFetch = context.fetch;
+  const requested = [];
+  context.fetch = async (url, init = {}) => {
+    requested.push([String(url), init.method || "GET"]);
+    if (!init.method) {
+      return {
+        ok: true,
+        json: async () => ({
+          paths: {
+            "/v1/audio/transcriptions": {
+              post: {
+                requestBody: {
+                  content: {
+                    "multipart/form-data": {
+                      schema: {
+                        properties: {
+                          word_timestamps: { type: "boolean" },
+                          without_timestamps: { type: "boolean" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "/v1/audio/speech/timestamps": {
+              post: {
+                requestBody: {
+                  content: {
+                    "multipart/form-data": {
+                      schema: { properties: { file: { type: "string", format: "binary" } } }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        })
+      };
+    }
+    if (String(url).endsWith("/v1/audio/speech/timestamps")) {
+      return { ok: true, json: async () => [] };
+    }
+    return {
+      ok: true,
+      json: async () => ({
+        segments: [{ start: 1.1, end: 1.8, text: "native internal vad speech" }]
+      })
+    };
+  };
+  const nativeInternalVadSegments = await context.transcribeBrowserAudioChunk(
+    {
+      index: 12,
+      start: 0,
+      end: 30,
+      duration: 30,
+      file: { name: "speaches-native-internal-vad.wav", buffer: new ArrayBuffer(4), mime: "audio/wav" }
+    },
+    {
+      providerType: "openai",
+      baseUrl: "https://speaches-native-internal-vad.example/v1",
+      model: "Systran/faster-whisper-large-v3",
+      apiKey: "test",
+      vadFilter: "auto"
+    }
+  );
+  assert.equal(JSON.stringify(nativeInternalVadSegments.map(segment => segment.text)), JSON.stringify(["native internal vad speech"]));
+  assert.deepEqual(requested.map(([url, method]) => [new URL(url).pathname, method]), [
+    ["/openapi.json", "GET"],
+    ["/v1/audio/transcriptions", "POST"]
+  ]);
+  context.fetch = originalFetch;
+}
+
+{
+  const originalFetch = context.fetch;
+  context.fetch = async (url, init = {}) => {
+    if (!init.method) {
+      return {
+        ok: true,
+        json: async () => ({
+          paths: {
+            "/v1/audio/transcriptions": {
+              post: {
+                requestBody: {
+                  content: {
+                    "multipart/form-data": {
+                      schema: {
+                        properties: {
+                          vad_filter: { type: "boolean" },
+                          vad_parameters: { type: "string" },
+                          word_timestamps: { type: "boolean" },
+                          without_timestamps: { type: "boolean" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "/v1/audio/speech/timestamps": {
+              post: {
+                requestBody: {
+                  content: {
+                    "multipart/form-data": {
+                      schema: { properties: { file: { type: "string", format: "binary" } } }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        })
+      };
+    }
+    if (String(url).endsWith("/v1/audio/speech/timestamps")) {
+      return { ok: true, json: async () => [{ start: 0, end: 2400 }] };
+    }
+    return {
+      ok: true,
+      json: async () => ({
+        segments: [
+          { start: 0.2, end: 1.4, text: "real speech" },
+          { start: 10, end: 12, text: "static tail" }
+        ]
+      })
+    };
+  };
+  const vadFilteredSegments = await context.transcribeBrowserAudioChunk(
+    {
+      index: 0,
+      start: 30,
+      end: 60,
+      duration: 30,
+      file: { name: "speech.wav", buffer: new ArrayBuffer(4), mime: "audio/wav" }
+    },
+    {
+      providerType: "openai",
+      baseUrl: "https://speaches-vad-filter.example/v1",
+      model: "Systran/faster-whisper-large-v3",
+      apiKey: "test",
+      vadFilter: "auto"
+    }
+  );
+  assert.equal(vadFilteredSegments.length, 1);
+  assert.equal(vadFilteredSegments[0].text, "real speech");
+  assert.equal(vadFilteredSegments[0].start, 30.2);
+  assert.equal(vadFilteredSegments[0].end, 31.4);
+  context.fetch = originalFetch;
+}
+
+{
+  const originalFetch = context.fetch;
+  const postedFields = [];
+  let nativeDiagnostics = null;
+  context.fetch = async (url, init = {}) => {
+    if (!init.method) {
+      return {
+        ok: true,
+        json: async () => ({
+          paths: {
+            "/v1/audio/transcriptions": {
+              post: {
+                requestBody: {
+                  content: {
+                    "multipart/form-data": {
+                      schema: {
+                        properties: {
+                          word_timestamps: { type: "boolean" },
+                          without_timestamps: { type: "boolean" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "/v1/audio/speech/timestamps": {
+              post: {
+                requestBody: {
+                  content: {
+                    "multipart/form-data": {
+                      schema: { properties: { file: { type: "string", format: "binary" } } }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        })
+      };
+    }
+    if (String(url).endsWith("/v1/audio/speech/timestamps")) {
+      return {
+        ok: true,
+        json: async () => [{ start: 10000, end: 12000 }]
+      };
+    }
+    const fields = Array.from(init.body.entries()).map(([name, value]) => [name, value instanceof Blob ? "[blob]" : String(value)]);
+    postedFields.push(...fields);
+    return {
+      ok: true,
+      json: async () => ({
+        segments: [{
+          start: 9.7,
+          end: 12.4,
+          text: "native prefix middle suffix",
+          words: [
+            { text: "native", start: 9.7, end: 9.95, probability: 0.9 },
+            { text: "prefix", start: 10, end: 10.3, probability: 0.91 },
+            { text: "middle", start: 10.4, end: 11.6, probability: 0.94 },
+            { text: "suffix", start: 12.05, end: 12.35, probability: 0.9 }
+          ]
+        }]
+      })
+    };
+  };
+  const nativeSpeachesSegments = await context.transcribeBrowserAudioChunk(
+    {
+      index: 6,
+      start: 30,
+      end: 60,
+      duration: 30,
+      file: { name: "speaches-native.wav", buffer: new ArrayBuffer(4), mime: "audio/wav" }
+    },
+    {
+      providerType: "openai",
+      baseUrl: "https://speaches-native.example/v1",
+      model: "Systran/faster-whisper-large-v3",
+      apiKey: "test",
+      vadFilter: "auto"
+    },
+    { onDiagnostics: diagnostics => { nativeDiagnostics = diagnostics; } }
+  );
+  assert.equal(postedFields.some(([name]) => name === "clip_timestamps"), false);
+  assert.equal(postedFields.some(([name]) => name === "vad_filter"), false);
+  assert.equal(nativeSpeachesSegments.length, 1);
+  assert.equal(nativeSpeachesSegments[0].text, "native prefix middle suffix");
+  assert.equal(nativeSpeachesSegments[0].start, 39.7);
+  assert.equal(nativeSpeachesSegments[0].end, 42.35);
+  assert.equal(nativeDiagnostics.postprocess.matureVadRequest, true);
+  assert.equal(nativeDiagnostics.postprocess.speechActivityFilterApplied, true);
+  assert.equal(nativeDiagnostics.postprocess.customRunFiltersDisabled, false);
+  assert.equal(nativeDiagnostics.postprocess.vadHallucinationGuardDisabled, false);
+  assert.deepEqual(nativeDiagnostics.postprocess.segmentCounts, {
+    normalized: 1,
+    speechFiltered: 1,
+    hallucinationFiltered: 1,
+    final: 1
+  });
+  assert.deepEqual(nativeDiagnostics.postprocess.dropCounts, {
+    speechActivity: 0,
+    hallucinationGuard: 0,
+    chunkOwnership: 0,
+    total: 0
+  });
+  context.fetch = originalFetch;
+}
+
+{
+  const originalFetch = context.fetch;
+  const postedFields = [];
+  let nativeDiagnostics = null;
+  context.fetch = async (url, init = {}) => {
+    if (!init.method) {
+      return {
+        ok: true,
+        json: async () => ({
+          paths: {
+            "/v1/audio/transcriptions": {
+              post: {
+                requestBody: {
+                  content: {
+                    "multipart/form-data": {
+                      schema: {
+                        properties: {
+                          word_timestamps: { type: "boolean" },
+                          without_timestamps: { type: "boolean" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "/v1/audio/speech/timestamps": {
+              post: {
+                requestBody: {
+                  content: {
+                    "multipart/form-data": {
+                      schema: { properties: { file: { type: "string", format: "binary" } } }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        })
+      };
+    }
+    if (String(url).endsWith("/v1/audio/speech/timestamps")) {
+      return { ok: false, status: 500, json: async () => ({ message: "temporary VAD failure" }) };
+    }
+    const fields = Array.from(init.body.entries()).map(([name, value]) => [name, value instanceof Blob ? "[blob]" : String(value)]);
+    postedFields.push(...fields);
+    return {
+      ok: true,
+      json: async () => ({
+        segments: Array.from({ length: 6 }, (_, index) => ({
+          start: index,
+          end: index + 0.25,
+          text: "うん"
+        }))
+      })
+    };
+  };
+  const nativeSegments = await context.transcribeBrowserAudioChunk(
+    {
+      index: 7,
+      start: 0,
+      end: 30,
+      duration: 30,
+      file: { name: "speaches-native-vad-error.wav", buffer: new ArrayBuffer(4), mime: "audio/wav" }
+    },
+    {
+      providerType: "openai",
+      baseUrl: "https://speaches-native-vad-error.example/v1",
+      model: "Systran/faster-whisper-large-v3",
+      apiKey: "test",
+      vadFilter: "auto"
+    },
+    { onDiagnostics: diagnostics => { nativeDiagnostics = diagnostics; } }
+  );
+  assert.equal(postedFields.some(([name]) => name === "clip_timestamps"), false);
+  assert.equal(postedFields.some(([name]) => name === "vad_filter"), false);
+  assert.equal(nativeSegments.length, 6);
+  assert.equal(JSON.stringify(nativeSegments.map(segment => segment.text)), JSON.stringify(["うん", "うん", "うん", "うん", "うん", "うん"]));
+  assert.equal(nativeDiagnostics.vad, null);
+  assert.equal(nativeDiagnostics.matureAsrPlan.vad.precheckState, "native");
+  assert.equal(nativeDiagnostics.postprocess.matureVadRequest, true);
+  assert.equal(nativeDiagnostics.postprocess.externalVadServiceAvailable, false);
+  assert.equal(nativeDiagnostics.postprocess.nativeVadRequest, true);
+  assert.equal(nativeDiagnostics.postprocess.customRunFiltersDisabled, false);
+  context.fetch = originalFetch;
+}
+
+{
+  const originalFetch = context.fetch;
+  let nativeDiagnostics = null;
+  context.fetch = async (url, init = {}) => {
+    if (!init.method) {
+      return {
+        ok: true,
+        json: async () => ({
+          paths: {
+            "/v1/audio/transcriptions": {
+              post: {
+                requestBody: {
+                  content: {
+                    "multipart/form-data": {
+                      schema: {
+                        properties: {
+                          word_timestamps: { type: "boolean" },
+                          without_timestamps: { type: "boolean" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "/v1/audio/speech/timestamps": {
+              post: {
+                requestBody: {
+                  content: {
+                    "multipart/form-data": {
+                      schema: { properties: { file: { type: "string", format: "binary" } } }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        })
+      };
+    }
+    if (String(url).endsWith("/v1/audio/speech/timestamps")) {
+      return { ok: true, json: async () => [{ start: 1000, end: 4000 }] };
+    }
+    return {
+      ok: true,
+      json: async () => ({
+        segments: [{
+          start: 1.1,
+          end: 3.7,
+          text: "これは本当に話した内容です",
+          no_speech_prob: 0.7,
+          avg_logprob: -1.1
+        }]
+      })
+    };
+  };
+  const retainedQualitySegments = await context.transcribeBrowserAudioChunk(
+    {
+      index: 8,
+      start: 0,
+      end: 30,
+      duration: 30,
+      file: { name: "speaches-native-quality.wav", buffer: new ArrayBuffer(4), mime: "audio/wav" }
+    },
+    {
+      providerType: "openai",
+      baseUrl: "https://speaches-native-quality.example/v1",
+      model: "Systran/faster-whisper-large-v3",
+      apiKey: "test",
+      vadFilter: "auto"
+    },
+    { onDiagnostics: diagnostics => { nativeDiagnostics = diagnostics; } }
+  );
+  assert.equal(retainedQualitySegments.length, 1);
+  assert.equal(retainedQualitySegments[0].text, "これは本当に話した内容です");
+  assert.equal(nativeDiagnostics.postprocess.qualityFiltersDisabled, true);
+  assert.equal(nativeDiagnostics.postprocess.dropCounts.total, 0);
+  context.fetch = originalFetch;
+}
+
+{
+  const originalFetch = context.fetch;
+  const postedFields = [];
+  const vadPostedFields = [];
+  let capturedDiagnostics = null;
+  context.fetch = async (url, init = {}) => {
+    if (!init.method) {
+      return {
+        ok: true,
+        json: async () => ({
+          paths: {
+            "/v1/audio/transcriptions": {
+              post: {
+                requestBody: {
+                  content: {
+                    "multipart/form-data": {
+                      schema: {
+                        properties: {
+                          clip_timestamps: { type: "string" },
+                          vad_filter: { type: "boolean" },
+                          vad_parameters: { type: "string" },
+                          without_timestamps: { type: "boolean" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "/v1/audio/speech/timestamps": {
+              post: {
+                requestBody: {
+                  content: {
+                    "multipart/form-data": {
+                      schema: { properties: { file: { type: "string", format: "binary" } } }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        })
+      };
+    }
+    if (String(url).endsWith("/v1/audio/speech/timestamps")) {
+      vadPostedFields.push(...Array.from(init.body.entries()).map(([name, value]) => [name, value instanceof Blob ? "[blob]" : String(value)]));
+      return {
+        ok: true,
+        json: async () => [
+          { start: 1000, end: 3200 },
+          { start: 7000, end: 9000 }
+        ]
+      };
+    }
+    postedFields.push(...Array.from(init.body.entries()).map(([name, value]) => [name, value instanceof Blob ? "[blob]" : String(value)]));
+    return {
+      ok: true,
+      json: async () => ({
+        segments: [
+          { start: 1.2, end: 2.4, text: "clip speech" },
+          { start: 7.2, end: 8.4, text: "clip speech tail" }
+        ]
+      })
+    };
+  };
+  const clippedSegments = await context.transcribeBrowserAudioChunk(
+    {
+      index: 1,
+      start: 30,
+      end: 60,
+      duration: 30,
+      file: { name: "clip.wav", buffer: new ArrayBuffer(4), mime: "audio/wav" }
+    },
+    {
+      providerType: "openai",
+      baseUrl: "https://speaches-clip-compatible.example/v1",
+      model: "Systran/faster-whisper-large-v3",
+      apiKey: "test",
+      vadFilter: "auto"
+    },
+    { onDiagnostics: diagnostics => { capturedDiagnostics = diagnostics; } }
+  );
+  assert.equal(clippedSegments.length, 2);
+  assert.equal(clippedSegments[0].text, "clip speech");
+  assert.equal(clippedSegments[1].text, "clip speech tail");
+  assert.equal(vadPostedFields.some(([name, value]) => name === "threshold" && value === "0.5"), true);
+  assert.equal(vadPostedFields.some(([name, value]) => name === "min_speech_duration_ms" && value === "0"), true);
+  assert.equal(postedFields.some(([name, value]) => name === "clip_timestamps" && value === "1,9"), true);
+  assert.equal(postedFields.some(([name, value]) => name === "vad_filter" && value === "false"), true);
+  assert.equal(postedFields.some(([name]) => name === "vad_parameters"), false);
+  assert.equal(capturedDiagnostics.matureAsrPlan.strategy, "speaches_faster_whisper");
+  assert.equal(capturedDiagnostics.matureAsrPlan.request.mode, "external_vad_clip");
+  assert.equal(capturedDiagnostics.matureAsrPlan.vad.precheckState, "reliable");
+  assert.equal(capturedDiagnostics.matureAsrPlan.clipTimestamps, "1,9");
+  assert.equal(capturedDiagnostics.matureAsrPlan.postprocessPolicy.matureVadRequest, true);
+  assert.equal(capturedDiagnostics.vad.requestFields.some(([name, value]) => name === "threshold" && value === "0.5"), true);
+  assert.equal(capturedDiagnostics.vad.requestFields.some(([name, value]) => name === "min_speech_duration_ms" && value === "0"), true);
+  assert.equal(capturedDiagnostics.request.fields.some(([name, value]) => name === "clip_timestamps" && value === "1,9"), true);
+  assert.equal(capturedDiagnostics.request.fields.some(([name, value]) => name === "vad_filter" && value === "false"), true);
+  assert.equal(capturedDiagnostics.postprocess.policySource, "matureAsrPlan");
+  context.fetch = originalFetch;
+}
+
+{
+  const originalFetch = context.fetch;
+  const postedFields = [];
+  context.fetch = async (url, init = {}) => {
+    if (!init.method) {
+      return {
+        ok: true,
+        json: async () => ({
+          paths: {
+            "/v1/audio/transcriptions": {
+              post: {
+                requestBody: {
+                  content: {
+                    "multipart/form-data": {
+                      schema: {
+                        properties: {
+                          clip_timestamps: { type: "string" },
+                          vad_filter: { type: "boolean" },
+                          vad_parameters: { type: "string" },
+                          word_timestamps: { type: "boolean" },
+                          without_timestamps: { type: "boolean" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "/v1/audio/speech/timestamps": {
+              post: {
+                requestBody: {
+                  content: {
+                    "multipart/form-data": {
+                      schema: { properties: { file: { type: "string", format: "binary" } } }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        })
+      };
+    }
+    if (String(url).endsWith("/v1/audio/speech/timestamps")) {
+      return {
+        ok: true,
+        json: async () => [{ start: 10000, end: 12000 }]
+      };
+    }
+    const fields = Array.from(init.body.entries()).map(([name, value]) => [name, value instanceof Blob ? "[blob]" : String(value)]);
+    postedFields.push(...fields);
+    return {
+      ok: true,
+      json: async () => ({
+        segments: [{
+          start: 9.7,
+          end: 12.4,
+          text: "prefix middle suffix",
+          words: [
+            { text: "prefix", start: 9.7, end: 10.05, probability: 0.91 },
+            { text: "middle", start: 10.1, end: 11.7, probability: 0.94 },
+            { text: "suffix", start: 12.05, end: 12.35, probability: 0.9 }
+          ]
+        }]
+      })
+    };
+  };
+  const driftedClipSegments = await context.transcribeBrowserAudioChunk(
+    {
+      index: 3,
+      start: 30,
+      end: 60,
+      duration: 30,
+      file: { name: "clip-edge-drift.wav", buffer: new ArrayBuffer(4), mime: "audio/wav" }
+    },
+    {
+      providerType: "openai",
+      baseUrl: "https://speaches-clip-edge-drift.example/v1",
+      model: "Systran/faster-whisper-large-v3",
+      apiKey: "test",
+      vadFilter: "auto"
+    }
+  );
+  assert.equal(postedFields.some(([name, value]) => name === "clip_timestamps" && value === "10,12"), true);
+  assert.equal(driftedClipSegments.length, 1);
+  assert.equal(driftedClipSegments[0].text, "prefix middle suffix");
+  assert.equal(driftedClipSegments[0].start, 39.7);
+  assert.equal(driftedClipSegments[0].end, 42.35);
+  context.fetch = originalFetch;
+}
+
+{
+  const originalFetch = context.fetch;
+  context.fetch = async (url, init = {}) => {
+    if (!init.method) {
+      return {
+        ok: true,
+        json: async () => ({
+          paths: {
+            "/v1/audio/transcriptions": {
+              post: {
+                requestBody: {
+                  content: {
+                    "multipart/form-data": {
+                      schema: {
+                        properties: {
+                          clip_timestamps: { type: "string" },
+                          vad_filter: { type: "boolean" },
+                          vad_parameters: { type: "string" },
+                          without_timestamps: { type: "boolean" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "/v1/audio/speech/timestamps": {
+              post: {
+                requestBody: {
+                  content: {
+                    "multipart/form-data": {
+                      schema: { properties: { file: { type: "string", format: "binary" } } }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        })
+      };
+    }
+    if (String(url).endsWith("/v1/audio/speech/timestamps")) {
+      return {
+        ok: true,
+        json: async () => [{ start: 9700, end: 10400 }]
+      };
+    }
+    return {
+      ok: true,
+      json: async () => ({
+        segments: [{ start: 9.7, end: 10.4, text: "おやすみなさい" }]
+      })
+    };
+  };
+  const suspiciousButSpokenSegments = await context.transcribeBrowserAudioChunk(
+    {
+      index: 4,
+      start: 30,
+      end: 60,
+      duration: 30,
+      file: { name: "clip-suspicious-spoken.wav", buffer: new ArrayBuffer(4), mime: "audio/wav" }
+    },
+    {
+      providerType: "openai",
+      baseUrl: "https://speaches-clip-suspicious-spoken.example/v1",
+      model: "Systran/faster-whisper-large-v3",
+      apiKey: "test",
+      vadFilter: "auto"
+    }
+  );
+  assert.equal(suspiciousButSpokenSegments.length, 1);
+  assert.equal(suspiciousButSpokenSegments[0].text, "おやすみなさい");
+  context.fetch = originalFetch;
+}
+
+{
+  const originalFetch = context.fetch;
+  context.fetch = async (url, init = {}) => {
+    if (!init.method) {
+      return {
+        ok: true,
+        json: async () => ({
+          paths: {
+            "/v1/audio/transcriptions": {
+              post: {
+                requestBody: {
+                  content: {
+                    "multipart/form-data": {
+                      schema: {
+                        properties: {
+                          clip_timestamps: { type: "string" },
+                          vad_filter: { type: "boolean" },
+                          vad_parameters: { type: "string" },
+                          without_timestamps: { type: "boolean" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "/v1/audio/speech/timestamps": {
+              post: {
+                requestBody: {
+                  content: {
+                    "multipart/form-data": {
+                      schema: { properties: { file: { type: "string", format: "binary" } } }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        })
+      };
+    }
+    if (String(url).endsWith("/v1/audio/speech/timestamps")) {
+      return {
+        ok: true,
+        json: async () => [{ start: 1000, end: 18000 }]
+      };
+    }
+    return {
+      ok: true,
+      json: async () => ({
+        segments: Array.from({ length: 6 }, (_, index) => ({
+          start: 1 + index * 2.6,
+          end: 1.8 + index * 2.6,
+          text: index % 2 ? "うん" : "嗯"
+        }))
+      })
+    };
+  };
+  const conversationalBackchannels = await context.transcribeBrowserAudioChunk(
+    {
+      index: 5,
+      start: 30,
+      end: 60,
+      duration: 30,
+      file: { name: "clip-backchannels.wav", buffer: new ArrayBuffer(4), mime: "audio/wav" }
+    },
+    {
+      providerType: "openai",
+      baseUrl: "https://speaches-clip-backchannels.example/v1",
+      model: "Systran/faster-whisper-large-v3",
+      apiKey: "test",
+      vadFilter: "auto"
+    }
+  );
+  assert.equal(conversationalBackchannels.length, 6);
+  assert.equal(JSON.stringify(conversationalBackchannels.map(segment => segment.text)), JSON.stringify(["嗯", "うん", "嗯", "うん", "嗯", "うん"]));
+  context.fetch = originalFetch;
+}
+
+{
+  const originalFetch = context.fetch;
+  const transcriptionRequests = [];
+  let retryDiagnostics = null;
+  context.fetch = async (url, init = {}) => {
+    if (!init.method) {
+      return {
+        ok: true,
+        json: async () => ({
+          paths: {
+            "/v1/audio/transcriptions": {
+              post: {
+                requestBody: {
+                  content: {
+                    "multipart/form-data": {
+                      schema: {
+                        properties: {
+                          clip_timestamps: { type: "string" },
+                          vad_filter: { type: "boolean" },
+                          vad_parameters: { type: "string" },
+                          without_timestamps: { type: "boolean" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "/v1/audio/speech/timestamps": {
+              post: {
+                requestBody: {
+                  content: {
+                    "multipart/form-data": {
+                      schema: { properties: { file: { type: "string", format: "binary" } } }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        })
+      };
+    }
+    if (String(url).endsWith("/v1/audio/speech/timestamps")) {
+      return {
+        ok: true,
+        json: async () => [
+          { start: 1000, end: 2000 },
+          { start: 7000, end: 9000 }
+        ]
+      };
+    }
+    const fields = Array.from(init.body.entries()).map(([name, value]) => [name, value instanceof Blob ? "[blob]" : String(value)]);
+    transcriptionRequests.push(fields);
+    if (fields.some(([name]) => name === "clip_timestamps")) {
+      return {
+        ok: true,
+        json: async () => ({
+          segments: [{ start: 1.1, end: 1.8, text: "first clip only" }]
+        })
+      };
+    }
+    return {
+      ok: true,
+      json: async () => ({
+        segments: [
+          { start: 7.2, end: 8.6, text: "second clip" }
+        ]
+      })
+    };
+  };
+  const recoveredSegments = await context.transcribeBrowserAudioChunk(
+    {
+      index: 2,
+      start: 30,
+      end: 60,
+      duration: 30,
+      file: { name: "clip-retry.wav", buffer: new ArrayBuffer(4), mime: "audio/wav" }
+    },
+    {
+      providerType: "openai",
+      baseUrl: "https://speaches-clip-retry.example/v1",
+      model: "Systran/faster-whisper-large-v3",
+      apiKey: "test",
+      vadFilter: "auto"
+    },
+    { onDiagnostics: diagnostics => { retryDiagnostics = diagnostics; } }
+  );
+  assert.equal(transcriptionRequests.length, 2);
+  assert.equal(transcriptionRequests[0].some(([name, value]) => name === "clip_timestamps" && value === "1,9"), true);
+  assert.equal(transcriptionRequests[0].some(([name, value]) => name === "vad_filter" && value === "false"), true);
+  assert.equal(transcriptionRequests[1].some(([name]) => name === "clip_timestamps"), false);
+  assert.equal(transcriptionRequests[1].some(([name, value]) => name === "vad_filter" && value === "true"), true);
+  assert.equal(retryDiagnostics.clipTimestampsAttempt.request.fields.some(([name, value]) => name === "clip_timestamps" && value === "1,9"), true);
+  assert.equal(retryDiagnostics.clipTimestampsAttempt.request.fields.some(([name, value]) => name === "vad_filter" && value === "false"), true);
+  assert.equal(retryDiagnostics.request.fields.some(([name]) => name === "clip_timestamps"), false);
+  assert.equal(retryDiagnostics.retry.request.fields.some(([name, value]) => name === "vad_filter" && value === "true"), true);
+  assert.equal(JSON.stringify(recoveredSegments.map(segment => segment.text)), JSON.stringify(["first clip only", "second clip"]));
+  assert.equal(recoveredSegments[1].start, 37.2);
+  context.fetch = originalFetch;
+}
+
+{
+  const originalFetch = context.fetch;
+  const transcriptionRequests = [];
+  context.fetch = async (url, init = {}) => {
+    if (!init.method) {
+      return {
+        ok: true,
+        json: async () => ({
+          paths: {
+            "/v1/audio/transcriptions": {
+              post: {
+                requestBody: {
+                  content: {
+                    "multipart/form-data": {
+                      schema: {
+                        properties: {
+                          clip_timestamps: { type: "string" },
+                          vad_filter: { type: "boolean" },
+                          without_timestamps: { type: "boolean" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "/v1/audio/speech/timestamps": {
+              post: {
+                requestBody: {
+                  content: {
+                    "multipart/form-data": {
+                      schema: { properties: { file: { type: "string", format: "binary" } } }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        })
+      };
+    }
+    if (String(url).endsWith("/v1/audio/speech/timestamps")) {
+      return {
+        ok: true,
+        json: async () => [{ start: 1000, end: 1500 }]
+      };
+    }
+    const fields = Array.from(init.body.entries()).map(([name, value]) => [name, value instanceof Blob ? "[blob]" : String(value)]);
+    transcriptionRequests.push(fields);
+    if (fields.some(([name]) => name === "clip_timestamps")) {
+      return { ok: true, json: async () => ({ segments: [] }) };
+    }
+    return {
+      ok: true,
+      json: async () => ({
+        segments: [{ start: 1.05, end: 1.42, text: "嗯" }]
+      })
+    };
+  };
+  const shortBackchannelRecovery = await context.transcribeBrowserAudioChunk(
+    {
+      index: 9,
+      start: 30,
+      end: 60,
+      duration: 30,
+      file: { name: "clip-short-backchannel.wav", buffer: new ArrayBuffer(4), mime: "audio/wav" }
+    },
+    {
+      providerType: "openai",
+      baseUrl: "https://speaches-clip-short-retry.example/v1",
+      model: "Systran/faster-whisper-large-v3",
+      apiKey: "test",
+      vadFilter: "auto"
+    }
+  );
+  assert.equal(transcriptionRequests.length, 2);
+  assert.equal(transcriptionRequests[0].some(([name, value]) => name === "clip_timestamps" && value === "1,1.5"), true);
+  assert.equal(transcriptionRequests[1].some(([name]) => name === "clip_timestamps"), false);
+  assert.equal(JSON.stringify(shortBackchannelRecovery.map(segment => segment.text)), JSON.stringify(["嗯"]));
+  assert.equal(shortBackchannelRecovery[0].start, 31.05);
+  context.fetch = originalFetch;
+}
+
+{
+  const originalFetch = context.fetch;
+  const transcriptionRequests = [];
+  let retryDiagnostics = null;
+  context.fetch = async (url, init = {}) => {
+    if (!init.method) {
+      return {
+        ok: true,
+        json: async () => ({
+          paths: {
+            "/v1/audio/transcriptions": {
+              post: {
+                requestBody: {
+                  content: {
+                    "multipart/form-data": {
+                      schema: {
+                        properties: {
+                          clip_timestamps: { type: "string" },
+                          vad_filter: { type: "boolean" },
+                          without_timestamps: { type: "boolean" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "/v1/audio/speech/timestamps": {
+              post: {
+                requestBody: {
+                  content: {
+                    "multipart/form-data": {
+                      schema: { properties: { file: { type: "string", format: "binary" } } }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        })
+      };
+    }
+    if (String(url).endsWith("/v1/audio/speech/timestamps")) {
+      return {
+        ok: true,
+        json: async () => [{ start: 1000, end: 20000 }]
+      };
+    }
+    const fields = Array.from(init.body.entries()).map(([name, value]) => [name, value instanceof Blob ? "[blob]" : String(value)]);
+    transcriptionRequests.push(fields);
+    if (fields.some(([name]) => name === "clip_timestamps")) {
+      return {
+        ok: true,
+        json: async () => ({
+          segments: [{ start: 1.2, end: 2.4, text: "first long speech sentence" }]
+        })
+      };
+    }
+    return {
+      ok: true,
+      json: async () => ({
+        segments: [{ start: 12.2, end: 13.5, text: "later long speech sentence" }]
+      })
+    };
+  };
+  const longSpeechRecovery = await context.transcribeBrowserAudioChunk(
+    {
+      index: 13,
+      start: 30,
+      end: 90,
+      duration: 60,
+      file: { name: "long-vad-window.wav", buffer: new ArrayBuffer(4), mime: "audio/wav" }
+    },
+    {
+      providerType: "openai",
+      baseUrl: "https://speaches-long-vad-window.example/v1",
+      model: "Systran/faster-whisper-large-v3",
+      apiKey: "test",
+      vadFilter: "auto"
+    },
+    { onDiagnostics: diagnostics => { retryDiagnostics = diagnostics; } }
+  );
+  assert.equal(transcriptionRequests.length, 2);
+  assert.equal(transcriptionRequests[0].some(([name, value]) => name === "clip_timestamps" && value === "1,20"), true);
+  assert.equal(transcriptionRequests[1].some(([name]) => name === "clip_timestamps"), false);
+  assert.equal(transcriptionRequests[1].some(([name, value]) => name === "vad_filter" && value === "true"), true);
+  assert.equal(JSON.stringify(longSpeechRecovery.map(segment => segment.text)), JSON.stringify([
+    "first long speech sentence",
+    "later long speech sentence"
+  ]));
+  assert.equal(retryDiagnostics.retry.reason, "可靠 VAD 语音区间未被 clip_timestamps 识别结果覆盖，已不带 clip_timestamps 重试。");
+  context.fetch = originalFetch;
+}
+
+{
+  const originalFetch = context.fetch;
+  const transcriptionRequests = [];
+  let matureDiagnostics = null;
+  context.fetch = async (url, init = {}) => {
+    if (!init.method) {
+      return {
+        ok: true,
+        json: async () => ({
+          paths: {
+            "/v1/audio/transcriptions": {
+              post: {
+                requestBody: {
+                  content: {
+                    "multipart/form-data": {
+                      schema: {
+                        properties: {
+                          clip_timestamps: { type: "string" },
+                          vad_filter: { type: "boolean" },
+                          vad_parameters: { type: "string" },
+                          without_timestamps: { type: "boolean" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "/v1/audio/speech/timestamps": {
+              post: {
+                requestBody: {
+                  content: {
+                    "multipart/form-data": {
+                      schema: { properties: { file: { type: "string", format: "binary" } } }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        })
+      };
+    }
+    if (String(url).endsWith("/v1/audio/speech/timestamps")) {
+      return {
+        ok: true,
+        json: async () => [{ start: 1000, end: 59000 }]
+      };
+    }
+    const fields = Array.from(init.body.entries()).map(([name, value]) => [name, value instanceof Blob ? "[blob]" : String(value)]);
+    transcriptionRequests.push(fields);
+    return {
+      ok: true,
+      json: async () => ({
+        segments: [
+          { start: 1.2, end: 2.4, text: "first continuous sentence" },
+          { start: 35.2, end: 36.5, text: "server vad later sentence" }
+        ]
+      })
+    };
+  };
+  const serverVadSegments = await context.transcribeBrowserAudioChunk(
+    {
+      index: 14,
+      start: 30,
+      end: 90,
+      duration: 60,
+      file: { name: "unsafe-long-vad-window.wav", buffer: new ArrayBuffer(4), mime: "audio/wav" }
+    },
+    {
+      providerType: "openai",
+      baseUrl: "https://speaches-long-window-server-vad.example/v1",
+      model: "Systran/faster-whisper-large-v3",
+      apiKey: "test",
+      vadFilter: "auto"
+    },
+    { onDiagnostics: diagnostics => { matureDiagnostics = diagnostics; } }
+  );
+  assert.equal(transcriptionRequests.length, 1);
+  assert.equal(transcriptionRequests[0].some(([name]) => name === "clip_timestamps"), false);
+  assert.equal(transcriptionRequests[0].some(([name, value]) => name === "vad_filter" && value === "true"), true);
+  assert.equal(JSON.stringify(serverVadSegments.map(segment => segment.text)), JSON.stringify([
+    "first continuous sentence",
+    "server vad later sentence"
+  ]));
+  assert.equal(Boolean(matureDiagnostics.vadFilterAttempt), false);
+  assert.equal(Boolean(matureDiagnostics.retry), false);
+  assert.equal(matureDiagnostics.matureAsrPlan.request.mode, "compatible_vad_filter");
+  assert.equal(matureDiagnostics.matureAsrPlan.vad.clipTimestampsSkippedReason, "long_speech_interval_requires_server_vad");
+  context.fetch = originalFetch;
+}
+
+{
+  const originalFetch = context.fetch;
+  const originalSendMessage = chrome.runtime.sendMessage;
+  const requested = [];
+  const transcriptionRequests = [];
+  let speachesDiagnostics = null;
+  const offscreenMessages = [];
+  chrome.runtime.sendMessage = async message => {
+    offscreenMessages.push(message);
+    return {
+      ok: true,
+      result: {
+        chunks: [
+          {
+            index: 0,
+            start: 31,
+            end: 59,
+            duration: 2,
+            sourceStart: 31,
+            sourceEnd: 59,
+            speechIntervals: [
+              { start: 31, end: 32 },
+              { start: 58, end: 59 }
+            ],
+            timeMap: [
+              { outputStart: 0, outputEnd: 1, sourceStart: 31, sourceEnd: 32 },
+              { outputStart: 1, outputEnd: 2, sourceStart: 58, sourceEnd: 59 }
+            ],
+            file: { name: "speech-only-000.mp3", buffer: new ArrayBuffer(4), mime: "audio/mpeg" },
+            bytes: 4
+          }
+        ]
+      }
+    };
+  };
+  context.fetch = async (url, init = {}) => {
+    requested.push([String(url), init.method || "GET"]);
+    if (!init.method) {
+      return {
+        ok: true,
+        json: async () => ({
+          paths: {
+            "/v1/audio/transcriptions": {
+              post: {
+                requestBody: {
+                  content: {
+                    "application/x-www-form-urlencoded": {
+                      schema: {
+                        properties: {
+                          model: { type: "string" },
+                          response_format: { type: "string" },
+                          timestamp_granularities: { type: "array" },
+                          vad_filter: { type: "boolean" },
+                          file: { type: "string", format: "binary" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "/v1/audio/speech/timestamps": {
+              post: {
+                requestBody: {
+                  content: {
+                    "application/x-www-form-urlencoded": {
+                      schema: {
+                        properties: {
+                          threshold: { type: "number" },
+                          min_speech_duration_ms: { type: "integer" },
+                          max_speech_duration_s: { type: "number" },
+                          min_silence_duration_ms: { type: "integer" },
+                          speech_pad_ms: { type: "integer" },
+                          file: { type: "string", format: "binary" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        })
+      };
+    }
+    if (String(url).endsWith("/v1/audio/speech/timestamps")) {
+      return {
+        ok: true,
+        json: async () => [{ start: 1000, end: 2000 }, { start: 28000, end: 29000 }]
+      };
+    }
+    const fields = Array.from(init.body.entries()).map(([name, value]) => [name, value instanceof Blob ? "[blob]" : String(value)]);
+    transcriptionRequests.push(fields);
+    if (fields.some(([name, value]) => name === "vad_filter" && value === "true")) {
+      return {
+        ok: true,
+        json: async () => ({
+          segments: [{ start: 1.2, end: 2.4, text: "server vad first sentence" }]
+        })
+      };
+    }
+    return {
+      ok: true,
+      json: async () => ({
+        segments: [{ start: 1.1, end: 1.6, text: "speech-only second sentence" }]
+      })
+    };
+  };
+  const recoveredSpeachesSegments = await context.transcribeBrowserAudioChunk(
+    {
+      index: 15,
+      start: 30,
+      end: 90,
+      duration: 60,
+      file: {
+        name: "speaches-form-urlencoded-vad.wav",
+        buffer: new ArrayBuffer(4),
+        cacheUrl: "https://fuguang.local/audio/speaches-form-urlencoded-vad.wav",
+        mime: "audio/wav"
+      }
+    },
+    {
+      providerType: "openai",
+      baseUrl: "https://speaches-form-urlencoded-vad.example/v1",
+      model: "Systran/faster-whisper-large-v3",
+      apiKey: "test",
+      vadFilter: "auto"
+    },
+    { onDiagnostics: diagnostics => { speachesDiagnostics = diagnostics; } }
+  );
+  assert.deepEqual(requested.map(([url, method]) => [new URL(url).pathname, method]), [
+    ["/openapi.json", "GET"],
+    ["/v1/audio/speech/timestamps", "POST"],
+    ["/v1/audio/transcriptions", "POST"]
+  ]);
+  assert.equal(offscreenMessages.length, 0);
+  assert.equal(transcriptionRequests.length, 1);
+  assert.equal(transcriptionRequests[0].some(([name]) => name === "clip_timestamps"), false);
+  assert.equal(transcriptionRequests[0].some(([name, value]) => name === "vad_filter" && value === "true"), true);
+  assert.equal(JSON.stringify(recoveredSpeachesSegments.map(segment => segment.text)), JSON.stringify([
+    "server vad first sentence"
+  ]));
+  assert.equal(Math.round(recoveredSpeachesSegments[0].start * 10) / 10, 31.2);
+  assert.equal(Math.round(recoveredSpeachesSegments[0].end * 10) / 10, 32.4);
+  assert.equal(speachesDiagnostics.vad.speechIntervals.length, 2);
+  assert.equal(speachesDiagnostics.vad.requestFields.some(([name, value]) => name === "min_silence_duration_ms" && value === "160"), true);
+  assert.equal(speachesDiagnostics.matureAsrPlan.request.mode, "compatible_vad_filter");
+  assert.equal(speachesDiagnostics.collectedSpeech, null);
+  assert.equal(Boolean(speachesDiagnostics.vadFilterAttempt), false);
+  assert.equal(Boolean(speachesDiagnostics.retry), false);
+  chrome.runtime.sendMessage = originalSendMessage;
+  context.fetch = originalFetch;
+}
+
+{
+  const restored = context.restoreBrowserAsrCollectedSpeechSegments([
+    {
+      start: 0.9,
+      end: 1.2,
+      text: "boundary word",
+      words: [{ start: 0.9, end: 1.2, text: "boundary", probability: 0.9 }]
+    },
+    {
+      start: 0.9,
+      end: 1.2,
+      text: "segment-only boundary"
+    }
+  ], [
+    { outputStart: 0, outputEnd: 1, sourceStart: 31, sourceEnd: 32 },
+    { outputStart: 1, outputEnd: 2, sourceStart: 58, sourceEnd: 59 }
+  ]);
+  assert.equal(restored.length, 2);
+  assert.equal(restored[0].start, 57.9);
+  assert.equal(restored[0].end, 58.2);
+  assert.equal(restored[0].words[0].start, 57.9);
+  assert.equal(restored[0].words[0].end, 58.2);
+  assert.equal(restored[1].start, 31.9);
+  assert.equal(restored[1].end, 58.2);
+}
+
+{
+  const originalFetch = context.fetch;
+  const originalSendMessage = chrome.runtime.sendMessage;
+  const transcriptionRequests = [];
+  let speachesDiagnostics = null;
+  chrome.runtime.sendMessage = async () => ({
+    ok: true,
+    result: {
+      chunks: [
+        {
+          index: 0,
+          start: 31,
+          end: 89,
+          duration: 58,
+          sourceStart: 31,
+          sourceEnd: 89,
+          speechIntervals: [{ start: 31, end: 89 }],
+          timeMap: [{ outputStart: 0, outputEnd: 58, sourceStart: 31, sourceEnd: 89 }],
+          file: { name: "speech-only-hallucination.mp3", buffer: new ArrayBuffer(4), mime: "audio/mpeg" },
+          bytes: 4
+        }
+      ]
+    }
+  });
+  context.fetch = async (url, init = {}) => {
+    if (!init.method) {
+      return {
+        ok: true,
+        json: async () => ({
+          paths: {
+            "/v1/audio/transcriptions": {
+              post: {
+                requestBody: {
+                  content: {
+                    "application/x-www-form-urlencoded": {
+                      schema: {
+                        properties: {
+                          model: { type: "string" },
+                          response_format: { type: "string" },
+                          timestamp_granularities: { type: "array" },
+                          vad_filter: { type: "boolean" },
+                          file: { type: "string", format: "binary" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "/v1/audio/speech/timestamps": {
+              post: {
+                requestBody: {
+                  content: {
+                    "application/x-www-form-urlencoded": {
+                      schema: {
+                        properties: {
+                          threshold: { type: "number" },
+                          min_speech_duration_ms: { type: "integer" },
+                          max_speech_duration_s: { type: "number" },
+                          min_silence_duration_ms: { type: "integer" },
+                          speech_pad_ms: { type: "integer" },
+                          file: { type: "string", format: "binary" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        })
+      };
+    }
+    if (String(url).endsWith("/v1/audio/speech/timestamps")) {
+      return {
+        ok: true,
+        json: async () => [{ start: 1000, end: 59000 }]
+      };
+    }
+    const fields = Array.from(init.body.entries()).map(([name, value]) => [name, value instanceof Blob ? "[blob]" : String(value)]);
+    transcriptionRequests.push(fields);
+    if (fields.some(([name, value]) => name === "vad_filter" && value === "true")) {
+      return {
+        ok: true,
+        json: async () => ({
+          segments: [{ start: 1.2, end: 2.4, text: "server vad first sentence" }]
+        })
+      };
+    }
+    return {
+      ok: true,
+      json: async () => ({
+        segments: [
+          { start: 2.5, end: 4, text: "お腹いっぱいになったら、" },
+          { start: 4.1, end: 8, text: "お腹いっぱいになったら、" },
+          { start: 8.1, end: 14, text: "お腹いっぱいになったら、" },
+          { start: 14.1, end: 20, text: "お腹いっぱいになったら、" },
+          { start: 50, end: 55, text: "お腹いっぱいになったら、" }
+        ]
+      })
+    };
+  };
+  const recoveredSpeachesSegments = await context.transcribeBrowserAudioChunk(
+    {
+      index: 16,
+      start: 30,
+      end: 90,
+      duration: 60,
+      file: { name: "speaches-no-vad-hallucination-retry.wav", buffer: new ArrayBuffer(4), mime: "audio/wav" }
+    },
+    {
+      providerType: "openai",
+      baseUrl: "https://speaches-no-vad-hallucination-retry.example/v1",
+      model: "Systran/faster-whisper-large-v3",
+      apiKey: "test",
+      vadFilter: "auto",
+      experimentalCollectedSpeechAudio: true
+    },
+    { onDiagnostics: diagnostics => { speachesDiagnostics = diagnostics; } }
+  );
+  assert.equal(transcriptionRequests.length, 1);
+  assert.equal(transcriptionRequests[0].some(([name]) => name === "vad_filter"), false);
+  assert.equal(JSON.stringify(recoveredSpeachesSegments.map(segment => segment.text)), JSON.stringify([]));
+  assert.equal(speachesDiagnostics.matureAsrPlan.request.mode, "collected_external_vad");
+  assert.equal(Boolean(speachesDiagnostics.retry), false);
+  chrome.runtime.sendMessage = originalSendMessage;
+  context.fetch = originalFetch;
+}
+
+{
+  const originalFetch = context.fetch;
+  let failedDiagnostics = null;
+  const transcriptionRequests = [];
+  context.fetch = async (url, init = {}) => {
+    if (!init.method) {
+      return {
+        ok: true,
+        json: async () => ({
+          paths: {
+            "/v1/audio/transcriptions": {
+              post: {
+                requestBody: {
+                  content: {
+                    "multipart/form-data": {
+                      schema: {
+                        properties: {
+                          clip_timestamps: { type: "string" },
+                          vad_filter: { type: "boolean" },
+                          without_timestamps: { type: "boolean" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "/v1/audio/speech/timestamps": {
+              post: {
+                requestBody: {
+                  content: {
+                    "multipart/form-data": {
+                      schema: { properties: { file: { type: "string", format: "binary" } } }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        })
+      };
+    }
+    if (String(url).endsWith("/v1/audio/speech/timestamps")) {
+      return {
+        ok: true,
+        json: async () => [{ start: 1000, end: 1800 }]
+      };
+    }
+    const fields = Array.from(init.body.entries()).map(([name, value]) => [name, value instanceof Blob ? "[blob]" : String(value)]);
+    transcriptionRequests.push(fields);
+    if (!fields.some(([name]) => name === "clip_timestamps")) {
+      return {
+        ok: true,
+        json: async () => ({
+          segments: [{ start: 1.05, end: 1.75, text: "fallback speech" }]
+        })
+      };
+    }
+    return {
+      ok: false,
+      status: 400,
+      json: async () => ({ error: { message: "clip timestamp parse failed" } })
+    };
+  };
+  const fallbackSegments = await context.transcribeBrowserAudioChunk(
+    {
+      index: 10,
+      start: 30,
+      end: 60,
+      duration: 30,
+      file: { name: "clip-failed.wav", buffer: new ArrayBuffer(4), mime: "audio/wav" }
+    },
+    {
+      providerType: "openai",
+      baseUrl: "https://speaches-clip-fail.example/v1",
+      model: "Systran/faster-whisper-large-v3",
+      apiKey: "test",
+      vadFilter: "auto"
+    },
+    { onDiagnostics: diagnostics => { failedDiagnostics = diagnostics; } }
+  );
+  assert.equal(JSON.stringify(fallbackSegments.map(segment => segment.text)), JSON.stringify(["fallback speech"]));
+  assert.equal(transcriptionRequests.length, 2);
+  assert.equal(transcriptionRequests[0].some(([name, value]) => name === "clip_timestamps" && value === "1,1.8"), true);
+  assert.equal(transcriptionRequests[1].some(([name]) => name === "clip_timestamps"), false);
+  assert.equal(transcriptionRequests[1].some(([name, value]) => name === "vad_filter" && value === "true"), true);
+  assert.equal(Boolean(failedDiagnostics), true);
+  assert.equal(failedDiagnostics.vad.speechIntervals.length, 1);
+  assert.equal(failedDiagnostics.clipTimestampsAttempt.error.stage, "asr_request");
+  assert.equal(failedDiagnostics.clipTimestampsAttempt.error.status, 400);
+  assert.equal(failedDiagnostics.clipTimestampsAttempt.error.message, "clip timestamp parse failed");
+  assert.equal(failedDiagnostics.clipTimestampsAttempt.rawPayload.error.message, "clip timestamp parse failed");
+  assert.equal(failedDiagnostics.clipTimestampsAttempt.matureAsrPlan.request.mode, "external_vad_clip");
+  assert.equal(failedDiagnostics.matureAsrPlan.request.mode, "compatible_vad_filter");
+  assert.equal(failedDiagnostics.request.fields.some(([name]) => name === "clip_timestamps"), false);
+  assert.equal(failedDiagnostics.retry.request.fields.some(([name, value]) => name === "vad_filter" && value === "true"), true);
+  assert.equal(failedDiagnostics.retry.matureAsrPlan.request.mode, "compatible_vad_filter");
+  context.fetch = originalFetch;
+}
+
+{
+  const originalFetch = context.fetch;
+  let postprocessDiagnostics = null;
+  context.fetch = async (_url, init = {}) => {
+    if (!init.method) {
+      return {
+        ok: true,
+        json: async () => ({
+          paths: {
+            "/v1/audio/transcriptions": {
+              post: {
+                requestBody: {
+                  content: {
+                    "multipart/form-data": {
+                      schema: { properties: { without_timestamps: { type: "boolean" } } }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        })
+      };
+    }
+    return {
+      ok: true,
+      json: async () => ({ text: "no timestamps here" })
+    };
+  };
+  await assert.rejects(
+    context.transcribeBrowserAudioChunk(
+      {
+        index: 11,
+        start: 0,
+        end: 30,
+        duration: 30,
+        file: { name: "text-only.wav", buffer: new ArrayBuffer(4), mime: "audio/wav" }
+      },
+      {
+        providerType: "openai",
+        baseUrl: "https://speaches-text-only.example/v1",
+        model: "Systran/faster-whisper-large-v3",
+        apiKey: "test",
+        vadFilter: "auto"
+      },
+      { onDiagnostics: diagnostics => { postprocessDiagnostics = diagnostics; } }
+    ),
+    /时间戳/
+  );
+  assert.equal(Boolean(postprocessDiagnostics), true);
+  assert.equal(postprocessDiagnostics.error.stage, "postprocess");
+  assert.equal(postprocessDiagnostics.rawPayload.text, "no timestamps here");
+  context.fetch = originalFetch;
+}
+
+{
+  const originalFetch = context.fetch;
   context.fetch = async (_url, init = {}) => new Promise((_, reject) => {
     init.signal?.addEventListener("abort", () => {
       const error = new Error("The operation was aborted.");
@@ -3652,6 +6164,158 @@ function add(tabId, candidate) {
     /ASR 请求超时/
   );
   context.fetch = originalFetch;
+}
+
+{
+  const originalFetch = context.fetch;
+  let capturedDiagnostics = null;
+  context.fetch = async (url, init = {}) => {
+    if (!init.method) {
+      return { ok: true, json: async () => ({ paths: {} }) };
+    }
+    return {
+      ok: true,
+      json: async () => ({
+        duration: 30,
+        segments: [
+          { start: 0.2, end: 1.4, text: "kept" },
+          { start: 42, end: 44, text: "outside" }
+        ]
+      })
+    };
+  };
+  const finalSegments = await context.transcribeBrowserAudioChunk(
+    {
+      index: 7,
+      start: 30,
+      end: 60,
+      coreStart: 30,
+      coreEnd: 60,
+      duration: 30,
+      bytes: 4,
+      file: { name: "diag.wav", cacheUrl: "https://fuguang.local/audio/diag.wav", buffer: new ArrayBuffer(4), mime: "audio/wav" }
+    },
+    {
+      providerType: "openai",
+      baseUrl: "https://diagnostics-asr.example/v1",
+      model: "whisper-1",
+      apiKey: "test",
+      vadFilter: "off"
+    },
+    {
+      onDiagnostics: diagnostics => {
+        capturedDiagnostics = diagnostics;
+      }
+    }
+  );
+  assert.equal(finalSegments.length, 1);
+  assert.equal(capturedDiagnostics.chunk.index, 7);
+  assert.equal(capturedDiagnostics.chunk.file.cacheUrl, "https://fuguang.local/audio/diag.wav");
+  assert.equal(capturedDiagnostics.request.fields.some(([name]) => name === "file"), false);
+  assert.equal(capturedDiagnostics.request.authorizationIncluded, false);
+  assert.equal(capturedDiagnostics.rawPayload.segments.length, 2);
+  assert.equal(capturedDiagnostics.normalizedSegments.length, 2);
+  assert.equal(capturedDiagnostics.finalSegments.length, 1);
+  assert.deepEqual(capturedDiagnostics.postprocess.droppedSegments.map(item => ({
+    stage: item.stage,
+    reason: item.reason,
+    text: item.segment.text
+  })), [
+    { stage: "chunkOwnership", reason: "outside_chunk_core", text: "outside" }
+  ]);
+  context.fetch = originalFetch;
+}
+
+{
+  const diagnostics = context.buildPreloadDiagnostics({
+    job: {
+      id: "job-diag",
+      status: "completed",
+      stage: "completed",
+      extract: { status: "completed", duration: 60 },
+      translation: {
+        chunkStatuses: [{ index: 0, stage: "completed", sourceCount: 1 }],
+        vttText: "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\n你好\n"
+      }
+    },
+    metadata: { title: "诊断视频", pageUrl: "https://example.test/watch?token=secret" },
+    audioChunks: [{
+      index: 0,
+      start: 0,
+      end: 30,
+      coreStart: 0,
+      coreEnd: 30,
+      speechIntervalsReliable: false,
+      file: { name: "chunk-001.mp3", cacheUrl: "https://fuguang.local/__fuguang_audio_cache/chunk-001.mp3", mime: "audio/mpeg" },
+      bytes: 123
+    }],
+    browserAsrDiagnosticsByChunk: new Map([[0, {
+      chunk: { index: 0, start: 0, end: 30 },
+      request: { endpoint: "https://asr.example/v1/audio/transcriptions?api_key=secret", fields: [["model", "whisper-1"]], authorizationIncluded: false },
+      rawPayload: { segments: [{ text: "hello" }] },
+      finalSegments: [{ start: 0, end: 1, text: "hello" }]
+    }]]),
+    sourceSegmentsByChunk: new Map([[0, [{ start: 0, end: 1, text: "hello", chunkIndex: 0, segmentIndex: 0 }]]]),
+    translatedSegmentsByChunk: new Map([[0, [{ start: 0, end: 1, text: "你好", chunkIndex: 0, segmentIndex: 0 }]]]),
+    modelConfig: {
+      asr: { providerType: "openai", baseUrl: "https://asr.example/v1", model: "whisper-1", apiKey: "do-not-export" }
+    }
+  });
+  assert.equal(diagnostics.version, 1);
+  assert.equal(diagnostics.job.id, "job-diag");
+  assert.equal(diagnostics.audioChunks[0].file.cacheUrl.includes("__fuguang_audio_cache"), true);
+  assert.equal(diagnostics.asrChunks[0].rawPayload.segments[0].text, "hello");
+  assert.equal(JSON.stringify(diagnostics).includes("do-not-export"), false);
+  assert.equal(JSON.stringify(diagnostics).includes("api_key=secret"), false);
+}
+
+{
+  const cache = await caches.open("fuguang-web-ffmpeg-audio");
+  const cacheUrl = "https://fuguang.local/__fuguang_audio_cache/job-audio/chunk-001.mp3";
+  await cache.put(cacheUrl, new FakeResponse(new Uint8Array([5, 6, 7]).buffer));
+  vm.runInContext(`
+    browserPreloadJobs.set("job-audio", {
+      job: {
+        id: "job-audio",
+        status: "completed",
+        stage: "completed",
+        extract: { status: "completed" },
+        translation: { chunkStatuses: [] }
+      },
+      metadata: { title: "audio diag" },
+      audioChunks: [{
+        index: 0,
+        start: 0,
+        end: 30,
+        file: {
+          name: "chunk-001.mp3",
+          mime: "audio/mpeg",
+          cacheUrl: "${cacheUrl}",
+          bytes: 3
+        },
+        bytes: 3
+      }],
+      browserAsrDiagnosticsByChunk: new Map(),
+      sourceSegmentsByChunk: new Map(),
+      translatedSegmentsByChunk: new Map(),
+      modelConfig: {
+        asr: { providerType: "openai", baseUrl: "https://asr.example/v1", model: "whisper-1", apiKey: "do-not-export" }
+      }
+    });
+  `, context);
+  try {
+    const response = await vm.runInContext("getPreloadDiagnostics('job-audio')", context);
+    assert.equal(response.audioFiles.length, 1);
+    assert.equal(response.audioFiles[0].path, "audio/chunk-0000-chunk-001.mp3");
+    assert.equal(response.audioFiles[0].mime, "audio/mpeg");
+    assert.equal(response.audioFiles[0].base64, "BQYH");
+    assert.equal(JSON.parse(JSON.stringify(response)).audioFiles[0].base64, "BQYH");
+    assert.equal(response.diagnostics.audioExport.files[0].included, true);
+    assert.equal(response.diagnostics.audioExport.files[0].path, "audio/chunk-0000-chunk-001.mp3");
+    assert.equal(JSON.stringify(response.diagnostics).includes("do-not-export"), false);
+  } finally {
+    vm.runInContext("browserPreloadJobs.delete('job-audio')", context);
+  }
 }
 
 {

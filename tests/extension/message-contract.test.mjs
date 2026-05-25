@@ -37,6 +37,7 @@ assert.deepEqual(backgroundHandled, new Set([
   "CHECK_PRELOAD_JOB",
   "GET_PRELOAD_VTT",
   "GET_PRELOAD_TRANSCRIPT",
+  "GET_PRELOAD_DIAGNOSTICS",
   "GET_VIDEO_STATE",
   "ATTACH_VTT_TEXT",
   "DETACH_PRELOAD_VTT",
@@ -53,13 +54,13 @@ const sidepanelSent = messageKeysForPattern(files.sidepanel, /type:\s*MESSAGE\.(
 assert.equal(hasSetDifference(sidepanelSent, backgroundHandled), false);
 
 const offscreenHandled = messageKeysForPattern(files.offscreen, /message\?\.type === MESSAGE\.([A-Z0-9_]+)/g);
-assert.deepEqual(offscreenHandled, new Set(["OFFSCREEN_WEB_FFMPEG_EXTRACT_AUDIO"]));
+assert.deepEqual(offscreenHandled, new Set(["OFFSCREEN_WEB_FFMPEG_EXTRACT_AUDIO", "OFFSCREEN_WEB_FFMPEG_COLLECT_SPEECH_AUDIO"]));
 
 const offscreenSent = messageKeysForPattern(files.offscreen, /type:\s*MESSAGE\.([A-Z0-9_]+)/g);
 assert.equal(hasSetDifference(offscreenSent, backgroundHandled), false);
 
 const backgroundRuntimeSent = messageKeysForPattern(files.background, /chrome\.runtime\.sendMessage\(\{\s*type:\s*MESSAGE\.([A-Z0-9_]+)/g);
-assert.deepEqual(backgroundRuntimeSent, new Set(["OFFSCREEN_WEB_FFMPEG_EXTRACT_AUDIO"]));
+assert.deepEqual(backgroundRuntimeSent, new Set(["OFFSCREEN_WEB_FFMPEG_EXTRACT_AUDIO", "OFFSCREEN_WEB_FFMPEG_COLLECT_SPEECH_AUDIO"]));
 assert.equal(hasSetDifference(backgroundRuntimeSent, offscreenHandled), false);
 
 const overlayHandled = messageKeysForPattern(files.overlay, /message\?\.type === MESSAGE\.([A-Z0-9_]+)/g);
@@ -80,13 +81,13 @@ assert.ok(files.pageSniffer.includes("FUGUANG_PAGE_SNIFFER_CONTEXT"));
 
 const offscreenWebFfmpegRequests = new Set([
   ...files.offscreen.matchAll(/type:\s*"([^"]+)"/g)
-].map(match => match[1]).filter(type => ["ping", "load", "extract-audio", "concat-audio"].includes(type)));
-assert.deepEqual(offscreenWebFfmpegRequests, new Set(["ping", "load", "extract-audio", "concat-audio"]));
+].map(match => match[1]).filter(type => ["ping", "load", "extract-audio", "concat-audio", "collect-speech-audio"].includes(type)));
+assert.deepEqual(offscreenWebFfmpegRequests, new Set(["ping", "load", "extract-audio", "concat-audio", "collect-speech-audio"]));
 
 const webFfmpegHandledRequests = new Set([
   ...webFfmpeg.matchAll(/message\.type === "([^"]+)"/g)
 ].map(match => match[1]));
-assert.deepEqual(webFfmpegHandledRequests, new Set(["ping", "load", "extract-audio", "concat-audio"]));
+assert.deepEqual(webFfmpegHandledRequests, new Set(["ping", "load", "extract-audio", "concat-audio", "collect-speech-audio"]));
 
 const webFfmpegReplies = new Set([
   ...webFfmpeg.matchAll(/type:\s*"([^"]+)"/g)

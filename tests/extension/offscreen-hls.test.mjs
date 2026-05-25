@@ -71,6 +71,61 @@ const source = fs.readFileSync(new URL("../../extension/src/offscreen/offscreen.
 vm.runInContext(source, context, { filename: "offscreen.js" });
 
 {
+  const originalEnsureWebFfmpegFrame = context.ensureWebFfmpegFrame;
+  const originalWarmWebFfmpegFrame = context.warmWebFfmpegFrame;
+  const originalRequestWebFfmpeg = context.requestWebFfmpeg;
+  const originalCaches = context.caches;
+  const originalResponse = context.Response;
+  const cachedBuffer = Uint8Array.from([7, 8, 9]).buffer;
+  const cache = new Map([
+    ["https://fuguang.local/audio/logical.mp3", { arrayBuffer: async () => cachedBuffer }]
+  ]);
+  let captured = null;
+  context.ensureWebFfmpegFrame = async () => {};
+  context.warmWebFfmpegFrame = () => {};
+  context.Response = class {
+    constructor(body) {
+      this.body = body;
+    }
+
+    async arrayBuffer() {
+      return this.body;
+    }
+  };
+  context.caches = {
+    open: async () => ({
+      match: async key => cache.get(String(key)),
+      put: async (key, response) => { cache.set(String(key), response); },
+      delete: async key => cache.delete(String(key))
+    })
+  };
+  context.requestWebFfmpeg = async (payload, transfer) => {
+    captured = { payload, transfer };
+    return { chunks: [], bytes: 0 };
+  };
+  await context.collectSpeechAudioWithWebFfmpeg({
+    webFfmpegUrl: "chrome-extension://fuguang-test/web-ffmpeg/index.html",
+    file: {
+      name: "logical.mp3",
+      mime: "audio/mpeg",
+      cacheUrl: "https://fuguang.local/audio/logical.mp3"
+    },
+    speechIntervals: [{ start: 1, end: 2 }],
+    duration: 3,
+    maxChunkSeconds: 30
+  });
+  assert.equal(captured.payload.file.buffer instanceof ArrayBuffer, true);
+  assert.equal(captured.payload.file.buffer.byteLength, 3);
+  assert.equal(captured.transfer.length, 1);
+  assert.equal(captured.transfer[0].byteLength, 3);
+  context.ensureWebFfmpegFrame = originalEnsureWebFfmpegFrame;
+  context.warmWebFfmpegFrame = originalWarmWebFfmpegFrame;
+  context.requestWebFfmpeg = originalRequestWebFfmpeg;
+  context.caches = originalCaches;
+  context.Response = originalResponse;
+}
+
+{
   const url = context.normalizeWebFfmpegUrl("chrome-extension://fuguang-test/web-ffmpeg/index.html");
   assert.equal(url, "chrome-extension://fuguang-test/web-ffmpeg/index.html?fgv=20260522-webffmpeg-hls-playlist-safe");
   assert.throws(
@@ -178,6 +233,120 @@ audio-stream-inf.m3u8
 
   const unchangedFetchOptions = context.buildFetchOptionsWithByteRange(fetchOptions, null);
   assert.equal(unchangedFetchOptions, fetchOptions);
+}
+
+{
+  const originalFetch = context.fetch;
+  const originalEnsureWebFfmpegFrame = context.ensureWebFfmpegFrame;
+  const originalWarmWebFfmpegFrame = context.warmWebFfmpegFrame;
+  const originalRequestWebFfmpeg = context.requestWebFfmpeg;
+  const originalCaches = context.caches;
+  const originalResponse = context.Response;
+  const cache = new Map();
+  const requests = [];
+  context.Response = class {
+    constructor(body) {
+      this.body = body;
+    }
+
+    async arrayBuffer() {
+      return this.body;
+    }
+  };
+  context.caches = {
+    open: async () => ({
+      put: async (url, response) => cache.set(url, response),
+      match: async url => cache.get(url) || null,
+      delete: async url => cache.delete(url)
+    })
+  };
+  context.ensureWebFfmpegFrame = async () => {};
+  context.warmWebFfmpegFrame = () => {};
+  context.fetch = async () => ({
+    ok: true,
+    headers: { get: () => "video/mp4" },
+    arrayBuffer: async () => vm.runInContext("new Uint8Array([1, 2, 3]).buffer", context)
+  });
+  context.requestWebFfmpeg = async payload => {
+    requests.push(JSON.parse(JSON.stringify({
+      type: payload.type,
+      options: payload.options
+    })));
+    return {
+      chunks: [
+        {
+          index: 0,
+          start: 0,
+          end: 32,
+          duration: 32,
+          coreStart: 0,
+          coreEnd: 30,
+          coreDuration: 30,
+          file: {
+            name: "direct-000.mp3",
+            mime: "audio/mpeg",
+            buffer: vm.runInContext("new Uint8Array([7, 8]).buffer", context)
+          },
+          bytes: 2
+        },
+        {
+          index: 1,
+          start: 28,
+          end: 62,
+          duration: 34,
+          coreStart: 30,
+          coreEnd: 60,
+          coreDuration: 30,
+          file: {
+            name: "direct-001.mp3",
+            mime: "audio/mpeg",
+            buffer: vm.runInContext("new Uint8Array([9, 10, 11]).buffer", context)
+          },
+          bytes: 3
+        }
+      ],
+      bytes: 5,
+      duration: 65,
+      chunkSeconds: 30,
+      chunkOverlapSeconds: 2,
+      sourceType: "direct"
+    };
+  };
+
+  try {
+    const result = await context.extractAudioWithWebFfmpeg({
+      sourceUrl: "https://cdn.example.test/video.mp4",
+      cacheNamespace: "direct-overlap-test",
+      asrChunkSeconds: 30,
+      duration: 65
+    });
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].type, "extract-audio");
+    assert.equal(requests[0].options.chunkSeconds, 30);
+    assert.equal(requests[0].options.overlapSeconds, 2);
+    assert.equal(result.sourceType, "direct");
+    assert.equal(result.chunks.length, 2);
+    assert.deepEqual(
+      JSON.parse(JSON.stringify(result.chunks.map(chunk => ({
+        start: chunk.start,
+        end: chunk.end,
+        coreStart: chunk.coreStart,
+        coreEnd: chunk.coreEnd
+      })))),
+      [
+        { start: 0, end: 32, coreStart: 0, coreEnd: 30 },
+        { start: 28, end: 62, coreStart: 30, coreEnd: 60 }
+      ]
+    );
+    assert.equal(result.chunks.every(chunk => chunk.file.cacheUrl.includes("__fuguang_audio_cache")), true);
+  } finally {
+    context.fetch = originalFetch;
+    context.ensureWebFfmpegFrame = originalEnsureWebFfmpegFrame;
+    context.warmWebFfmpegFrame = originalWarmWebFfmpegFrame;
+    context.requestWebFfmpeg = originalRequestWebFfmpeg;
+    context.caches = originalCaches;
+    context.Response = originalResponse;
+  }
 }
 
 {
@@ -504,7 +673,6 @@ seg-001.ts
     segments
   }, 900);
   assert.equal(internalGroups.length, 4);
-  assert.equal(internalGroups.some(group => group.start < group.coreStart || group.end > group.coreEnd), false);
   assert.equal(internalGroups[0].start, 0);
   assert.equal(internalGroups[0].coreStart, 0);
   assert.equal(internalGroups[0].coreEnd, 180);
@@ -534,6 +702,202 @@ seg-001.ts
   assert.equal(logicalPartGroups[0][1].start, 180);
   assert.equal(logicalPartGroups.at(-1).at(-1).end, 600);
   assert.equal(logicalPartGroups.at(-1).at(-1).coreEnd, 600);
+}
+
+{
+  const segments = Array.from({ length: 150 }, (_, index) => ({
+    start: index * 4,
+    end: (index + 1) * 4,
+    duration: 4,
+    url: `https://cdn.example.test/compat-vad-window-${index}.ts`
+  }));
+  const internalGroups = context.buildHlsInternalExtractionGroups({
+    mapUrl: "",
+    segments
+  }, 30);
+  assert.equal(
+    internalGroups.length,
+    4,
+    "兼容 vad_filter-only 的 30 秒 ASR 窗口不应把 HLS 下载/内部提取也碎成 30 秒"
+  );
+  assert.equal(internalGroups[0].coreStart, 0);
+  assert.equal(internalGroups[0].coreEnd, 180);
+  assert.equal(internalGroups[1].coreStart, 180);
+}
+
+{
+  const originalRequestWebFfmpeg = context.requestWebFfmpeg;
+  const originalReloadWebFfmpegFrame = context.reloadWebFfmpegFrame;
+  const originalCaches = context.caches;
+  const originalResponse = context.Response;
+  const cache = new Map();
+  const requests = [];
+  const reloads = [];
+  context.Response = class {
+    constructor(body) {
+      this.body = body;
+    }
+
+    async arrayBuffer() {
+      return this.body;
+    }
+  };
+  context.caches = {
+    open: async () => ({
+      put: async (url, response) => cache.set(url, response),
+      match: async url => cache.get(url) || null,
+      delete: async url => cache.delete(url)
+    })
+  };
+  context.requestWebFfmpeg = async payload => {
+    requests.push(JSON.parse(JSON.stringify({
+      type: payload.type,
+      options: payload.options
+    })));
+    return {
+      chunks: [
+        {
+          index: 0,
+          start: 0,
+          end: 30,
+          duration: 30,
+          coreStart: 2,
+          coreEnd: 28,
+          coreDuration: 26,
+          speechIntervalsReliable: false,
+          file: {
+            name: "asr-000.mp3",
+            mime: "audio/mpeg",
+            buffer: vm.runInContext("new Uint8Array([1, 2]).buffer", context)
+          },
+          bytes: 2
+        },
+        {
+          index: 1,
+          start: 26,
+          end: 56,
+          duration: 30,
+          coreStart: 28,
+          coreEnd: 54,
+          coreDuration: 26,
+          speechIntervalsReliable: false,
+          file: {
+            name: "asr-001.mp3",
+            mime: "audio/mpeg",
+            buffer: vm.runInContext("new Uint8Array([3, 4]).buffer", context)
+          },
+          bytes: 2
+        }
+      ]
+    };
+  };
+  context.reloadWebFfmpegFrame = async url => {
+    reloads.push(url);
+  };
+
+  try {
+    const shortEnough = {
+      index: 0,
+      start: 0,
+      end: 28,
+      duration: 28,
+      coreStart: 0,
+      coreEnd: 26,
+      file: { name: "short.mp3", mime: "audio/mpeg", cacheUrl: "https://fuguang.local/short" }
+    };
+    assert.equal((await context.splitHlsInternalChunkForAsr({}, shortEnough, 30, 1))[0], shortEnough);
+
+    const split = await context.splitHlsInternalChunkForAsr({
+      cacheNamespace: "hls-split-test",
+      webFfmpegUrl: "chrome-extension://fuguang-test/web-ffmpeg/index.html"
+    }, {
+      index: 1,
+      start: 178,
+      end: 362,
+      duration: 184,
+      coreStart: 180,
+      coreEnd: 360,
+      buffer: vm.runInContext("new Uint8Array([9, 8, 7]).buffer", context),
+      file: { name: "internal.mp3", mime: "audio/mpeg", cacheUrl: "https://fuguang.local/internal" }
+    }, 30, 4);
+
+    assert.equal(requests.length, 1);
+    assert.deepEqual(requests[0], {
+      type: "extract-audio",
+      options: {
+        format: "mp3",
+        chunkSeconds: 30,
+        overlapSeconds: 2,
+        duration: 184,
+        coreStart: 2,
+        coreEnd: 182
+      }
+    });
+    assert.deepEqual(JSON.parse(JSON.stringify(split.map(chunk => ({
+      start: chunk.start,
+      end: chunk.end,
+      coreStart: chunk.coreStart,
+      coreEnd: chunk.coreEnd,
+      speechIntervalsReliable: chunk.speechIntervalsReliable
+    })))), [
+      { start: 178, end: 208, coreStart: 180, coreEnd: 206, speechIntervalsReliable: false },
+      { start: 204, end: 234, coreStart: 206, coreEnd: 232, speechIntervalsReliable: false }
+    ]);
+    assert.equal(split.every(chunk => chunk.file.cacheUrl.includes("__fuguang_audio_cache")), true);
+    assert.deepEqual(reloads, ["chrome-extension://fuguang-test/web-ffmpeg/index.html"]);
+  } finally {
+    context.requestWebFfmpeg = originalRequestWebFfmpeg;
+    context.reloadWebFfmpegFrame = originalReloadWebFfmpegFrame;
+    context.caches = originalCaches;
+    context.Response = originalResponse;
+  }
+}
+
+{
+  const segments = Array.from({ length: 1800 }, (_, index) => ({
+    start: index,
+    end: index + 1,
+    duration: 1,
+    url: `https://cdn.example.test/logical-boundary-${index}.ts`
+  }));
+  const internalGroups = context.buildHlsInternalExtractionGroups({
+    mapUrl: "",
+    segments
+  }, 900);
+  assert.equal(internalGroups.length, 10);
+  assert.equal(internalGroups[4].coreStart, 720);
+  assert.equal(internalGroups[4].coreEnd, 900);
+  assert.equal(internalGroups[4].start, 720);
+  assert.equal(internalGroups[4].end, 902);
+  assert.equal(internalGroups[5].coreStart, 900);
+  assert.equal(internalGroups[5].coreEnd, 1080);
+  assert.equal(internalGroups[5].start, 898);
+  assert.equal(internalGroups[5].end, 1080);
+
+  const state = context.createHlsLogicalChunkState(900);
+  const logicalPartGroups = [];
+  for (const [index, group] of internalGroups.entries()) {
+    logicalPartGroups.push(...context.collectHlsLogicalPartGroups(state, {
+      index,
+      start: group.start,
+      end: group.end,
+      coreStart: group.coreStart,
+      coreEnd: group.coreEnd,
+      duration: group.end - group.start,
+      bytes: 1024,
+      file: { name: `logical-boundary-${index}.mp3`, mime: "audio/mpeg", cacheUrl: `https://fuguang.local/logical-boundary-${index}`, bytes: 1024 }
+    }));
+  }
+  logicalPartGroups.push(...context.collectHlsLogicalPartGroups(state, null, true));
+  assert.equal(logicalPartGroups.length, 2);
+  assert.equal(logicalPartGroups[0].length, 5);
+  assert.equal(logicalPartGroups[0][0].start, 0);
+  assert.equal(logicalPartGroups[0].at(-1).end, 902);
+  assert.equal(logicalPartGroups[0].at(-1).coreEnd, 900);
+  assert.equal(logicalPartGroups[1].length, 5);
+  assert.equal(logicalPartGroups[1][0].start, 898);
+  assert.equal(logicalPartGroups[1][0].coreStart, 900);
+  assert.equal(logicalPartGroups[1].at(-1).end, 1800);
 }
 
 {
@@ -1207,8 +1571,8 @@ https://segment-cdn.example.test/seg-001.ts
   const overlapped = context.addHlsAsrContextOverlapToGroups(groups, segments);
   assert.equal(overlapped[0].start, 0);
   assert.equal(overlapped[0].coreEnd, 20);
-  assert.equal(overlapped[0].end, 28);
-  assert.equal(overlapped[1].start, 12);
+  assert.equal(overlapped[0].end, 22);
+  assert.equal(overlapped[1].start, 18);
 }
 
 {
@@ -1292,6 +1656,24 @@ https://segment-cdn.example.test/seg-001.ts
   assert.equal(tail.length, 1);
   assert.equal(tail[0].length, 1);
   assert.equal(tail[0][0].index, 2);
+}
+
+{
+  const state = context.createHlsLogicalChunkState(900);
+  const weakVadEmpty = context.collectHlsLogicalPartGroups(state, {
+    index: 0,
+    start: 0,
+    end: 30,
+    duration: 30,
+    speechIntervals: [],
+    speechIntervalsReliable: false,
+    file: { name: "weak-vad-empty.mp3", mime: "audio/mpeg", cacheUrl: "https://fuguang.local/weak-vad-empty" }
+  });
+  assert.equal(weakVadEmpty.length, 0);
+  const tail = context.collectHlsLogicalPartGroups(state, null, true);
+  assert.equal(tail.length, 1);
+  assert.equal(tail[0][0].index, 0);
+  assert.equal(tail[0][0].speechIntervalsReliable, false);
 }
 
 {

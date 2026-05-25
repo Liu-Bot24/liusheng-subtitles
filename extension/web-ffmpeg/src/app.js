@@ -12,6 +12,8 @@ import {
 
 const APP = "fuguang-web-ffmpeg";
 const CORE_BASE_URL = new URL("../vendor/@ffmpeg/core", import.meta.url).href.replace(/\/$/, "");
+const VAD_SPEECH_PAD_SECONDS = 0.4;
+const VAD_SPEECH_MERGE_GAP_SECONDS = 0.15;
 
 const state = {
   ffmpeg: null,
@@ -64,6 +66,10 @@ async function handleMessage(event) {
   }
   if (message.type === "concat-audio") {
     const result = await concatAudio(event, message);
+    post(event, { type: "result", id: message.id || "", result }, audioResultTransferList(result));
+  }
+  if (message.type === "collect-speech-audio") {
+    const result = await collectSpeechAudio(event, message);
     post(event, { type: "result", id: message.id || "", result }, audioResultTransferList(result));
   }
 }
@@ -133,14 +139,21 @@ async function extractAudio(event, message) {
   const inputName = primaryFile.name || `input-${message.id || Date.now()}.${inputExtension}`;
   const outputFormat = normalizeOutputFormat(message.options?.format);
   const segmentSeconds = normalizeSegmentSeconds(message.options?.chunkSeconds);
+  const segmentOverlapSeconds = normalizeSegmentOverlapSeconds(message.options?.overlapSeconds, segmentSeconds);
   const totalDuration = positiveNumber(message.options?.duration);
   const outputName = uniqueVirtualFileName(
     message.outputName || `${safeFileStem(primaryFile.name, "audio")}.${outputFormat}`,
     new Set(files.map(file => file.name)),
     `output.${outputFormat}`
   );
+  const useOverlappedSegments = Boolean(segmentSeconds && segmentOverlapSeconds && totalDuration);
   const outputPattern = segmentSeconds ? segmentOutputPattern(outputName, outputFormat) : outputName;
-  const command = buildExtractAudioArgs({ inputName, outputName: outputPattern, segmentSeconds, detectSpeech: true });
+  const command = buildExtractAudioArgs({
+    inputName,
+    outputName: useOverlappedSegments ? outputName : outputPattern,
+    segmentSeconds: useOverlappedSegments ? 0 : segmentSeconds,
+    detectSpeech: true
+  });
   const logStartIndex = state.ffmpegLogs.length;
   const cleanupTargets = new Set([outputName, outputPattern]);
 
@@ -183,11 +196,49 @@ async function extractAudio(event, message) {
       });
     }
 
-    const speechIntervals = speechIntervalsFromFfmpegLogs(state.ffmpegLogs.slice(logStartIndex), totalDuration);
+    const detectedSpeechIntervals = speechIntervalsFromFfmpegLogs(state.ffmpegLogs.slice(logStartIndex), totalDuration);
+
+    if (useOverlappedSegments) {
+      postOperationProgress("read", 94, "正在生成带上下文的音频分段");
+      const chunks = await extractOverlappedSegmentOutputs(
+        ffmpeg,
+        outputName,
+        outputPattern,
+        segmentSeconds,
+        totalDuration,
+        segmentOverlapSeconds,
+        detectedSpeechIntervals,
+        cleanupTargets,
+        {
+          speechIntervalsReliable: false,
+          coreStart: message.options?.coreStart,
+          coreEnd: message.options?.coreEnd
+        }
+      );
+      if (!chunks.length) {
+        throw buildFfmpegError("FFmpeg 没有生成音频切片", {
+          inputName,
+          outputName: outputPattern,
+          command,
+          returnCode,
+          logs: recentFfmpegLogs(logStartIndex)
+        });
+      }
+      const bytes = chunks.reduce((sum, chunk) => sum + (chunk.bytes || chunk.file?.buffer?.byteLength || 0), 0);
+      state.status.textContent = "完成";
+      return {
+        chunks,
+        bytes,
+        duration: totalDuration,
+        chunkSeconds: segmentSeconds,
+        chunkOverlapSeconds: segmentOverlapSeconds,
+        sourceType: "direct"
+      };
+    }
 
     if (segmentSeconds) {
       postOperationProgress("read", 96, "正在读取音频分段输出");
-      const chunks = await readSegmentOutputs(ffmpeg, outputPattern, segmentSeconds, totalDuration, speechIntervals);
+      const chunks = await readSegmentOutputs(ffmpeg, outputPattern, segmentSeconds, totalDuration, null);
       for (const chunk of chunks) {
         cleanupTargets.add(chunk.file.name);
       }
@@ -235,13 +286,84 @@ async function extractAudio(event, message) {
           buffer
         },
         bytes: buffer.byteLength,
-        speechIntervals
+        speechIntervals: detectedSpeechIntervals,
+        speechIntervalsReliable: false
       };
   } finally {
     postOperationProgress("cleanup", 99, "正在清理 Web FFmpeg 临时文件");
     await cleanup(ffmpeg, ...cleanupTargets);
     endFfmpegTask(requestId);
   }
+}
+
+async function extractOverlappedSegmentOutputs(
+  ffmpeg,
+  inputName,
+  outputPattern,
+  segmentSeconds,
+  totalDuration,
+  overlapSeconds,
+  speechIntervals,
+  cleanupTargets,
+  options = {}
+) {
+  const speechIntervalsReliable = options?.speechIntervalsReliable !== false;
+  const specs = buildSpeechAwareOverlappedSegmentSpecs(
+    outputPattern,
+    segmentSeconds,
+    totalDuration,
+    overlapSeconds,
+    speechIntervalsReliable ? speechIntervals : null,
+    options
+  );
+  const chunks = [];
+  for (const spec of specs) {
+    postOperationProgress(
+      "segment",
+      94 + (chunks.length / Math.max(1, specs.length)) * 2,
+      `正在生成带上下文的音频分段 ${chunks.length + 1}/${specs.length}`
+    );
+    const command = buildExtractAudioArgs({
+      inputName,
+      outputName: spec.name,
+      trimStart: spec.start,
+      trimDuration: spec.duration,
+      detectSpeech: false
+    });
+    const returnCode = await ffmpeg.exec(command);
+    if (returnCode !== 0) {
+      throw buildFfmpegError("FFmpeg 分段返回非零退出码", {
+        inputName,
+        outputName: spec.name,
+        command,
+        returnCode,
+        logs: recentFfmpegLogs(0)
+      });
+    }
+    cleanupTargets.add(spec.name);
+    const output = await ffmpeg.readFile(spec.name);
+    const buffer = output.buffer.slice(output.byteOffset, output.byteOffset + output.byteLength);
+    chunks.push({
+      index: spec.index,
+      start: spec.start,
+      end: spec.end,
+      duration: spec.duration,
+      coreStart: spec.coreStart,
+      coreEnd: spec.coreEnd,
+      coreDuration: spec.coreDuration,
+      speechIntervals: speechIntervalsReliable && Array.isArray(speechIntervals)
+        ? intersectSpeechIntervals(speechIntervals, spec.start, spec.end)
+        : undefined,
+      speechIntervalsReliable: speechIntervalsReliable ? undefined : false,
+      file: {
+        name: spec.name,
+        mime: "audio/mpeg",
+        buffer
+      },
+      bytes: buffer.byteLength
+    });
+  }
+  return chunks;
 }
 
 async function concatAudio(event, message) {
@@ -337,6 +459,146 @@ async function concatAudio(event, message) {
     await cleanup(ffmpeg, ...cleanupTargets);
     endFfmpegTask(requestId);
   }
+}
+
+async function collectSpeechAudio(event, message) {
+  const files = normalizeInputFiles(message);
+  if (!files.length) {
+    throw new Error("没有收到可收集语音窗口的音频文件。");
+  }
+
+  const requestId = beginFfmpegTask(event, message.id || "", "正在执行 FFmpeg 语音窗口收集");
+  let ffmpeg;
+  try {
+    ffmpeg = await loadFfmpeg(event, message.id || "");
+  } catch (error) {
+    endFfmpegTask(requestId);
+    throw error;
+  }
+
+  const primaryFile = files[0];
+  const inputName = primaryFile.name || `speech-input-${Date.now()}.mp3`;
+  const outputFormat = normalizeOutputFormat(message.options?.format);
+  const outputPattern = segmentOutputPattern(
+    uniqueVirtualFileName(
+      message.outputName || `speech-only.${outputFormat}`,
+      new Set(files.map(file => file.name)),
+      `speech-only.${outputFormat}`
+    ),
+    outputFormat
+  );
+  const duration = positiveNumber(message.options?.duration);
+  const sourceStart = Number(message.options?.sourceStart) || 0;
+  const specs = buildCollectedSpeechSegmentSpecs(
+    outputPattern,
+    message.options?.speechIntervals,
+    message.options?.maxChunkSeconds || 30,
+    duration,
+    { sourceStart }
+  );
+  const cleanupTargets = new Set([outputPattern]);
+
+  state.status.textContent = "收集语音窗口...";
+  postOperationProgress("write", 0, "正在写入语音窗口输入文件");
+
+  try {
+    await ffmpeg.writeFile(inputName, new Uint8Array(primaryFile.buffer));
+    cleanupTargets.add(inputName);
+    postOperationProgress("write", 8, "语音窗口输入文件写入完成");
+    if (!specs.length) {
+      return {
+        chunks: [],
+        bytes: 0,
+        duration: 0,
+        sourceType: "collected-speech"
+      };
+    }
+    const chunks = [];
+    for (const spec of specs) {
+      const chunk = await collectSpeechSegmentOutput(ffmpeg, inputName, spec, cleanupTargets);
+      chunks.push(chunk);
+      postOperationProgress(
+        "collect",
+        10 + (chunks.length / Math.max(1, specs.length)) * 86,
+        `正在生成语音窗口 ${chunks.length}/${specs.length}`
+      );
+    }
+    const bytes = chunks.reduce((sum, chunk) => sum + (chunk.bytes || chunk.file?.buffer?.byteLength || 0), 0);
+    state.status.textContent = "完成";
+    return {
+      chunks,
+      bytes,
+      duration: chunks.reduce((sum, chunk) => sum + (Number(chunk.duration) || 0), 0),
+      sourceType: "collected-speech"
+    };
+  } finally {
+    postOperationProgress("cleanup", 99, "正在清理 Web FFmpeg 语音窗口临时文件");
+    await cleanup(ffmpeg, ...cleanupTargets);
+    endFfmpegTask(requestId);
+  }
+}
+
+async function collectSpeechSegmentOutput(ffmpeg, inputName, spec, cleanupTargets) {
+  const partNames = [];
+  for (let index = 0; index < spec.parts.length; index += 1) {
+    const part = spec.parts[index];
+    const partName = `${spec.name.replace(/\.[^.]+$/, "")}-part-${String(index).padStart(3, "0")}.mp3`;
+    const command = buildExtractAudioArgs({
+      inputName,
+      outputName: partName,
+      trimStart: part.relativeStart,
+      trimDuration: part.duration,
+      detectSpeech: false
+    });
+    const returnCode = await ffmpeg.exec(command);
+    if (returnCode !== 0) {
+      throw buildFfmpegError("FFmpeg 语音片段抽取返回非零退出码", {
+        inputName,
+        outputName: partName,
+        command,
+        returnCode,
+        logs: recentFfmpegLogs(0)
+      });
+    }
+    cleanupTargets.add(partName);
+    partNames.push(partName);
+  }
+
+  const command = buildConcatAudioArgs({ inputNames: partNames, outputName: spec.name });
+  const returnCode = await ffmpeg.exec(command);
+  if (returnCode !== 0) {
+    throw buildFfmpegError("FFmpeg 语音窗口合并返回非零退出码", {
+      inputName: partNames.join(","),
+      outputName: spec.name,
+      command,
+      returnCode,
+      logs: recentFfmpegLogs(0)
+    });
+  }
+  cleanupTargets.add(spec.name);
+  const output = await ffmpeg.readFile(spec.name);
+  const buffer = output.buffer.slice(output.byteOffset, output.byteOffset + output.byteLength);
+  return {
+    index: spec.index,
+    start: spec.sourceStart,
+    end: spec.sourceEnd,
+    duration: spec.duration,
+    sourceStart: spec.sourceStart,
+    sourceEnd: spec.sourceEnd,
+    speechIntervals: spec.parts.map(part => ({ start: part.sourceStart, end: part.sourceEnd })),
+    timeMap: spec.parts.map(part => ({
+      outputStart: part.outputStart,
+      outputEnd: part.outputEnd,
+      sourceStart: part.sourceStart,
+      sourceEnd: part.sourceEnd
+    })),
+    file: {
+      name: spec.name,
+      mime: "audio/mpeg",
+      buffer
+    },
+    bytes: buffer.byteLength
+  };
 }
 
 function beginFfmpegTask(event, id, message) {
@@ -489,6 +751,243 @@ async function readSegmentOutputs(ffmpeg, outputPattern, segmentSeconds, totalDu
   return chunks;
 }
 
+function buildOverlappedSegmentSpecs(outputPattern, segmentSeconds, totalDuration, overlapSeconds = 0, options = {}) {
+  const maxUploadSeconds = normalizeSegmentSeconds(segmentSeconds);
+  const duration = positiveNumber(totalDuration);
+  const overlap = normalizeAsrUploadOverlapSeconds(overlapSeconds, maxUploadSeconds);
+  const coreSeconds = asrUploadCoreSeconds(maxUploadSeconds, overlap);
+  if (!maxUploadSeconds || !coreSeconds || !duration) {
+    return [];
+  }
+  const coreRange = normalizeCoreRange(options, duration);
+  const pattern = segmentPatternParts(outputPattern);
+  const specs = [];
+  for (let coreStart = coreRange.start, index = 0; coreStart < coreRange.end - 0.001; coreStart += coreSeconds, index += 1) {
+    const coreEnd = Math.min(coreRange.end, coreStart + coreSeconds);
+    const start = roundSeconds(Math.max(0, coreStart - overlap));
+    const end = roundSeconds(Math.min(duration, coreEnd + overlap));
+    specs.push({
+      index,
+      name: segmentNameFromPattern(pattern, index),
+      start,
+      end,
+      duration: roundSeconds(Math.max(0, end - start)),
+      coreStart: roundSeconds(coreStart),
+      coreEnd: roundSeconds(coreEnd),
+      coreDuration: roundSeconds(Math.max(0, coreEnd - coreStart))
+    });
+  }
+  return specs;
+}
+
+function buildSpeechAwareOverlappedSegmentSpecs(
+  outputPattern,
+  segmentSeconds,
+  totalDuration,
+  overlapSeconds = 0,
+  speechIntervals = null,
+  options = {}
+) {
+  const maxUploadSeconds = normalizeSegmentSeconds(segmentSeconds);
+  const duration = positiveNumber(totalDuration);
+  const coreRange = normalizeCoreRange(options, duration);
+  const normalizedSpeech = normalizeSpeechIntervalsForSpecs(speechIntervals, duration)
+    .map(interval => ({
+      start: Math.max(coreRange.start, interval.start),
+      end: Math.min(coreRange.end, interval.end)
+    }))
+    .filter(interval => interval.end > interval.start);
+  if (Array.isArray(speechIntervals) && !normalizedSpeech.length) {
+    return [];
+  }
+  if (!normalizedSpeech.length) {
+    return buildOverlappedSegmentSpecs(outputPattern, segmentSeconds, totalDuration, overlapSeconds, options);
+  }
+  const pattern = segmentPatternParts(outputPattern);
+  const overlap = normalizeAsrUploadOverlapSeconds(overlapSeconds, maxUploadSeconds);
+  const coreSeconds = asrUploadCoreSeconds(maxUploadSeconds, overlap);
+  const specs = [];
+  const pushCore = (coreStart, coreEnd) => {
+    const start = roundSeconds(Math.max(0, coreStart - overlap));
+    const end = roundSeconds(Math.min(duration, coreEnd + overlap));
+    specs.push({
+      index: specs.length,
+      name: segmentNameFromPattern(pattern, specs.length),
+      start,
+      end,
+      duration: roundSeconds(Math.max(0, end - start)),
+      coreStart: roundSeconds(coreStart),
+      coreEnd: roundSeconds(coreEnd),
+      coreDuration: roundSeconds(Math.max(0, coreEnd - coreStart))
+    });
+  };
+  let current = null;
+  for (const interval of normalizedSpeech) {
+    if (!current) {
+      current = { start: interval.start, end: interval.end };
+    } else if (interval.end - current.start > coreSeconds && current.end > current.start) {
+      pushSplitCoreWindows(current.start, current.end, coreSeconds, pushCore);
+      current = { start: interval.start, end: interval.end };
+    } else {
+      current.end = Math.max(current.end, interval.end);
+    }
+  }
+  if (current && current.end > current.start) {
+    pushSplitCoreWindows(current.start, current.end, coreSeconds, pushCore);
+  }
+  return specs.filter(spec => spec.duration > 0 && spec.coreDuration > 0);
+}
+
+function buildCollectedSpeechSegmentSpecs(outputPattern, speechIntervals = [], maxChunkSeconds = 30, totalDuration = 0, options = {}) {
+  const maxDuration = normalizeSegmentSeconds(maxChunkSeconds) || 30;
+  const intervals = normalizeCollectedSpeechIntervals(speechIntervals, totalDuration, options)
+    .flatMap(interval => splitCollectedSpeechInterval(interval, maxDuration));
+  if (!intervals.length) {
+    return [];
+  }
+  const pattern = segmentPatternParts(outputPattern);
+  const specs = [];
+  const sourceStart = Number(options?.sourceStart) || 0;
+  let current = null;
+  const flush = () => {
+    if (!current || current.end <= current.start) {
+      current = null;
+      return;
+    }
+    const duration = roundSeconds(current.end - current.start);
+    const part = {
+      relativeStart: roundSeconds(current.start),
+      relativeEnd: roundSeconds(current.end),
+      sourceStart: roundSeconds(sourceStart + current.start),
+      sourceEnd: roundSeconds(sourceStart + current.end),
+      outputStart: 0,
+      outputEnd: duration,
+      duration
+    };
+    specs.push({
+      index: specs.length,
+      name: segmentNameFromPattern(pattern, specs.length),
+      sourceStart: part.sourceStart,
+      sourceEnd: part.sourceEnd,
+      duration,
+      parts: [part]
+    });
+    current = null;
+  };
+  for (const interval of intervals) {
+    if (current && interval.relativeEnd - current.start > maxDuration && current.end > current.start) {
+      flush();
+    }
+    if (!current) {
+      current = { start: interval.relativeStart, end: interval.relativeEnd };
+    } else {
+      current.end = Math.max(current.end, interval.relativeEnd);
+    }
+  }
+  flush();
+  return specs.filter(spec => spec.duration > 0 && spec.parts.length);
+}
+
+function normalizeCollectedSpeechIntervals(speechIntervals = [], totalDuration = 0, options = {}) {
+  const durationLimit = positiveNumber(totalDuration);
+  const sourceStart = Number(options?.sourceStart) || 0;
+  return (Array.isArray(speechIntervals) ? speechIntervals : [])
+    .map(interval => {
+      const sourceIntervalStart = Number(interval?.start);
+      const sourceIntervalEnd = Number(interval?.end);
+      if (!Number.isFinite(sourceIntervalStart) || !Number.isFinite(sourceIntervalEnd) || sourceIntervalEnd <= sourceIntervalStart) {
+        return null;
+      }
+      const relativeStart = roundSeconds(Math.max(0, sourceIntervalStart - sourceStart));
+      const relativeEnd = roundSeconds(Math.min(
+        durationLimit || Math.max(relativeStart, sourceIntervalEnd - sourceStart),
+        Math.max(relativeStart, sourceIntervalEnd - sourceStart)
+      ));
+      if (relativeEnd <= relativeStart) {
+        return null;
+      }
+      return {
+        relativeStart,
+        relativeEnd,
+        sourceStart: roundSeconds(sourceStart + relativeStart),
+        sourceEnd: roundSeconds(sourceStart + relativeEnd)
+      };
+    })
+    .filter(Boolean)
+    .sort((left, right) => left.relativeStart - right.relativeStart || left.relativeEnd - right.relativeEnd);
+}
+
+function splitCollectedSpeechInterval(interval, maxDurationSeconds = 30) {
+  const maxDuration = normalizeSegmentSeconds(maxDurationSeconds) || 30;
+  const duration = interval.relativeEnd - interval.relativeStart;
+  if (duration <= maxDuration + 0.001) {
+    return [interval];
+  }
+  const parts = [];
+  for (let start = interval.relativeStart; start < interval.relativeEnd - 0.001; start += maxDuration) {
+    const end = Math.min(interval.relativeEnd, start + maxDuration);
+    parts.push({
+      relativeStart: roundSeconds(start),
+      relativeEnd: roundSeconds(end),
+      sourceStart: roundSeconds(interval.sourceStart + (start - interval.relativeStart)),
+      sourceEnd: roundSeconds(interval.sourceStart + (end - interval.relativeStart))
+    });
+  }
+  return parts;
+}
+
+function normalizeAsrUploadOverlapSeconds(value, segmentSeconds = 0) {
+  const maxUploadSeconds = normalizeSegmentSeconds(segmentSeconds);
+  const requested = normalizeSegmentOverlapSeconds(value, maxUploadSeconds);
+  if (!maxUploadSeconds || !requested) {
+    return 0;
+  }
+  return roundSeconds(Math.min(requested, Math.max(0, (maxUploadSeconds - 1) / 2)));
+}
+
+function normalizeCoreRange(options = {}, duration = 0) {
+  const endLimit = positiveNumber(duration);
+  const start = roundSeconds(Math.max(0, Math.min(endLimit || 0, Number(options?.coreStart) || 0)));
+  const requestedEnd = Number(options?.coreEnd);
+  const end = roundSeconds(Math.max(start, Math.min(
+    endLimit || Math.max(start, Number.isFinite(requestedEnd) ? requestedEnd : start),
+    Number.isFinite(requestedEnd) && requestedEnd > start ? requestedEnd : endLimit
+  )));
+  return {
+    start,
+    end: end > start ? end : endLimit
+  };
+}
+
+function asrUploadCoreSeconds(maxUploadSeconds, overlapSeconds = 0) {
+  const uploadSeconds = normalizeSegmentSeconds(maxUploadSeconds);
+  if (!uploadSeconds) {
+    return 0;
+  }
+  return Math.max(1, roundSeconds(uploadSeconds - 2 * (Number(overlapSeconds) || 0)));
+}
+
+function pushSplitCoreWindows(start, end, coreSeconds, pushCore) {
+  const coreDuration = normalizeSegmentSeconds(coreSeconds);
+  if (!coreDuration || end <= start) {
+    return;
+  }
+  for (let cursor = start; cursor < end - 0.001; cursor += coreDuration) {
+    pushCore(cursor, Math.min(end, cursor + coreDuration));
+  }
+}
+
+function normalizeSpeechIntervalsForSpecs(intervals, duration = 0) {
+  const endLimit = positiveNumber(duration);
+  return (Array.isArray(intervals) ? intervals : [])
+    .map(interval => ({
+      start: roundSeconds(Math.max(0, Number(interval?.start))),
+      end: roundSeconds(Math.min(endLimit || Number(interval?.end), Number(interval?.end)))
+    }))
+    .filter(interval => Number.isFinite(interval.start) && Number.isFinite(interval.end) && interval.end > interval.start)
+    .sort((left, right) => left.start - right.start || left.end - right.end);
+}
+
 function speechIntervalsFromFfmpegLogs(logs, duration = 0) {
   const text = (logs || []).join("\n");
   const silenceIntervals = [];
@@ -526,7 +1025,55 @@ function speechIntervalsFromFfmpegLogs(logs, duration = 0) {
   if (endTime > cursor + 0.05) {
     intervals.push({ start: cursor, end: endTime });
   }
-  return intervals;
+  return padSpeechIntervals(intervals, endTime, VAD_SPEECH_PAD_SECONDS);
+}
+
+function padSpeechIntervals(intervals, duration = 0, padSeconds = 0) {
+  const normalized = (intervals || [])
+    .map(interval => ({
+      start: roundSeconds(Math.max(0, Number(interval.start))),
+      end: roundSeconds(Math.min(positiveNumber(duration) || Number(interval.end), Number(interval.end)))
+    }))
+    .filter(interval => Number.isFinite(interval.start) && Number.isFinite(interval.end) && interval.end > interval.start)
+    .sort((left, right) => left.start - right.start || left.end - right.end);
+  const pad = Math.max(0, Number(padSeconds) || 0);
+  if (!normalized.length || !pad) {
+    return mergePaddedSpeechIntervals(normalized);
+  }
+  for (let index = 0; index < normalized.length; index += 1) {
+    const current = normalized[index];
+    if (index === 0) {
+      current.start = roundSeconds(Math.max(0, current.start - pad));
+    }
+    const next = normalized[index + 1];
+    if (next) {
+      const silenceDuration = next.start - current.end;
+      if (silenceDuration < 2 * pad) {
+        const halfSilence = Math.max(0, silenceDuration / 2);
+        current.end = roundSeconds(current.end + halfSilence);
+        next.start = roundSeconds(Math.max(0, next.start - halfSilence));
+      } else {
+        current.end = roundSeconds(Math.min(positiveNumber(duration) || current.end + pad, current.end + pad));
+        next.start = roundSeconds(Math.max(0, next.start - pad));
+      }
+    } else {
+      current.end = roundSeconds(Math.min(positiveNumber(duration) || current.end + pad, current.end + pad));
+    }
+  }
+  return mergePaddedSpeechIntervals(normalized);
+}
+
+function mergePaddedSpeechIntervals(intervals) {
+  const merged = [];
+  for (const interval of intervals || []) {
+    const previous = merged.at(-1);
+    if (previous && interval.start <= previous.end + VAD_SPEECH_MERGE_GAP_SECONDS) {
+      previous.end = roundSeconds(Math.max(previous.end, interval.end));
+    } else {
+      merged.push({ ...interval });
+    }
+  }
+  return merged;
 }
 
 function intersectSpeechIntervals(intervals, start, end) {
@@ -547,6 +1094,8 @@ function segmentOutputPattern(outputName, outputFormat) {
 function segmentPatternParts(pattern) {
   const [prefix, suffix] = String(pattern).split("%03d");
   return {
+    prefix,
+    suffix,
     matches(name) {
       return String(name).startsWith(prefix) && String(name).endsWith(suffix);
     },
@@ -557,6 +1106,10 @@ function segmentPatternParts(pattern) {
   };
 }
 
+function segmentNameFromPattern(pattern, index) {
+  return `${pattern.prefix}${String(index).padStart(3, "0")}${pattern.suffix}`;
+}
+
 function normalizeSegmentSeconds(value) {
   const seconds = Number(value);
   if (!Number.isFinite(seconds) || seconds <= 0) {
@@ -565,9 +1118,22 @@ function normalizeSegmentSeconds(value) {
   return Math.max(1, Math.floor(seconds));
 }
 
+function normalizeSegmentOverlapSeconds(value, segmentSeconds = 0) {
+  const seconds = Number(value);
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    return 0;
+  }
+  const maxOverlap = Number(segmentSeconds) > 0 ? Number(segmentSeconds) / 2 : seconds;
+  return roundSeconds(Math.max(0, Math.min(seconds, maxOverlap)));
+}
+
 function positiveNumber(value) {
   const number = Number(value);
   return Number.isFinite(number) && number > 0 ? number : 0;
+}
+
+function roundSeconds(value) {
+  return Math.round((Number(value) || 0) * 1000) / 1000;
 }
 
 async function cleanup(ffmpeg, ...files) {

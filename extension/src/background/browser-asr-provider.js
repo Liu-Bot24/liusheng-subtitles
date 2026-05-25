@@ -8,13 +8,30 @@ export const FuguangBrowserAsrProvider = (() => {
   const BROWSER_ASR_COMPAT_QUALITY_FIELDS = [
     ["word_timestamps", "true"],
     ["condition_on_previous_text", "false"],
-    ["no_speech_threshold", "0.45"],
+    ["without_timestamps", "false"],
+    ["no_speech_threshold", "0.6"],
     ["compression_ratio_threshold", "2.4"],
-    ["log_prob_threshold", "-1"],
-    ["hallucination_silence_threshold", "1"]
+    ["log_prob_threshold", "-1"]
   ];
+  const BROWSER_ASR_COMPAT_VAD_FIELDS = [
+    ["threshold", "0.5"],
+    ["min_speech_duration_ms", "0"],
+    ["max_speech_duration_s", "30"],
+    ["min_silence_duration_ms", "160"],
+    ["speech_pad_ms", "400"]
+  ];
+  const BROWSER_ASR_COMPAT_VAD_PARAMETERS = {
+    threshold: 0.5,
+    min_speech_duration_ms: 0,
+    max_speech_duration_s: 30,
+    min_silence_duration_ms: 160,
+    speech_pad_ms: 400
+  };
+  const BROWSER_ASR_CLIP_TIMESTAMP_MAX_SECONDS = BROWSER_ASR_COMPAT_VAD_PARAMETERS.max_speech_duration_s;
   const browserAsrVadCapabilityCache = new Map();
   const browserAsrRequestFieldCapabilityCache = new Map();
+  const browserAsrOpenApiSchemaCache = new Map();
+  const browserAsrSpeechTimestampsEndpointCache = new Map();
 
   function normalizeAsrTimeoutMs(timeoutMs, chunk = {}) {
     const normalized = Number(timeoutMs);
@@ -47,14 +64,48 @@ export const FuguangBrowserAsrProvider = (() => {
       ["timestamp_granularities[]", "segment"],
       ["timestamp_granularities[]", "word"]
     ];
+    fields.push(...browserAsrStableDecodingFields(asrConfig, options));
+    const clipTimestampFields = browserAsrCompatibleClipTimestampFields(asrConfig, options);
+    fields.push(...clipTimestampFields);
+    fields.push(...browserAsrCompatibleClipVadDisableFields(asrConfig, options, clipTimestampFields));
     if (shouldUseBrowserAsrVadFilter(asrConfig, options)) {
       fields.push(["vad_filter", "true"]);
+      fields.push(...browserAsrCompatibleVadFields(asrConfig, options));
     }
     fields.push(...browserAsrCompatibleQualityFields(asrConfig, options));
     if (language) {
       fields.push(["language", language]);
     }
     return fields;
+  }
+
+  function browserAsrStableDecodingFields(asrConfig = {}, options = {}) {
+    const provider = normalizeProviderType(asrConfig?.providerType);
+    if (!["openai", "groq"].includes(provider)) {
+      return [];
+    }
+    if (isKnownTemperatureAsrBaseUrl(asrConfig?.baseUrl) || asrRequestFieldSupported(options, "temperature")) {
+      return [["temperature", "0"]];
+    }
+    return [];
+  }
+
+  function browserAsrCompatibleClipTimestampFields(asrConfig = {}, options = {}) {
+    if (normalizeProviderType(asrConfig?.providerType) !== "openai" || isKnownStandardAsrBaseUrl(asrConfig?.baseUrl)) {
+      return [];
+    }
+    const clipTimestamps = normalizeBrowserAsrClipTimestampsText(options.clipTimestamps);
+    if (!clipTimestamps || !asrRequestFieldSupported(options, "clip_timestamps")) {
+      return [];
+    }
+    return [["clip_timestamps", clipTimestamps]];
+  }
+
+  function browserAsrCompatibleClipVadDisableFields(asrConfig = {}, options = {}, clipTimestampFields = browserAsrCompatibleClipTimestampFields(asrConfig, options)) {
+    if (!clipTimestampFields.length || !asrRequestFieldSupported(options, "vad_filter")) {
+      return [];
+    }
+    return [["vad_filter", "false"]];
   }
 
   function browserAsrCompatibleQualityFields(asrConfig = {}, options = {}) {
@@ -64,12 +115,25 @@ export const FuguangBrowserAsrProvider = (() => {
     return BROWSER_ASR_COMPAT_QUALITY_FIELDS.filter(([name]) => asrRequestFieldSupported(options, name));
   }
 
+  function browserAsrCompatibleVadFields(asrConfig = {}, options = {}) {
+    if (normalizeProviderType(asrConfig?.providerType) !== "openai" || isKnownStandardAsrBaseUrl(asrConfig?.baseUrl)) {
+      return [];
+    }
+    if (asrRequestFieldSupported(options, "vad_parameters")) {
+      return [["vad_parameters", JSON.stringify(BROWSER_ASR_COMPAT_VAD_PARAMETERS)]];
+    }
+    return BROWSER_ASR_COMPAT_VAD_FIELDS.filter(([name]) => asrRequestFieldSupported(options, name));
+  }
+
   function shouldUseBrowserAsrVadFilter(asrConfig = {}, options = {}) {
     const mode = normalizeAsrVadFilterMode(asrConfig?.vadFilter || asrConfig?.vad_filter || asrConfig?.vadFilterMode);
     if (normalizeProviderType(asrConfig?.providerType) !== "openai") {
       return false;
     }
     if (isKnownStandardAsrBaseUrl(asrConfig?.baseUrl)) {
+      return false;
+    }
+    if (browserAsrCompatibleClipTimestampFields(asrConfig, options).length) {
       return false;
     }
     if (mode === "off") {
@@ -82,6 +146,107 @@ export const FuguangBrowserAsrProvider = (() => {
       return true;
     }
     return false;
+  }
+
+  function browserAsrClipTimestampsValue(intervals, chunk = {}) {
+    if (!Array.isArray(intervals) || !intervals.length) {
+      return "";
+    }
+    const chunkStart = finiteNumberOrDefault(chunk?.start, 0);
+    const chunkEnd = finiteNumberOrDefault(
+      chunk?.end,
+      chunkStart + Math.max(0, finiteNumberOrDefault(chunk?.duration, 0))
+    );
+    const chunkDuration = Math.max(0, chunkEnd - chunkStart);
+    const clippedIntervals = intervals
+      .map(interval => {
+        const start = finiteNumberOrDefault(interval?.start, NaN);
+        const end = finiteNumberOrDefault(interval?.end, NaN);
+        if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+          return null;
+        }
+        const relativeStart = clampNumber(start - chunkStart, 0, chunkDuration);
+        const relativeEnd = clampNumber(end - chunkStart, 0, chunkDuration);
+        if (relativeEnd <= relativeStart) {
+          return null;
+        }
+        return { start: relativeStart, end: relativeEnd };
+      })
+      .filter(Boolean)
+      .sort((left, right) => left.start - right.start || left.end - right.end);
+    const clipWindows = mergeBrowserAsrClipTimestampIntervals(clippedIntervals);
+    const values = [];
+    for (const interval of clipWindows) {
+      values.push(formatBrowserAsrClipTimestampSecond(interval.start));
+      values.push(formatBrowserAsrClipTimestampSecond(interval.end));
+    }
+    return values.join(",");
+  }
+
+  function mergeBrowserAsrClipTimestampIntervals(intervals) {
+    const maxDuration = BROWSER_ASR_CLIP_TIMESTAMP_MAX_SECONDS;
+    const adjustedIntervals = browserAsrSpeachesAdjustedClipIntervals(intervals);
+    return browserAsrSpeachesMergeSpeechSegments(adjustedIntervals, maxDuration);
+  }
+
+  function browserAsrSpeachesMergeSpeechSegments(intervals, maxDuration) {
+    const merged = [];
+    let current = null;
+    for (const interval of intervals || []) {
+      if (!current) {
+        current = { ...interval };
+        continue;
+      }
+      if (interval.end - current.start > maxDuration && current.end > current.start) {
+        merged.push(current);
+        current = { ...interval };
+      } else {
+        current.end = Math.max(current.end, interval.end);
+      }
+    }
+    if (current && current.end > current.start) {
+      merged.push(current);
+    }
+    return merged;
+  }
+
+  function browserAsrSpeachesAdjustedClipIntervals(intervals) {
+    const edgePadding = Math.max(0, Number(BROWSER_ASR_COMPAT_VAD_PARAMETERS.speech_pad_ms || 0) || 0) / 1000;
+    const adjusted = (intervals || []).map(interval => ({ ...interval }));
+    if (!edgePadding) {
+      return adjusted;
+    }
+    for (let index = 0; index < adjusted.length; index += 1) {
+      const interval = adjusted[index];
+      if (index > 0 && interval.start < adjusted[index - 1].end) {
+        interval.start += edgePadding;
+      }
+      if (index < adjusted.length - 1 && interval.end > adjusted[index + 1].start) {
+        interval.end -= edgePadding;
+      }
+    }
+    return adjusted.filter(interval => interval.end > interval.start);
+  }
+
+  function normalizeBrowserAsrClipTimestampsText(value) {
+    return String(value || "").trim();
+  }
+
+  function formatBrowserAsrClipTimestampSecond(value) {
+    const rounded = Math.round(Number(value || 0) * 1000) / 1000;
+    if (!Number.isFinite(rounded) || Math.abs(rounded) < 0.0005) {
+      return "0";
+    }
+    return String(rounded).replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "");
+  }
+
+  function clampNumber(value, min, max) {
+    return Math.min(Math.max(value, min), max);
+  }
+
+  function finiteNumberOrDefault(value, fallback) {
+    const number = Number(value);
+    return Number.isFinite(number) ? number : fallback;
   }
 
   function asrRequestFieldSupported(options = {}, name) {
@@ -122,6 +287,46 @@ export const FuguangBrowserAsrProvider = (() => {
     if (browserAsrVadCapabilityCache.has(cacheKey)) {
       return new Set(browserAsrVadCapabilityCache.get(cacheKey) ? ["vad_filter"] : []);
     }
+    const schema = await browserAsrOpenApiSchema(cacheKey);
+    if (schema) {
+      const fields = schemaAudioTranscriptionRequestProperties(schema);
+      if (fields.size) {
+        browserAsrRequestFieldCapabilityCache.set(cacheKey, fields);
+        browserAsrVadCapabilityCache.set(cacheKey, fields.has("vad_filter"));
+        return fields;
+      }
+    }
+    browserAsrVadCapabilityCache.set(cacheKey, false);
+    const fields = new Set();
+    browserAsrRequestFieldCapabilityCache.set(cacheKey, fields);
+    return fields;
+  }
+
+  async function resolveBrowserAsrSpeechTimestampsEndpoint(asrConfig = {}) {
+    if (!shouldProbeBrowserAsrCapabilities(asrConfig)) {
+      return "";
+    }
+    const baseUrl = String(asrConfig?.baseUrl || "").trim();
+    if (!baseUrl) {
+      return "";
+    }
+    if (browserAsrSpeechTimestampsEndpointCache.has(baseUrl)) {
+      return browserAsrSpeechTimestampsEndpointCache.get(baseUrl);
+    }
+    const schema = await browserAsrOpenApiSchema(baseUrl);
+    const endpoint = schemaAudioSpeechTimestampsEndpoint(schema, baseUrl);
+    browserAsrSpeechTimestampsEndpointCache.set(baseUrl, endpoint);
+    return endpoint;
+  }
+
+  async function browserAsrOpenApiSchema(baseUrl) {
+    const cacheKey = String(baseUrl || "").trim();
+    if (!cacheKey) {
+      return null;
+    }
+    if (browserAsrOpenApiSchemaCache.has(cacheKey)) {
+      return browserAsrOpenApiSchemaCache.get(cacheKey);
+    }
     for (const openApiUrl of browserAsrOpenApiUrlCandidates(cacheKey)) {
       try {
         const controller = new AbortController();
@@ -136,20 +341,25 @@ export const FuguangBrowserAsrProvider = (() => {
           continue;
         }
         const schema = await response.json().catch(() => null);
-        const fields = schemaAudioTranscriptionRequestProperties(schema);
-        if (fields.size) {
-          browserAsrRequestFieldCapabilityCache.set(cacheKey, fields);
-          browserAsrVadCapabilityCache.set(cacheKey, fields.has("vad_filter"));
-          return fields;
+        if (schema && typeof schema === "object" && schemaHasAsrRelevantPaths(schema)) {
+          browserAsrOpenApiSchemaCache.set(cacheKey, schema);
+          return schema;
         }
       } catch {
         // Capability probing is best-effort; unknown APIs should keep the standard request shape.
       }
     }
-    browserAsrVadCapabilityCache.set(cacheKey, false);
-    const fields = new Set();
-    browserAsrRequestFieldCapabilityCache.set(cacheKey, fields);
-    return fields;
+    browserAsrOpenApiSchemaCache.set(cacheKey, null);
+    return null;
+  }
+
+  function schemaHasAsrRelevantPaths(schema) {
+    if (!schema?.paths || typeof schema.paths !== "object") {
+      return false;
+    }
+    return Object.keys(schema.paths).some(pathName => (
+      /\/audio\/(?:transcriptions|translations|speech\/timestamps)\b/i.test(String(pathName))
+    ));
   }
 
   function browserAsrOpenApiUrlCandidates(baseUrl) {
@@ -196,6 +406,29 @@ export const FuguangBrowserAsrProvider = (() => {
       }
     }
     return properties;
+  }
+
+  function schemaAudioSpeechTimestampsEndpoint(schema, baseUrl) {
+    if (!schema || typeof schema !== "object" || !schema.paths || typeof schema.paths !== "object") {
+      return "";
+    }
+    const path = Object.keys(schema.paths).find(pathName => (
+      /\/audio\/speech\/timestamps\/?$/i.test(String(pathName))
+      && schema.paths[pathName]?.post
+    ));
+    if (!path) {
+      return "";
+    }
+    if (/^https?:\/\//i.test(path)) {
+      return path.replace(/\/+$/, "");
+    }
+    try {
+      const parsed = new URL(String(baseUrl || ""));
+      const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+      return `${parsed.protocol}//${parsed.host}${normalizedPath}`.replace(/\/+$/, "");
+    } catch {
+      return "";
+    }
   }
 
   function collectOperationRequestBodyProperties(operation, rootSchema, output) {
@@ -266,6 +499,15 @@ export const FuguangBrowserAsrProvider = (() => {
     }
   }
 
+  function isKnownTemperatureAsrBaseUrl(value) {
+    try {
+      const url = new URL(String(value || ""));
+      return new Set(["api.openai.com", "api.groq.com"]).has(url.hostname.toLowerCase());
+    } catch {
+      return false;
+    }
+  }
+
   function browserAsrEndpoint(asrConfig) {
     const provider = normalizeProviderType(asrConfig?.providerType);
     const baseUrl = normalizeApiBaseUrl(asrConfig?.baseUrl || "");
@@ -302,14 +544,19 @@ export const FuguangBrowserAsrProvider = (() => {
   return {
     normalizeAsrTimeoutMs,
     browserAsrRequestFields,
+    browserAsrClipTimestampsValue,
     browserAsrCompatibleQualityFields,
     shouldUseBrowserAsrVadFilter,
     asrRequestFieldSupported,
     resolveBrowserAsrSupportedRequestFields,
     shouldProbeBrowserAsrCapabilities,
     browserAsrOpenApiSupportedRequestFields,
+    resolveBrowserAsrSpeechTimestampsEndpoint,
+    browserAsrOpenApiSchema,
+    schemaHasAsrRelevantPaths,
     browserAsrOpenApiUrlCandidates,
     schemaAudioTranscriptionRequestProperties,
+    schemaAudioSpeechTimestampsEndpoint,
     collectOperationRequestBodyProperties,
     collectSchemaProperties,
     resolveOpenApiRef,

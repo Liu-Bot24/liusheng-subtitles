@@ -695,6 +695,62 @@ assert.deepEqual(JSON.parse(JSON.stringify(exportSubtitleState)), {
   emptyMessage: "还没有可导出的字幕。"
 });
 
+const exportDiagnosticsState = await vm.runInContext(`
+  (async () => {
+    const originalDownloadBlob = downloadBlob;
+    const originalSendMessage = chrome.runtime.sendMessage;
+    const originalPageTitle = elements.pageTitle.textContent;
+    const downloads = [];
+    const messages = [];
+    downloadBlob = async (blob, filename) => {
+      downloads.push({ filename, text: await blob.text(), bytes: new Uint8Array(await blob.arrayBuffer()) });
+    };
+    chrome.runtime.sendMessage = async message => {
+      messages.push(message);
+      if (message.type === "FUGUANG_GET_PRELOAD_DIAGNOSTICS") {
+        return {
+          ok: true,
+          diagnostics: {
+            version: 1,
+            job: { id: message.jobId },
+            audioChunks: [{ index: 0, file: { cacheUrl: "https://fuguang.local/audio/chunk.mp3" } }],
+            asrChunks: [{ chunk: { index: 0 }, rawPayload: { text: "hello" } }]
+          },
+          audioFiles: [{
+            path: "audio/chunk-0000.mp3",
+            mime: "audio/mpeg",
+            bytes: 3,
+            base64: "AQID"
+          }]
+        };
+      }
+      return { ok: true };
+    };
+    try {
+      elements.pageTitle.textContent = "诊断/视频?";
+      currentJobId = "job-diag";
+      await exportCurrentDiagnostics();
+      return {
+        messages,
+        downloads,
+        messageText: elements.message.textContent
+      };
+    } finally {
+      downloadBlob = originalDownloadBlob;
+      chrome.runtime.sendMessage = originalSendMessage;
+      elements.pageTitle.textContent = originalPageTitle;
+    }
+  })()
+`, context);
+
+assert.equal(exportDiagnosticsState.messages[0].type, "FUGUANG_GET_PRELOAD_DIAGNOSTICS");
+assert.equal(exportDiagnosticsState.messages[0].jobId, "job-diag");
+assert.equal(exportDiagnosticsState.downloads[0].filename, "诊断 视频-asr-diagnostics.tar");
+assert.match(exportDiagnosticsState.downloads[0].text, /diagnostics\.json/);
+assert.match(exportDiagnosticsState.downloads[0].text, /audio\/chunk-0000\.mp3/);
+assert.deepEqual(Array.from(exportDiagnosticsState.downloads[0].bytes.slice(-1024)), new Array(1024).fill(0));
+assert.equal(exportDiagnosticsState.messageText, "ASR 诊断已导出（含 1 个音频分段）。");
+
 const retryStageButtonState = await vm.runInContext(`
   (() => {
     startRequestInFlight = false;

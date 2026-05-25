@@ -71,10 +71,19 @@ export function uniqueVirtualFileName(value, usedNames, fallback = "input.bin") 
   return candidate;
 }
 
-export function buildExtractAudioArgs({ inputName, outputName, segmentSeconds = 0, detectSpeech = false }) {
+export function buildExtractAudioArgs({
+  inputName,
+  outputName,
+  segmentSeconds = 0,
+  detectSpeech = false,
+  trimStart = 0,
+  trimDuration = 0
+}) {
   const args = [
+    ...(Number(trimStart) > 0 ? ["-ss", formatFfmpegSeconds(trimStart)] : []),
     "-i",
     inputName,
+    ...(Number(trimDuration) > 0 ? ["-t", formatFfmpegSeconds(trimDuration)] : []),
     "-vn",
     "-map",
     "0:a:0?",
@@ -82,7 +91,7 @@ export function buildExtractAudioArgs({ inputName, outputName, segmentSeconds = 
     "1",
     "-ar",
     "16000",
-    ...(detectSpeech ? ["-af", "silencedetect=n=-45dB:d=0.4"] : []),
+    ...(detectSpeech ? ["-af", "silencedetect=n=-55dB:d=0.16"] : []),
     "-b:a",
     "64k"
   ];
@@ -98,6 +107,14 @@ export function buildExtractAudioArgs({ inputName, outputName, segmentSeconds = 
   }
   args.push(outputName);
   return args;
+}
+
+function formatFfmpegSeconds(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number <= 0) {
+    return "0";
+  }
+  return String(Math.round(number * 1000) / 1000);
 }
 
 export function buildConcatAudioArgs({ inputNames, outputName }) {
