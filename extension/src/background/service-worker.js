@@ -9,6 +9,7 @@ import { FuguangMediaHeaderRules } from "./media-header-rules.js";
 var normalizeAsrTimeoutMs = FuguangBrowserAsrProvider.normalizeAsrTimeoutMs;
 var ASR_VAD_SPLIT_MIN_SILENCE_SECONDS = FuguangBrowserAsrPostprocess.ASR_VAD_SPLIT_MIN_SILENCE_SECONDS;
 var filterAsrSegmentsByChunkOwnership = FuguangBrowserAsrPostprocess.filterAsrSegmentsByChunkOwnership;
+var filterAsrDistributedRepeatedRuns = FuguangBrowserAsrPostprocess.filterAsrDistributedRepeatedRuns;
 var filterAsrSegmentsByHallucinationGuard = FuguangBrowserAsrPostprocess.filterAsrSegmentsByHallucinationGuard;
 var filterAsrSegmentsBySpeechActivity = FuguangBrowserAsrPostprocess.filterAsrSegmentsBySpeechActivity;
 var filterAsrStrictVadRecoverySegments = FuguangBrowserAsrPostprocess.filterAsrStrictVadRecoverySegments;
@@ -93,6 +94,11 @@ const DEFAULT_WEB_FFMPEG_PATH = "web-ffmpeg/index.html";
 const WEB_FFMPEG_AUDIO_CACHE = "fuguang-web-ffmpeg-audio";
 const WEB_FFMPEG_AUDIO_CACHE_ORIGIN = "https://fuguang.local";
 const WEB_FFMPEG_AUDIO_CACHE_PREFIX = "/__fuguang_audio_cache";
+const WEB_FFMPEG_AUDIO_CACHE_CLEANUP_ALARM = "fuguang-audio-cache-cleanup";
+const WEB_FFMPEG_AUDIO_CACHE_MAX_AGE_MS = 36 * 60 * 60 * 1000;
+const WEB_FFMPEG_AUDIO_CACHE_MAX_BYTES = 2 * 1024 * 1024 * 1024;
+const WEB_FFMPEG_AUDIO_CACHE_CLEANUP_INTERVAL_MINUTES = 60;
+const WEB_FFMPEG_AUDIO_CACHE_MIN_CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
 const CAPTION_POSITION_STORAGE_KEY = "captionPosition";
 const LEGACY_CAPTION_TOP_RATIO_KEY = "captionTopRatio";
 const DEFAULT_MODEL_SETTINGS = {
@@ -115,6 +121,8 @@ const MODEL_SETTINGS_VERSION = 5;
 const MAX_CANDIDATES_PER_TAB = 80;
 const requestHeadersById = new Map();
 const browserPreloadJobs = new Map();
+let browserAudioCacheCleanupPromise = null;
+let browserAudioCacheLastCleanupAt = 0;
 
 const tabState = new Map();
 
@@ -126,6 +134,7 @@ try {
 }
 migrateLegacyCaptionPosition();
 enableSidePanelAction();
+scheduleBrowserAudioCacheMaintenance();
 
 chrome.action.onClicked.addListener(tab => {
   if (!tab?.id) {
@@ -317,6 +326,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 async function handleMessage(message, sender) {
+  requestBrowserAudioCacheMaintenance().catch(() => {});
   switch (message?.type) {
     case MESSAGE.GET_STATUS:
       return getStatus(message.tabId);
@@ -1587,7 +1597,7 @@ async function transcribeBrowserAudioChunk(chunk, asrConfig, options = {}) {
       })
     : null;
   const effectiveChunk = Array.isArray(reliableSpeechIntervals)
-    ? { ...chunk, speechIntervals: reliableSpeechIntervals, speechIntervalsReliable: reliableSpeechIntervals.length ? undefined : false }
+    ? { ...chunk, speechIntervals: reliableSpeechIntervals, speechIntervalsReliable: undefined }
     : chunk;
   const clipTimestampsSkippedReason = browserAsrClipTimestampsSkippedReason(reliableSpeechIntervals, supportedRequestFields);
   if (clipTimestampsSkippedReason && diagnostics.vad) {
@@ -1633,7 +1643,8 @@ async function transcribeBrowserAudioChunk(chunk, asrConfig, options = {}) {
         fileBuffer,
         fileName,
         clipTimestamps,
-        matureAsrPlan
+        matureAsrPlan,
+        disableVadFilter: shouldDisableBrowserAsrServerVadForRecall(asrConfig, reliableSpeechIntervals, clipTimestamps)
       });
     } catch (error) {
       if (!shouldRetryBrowserAsrClipRequestError(error, clipTimestamps)) {
@@ -1649,7 +1660,8 @@ async function transcribeBrowserAudioChunk(chunk, asrConfig, options = {}) {
         fileBuffer,
         fileName,
         clipTimestamps: "",
-        matureAsrPlan
+        matureAsrPlan,
+        disableVadFilter: shouldDisableBrowserAsrServerVadForRecall(asrConfig, reliableSpeechIntervals, "")
       });
       const retryPostprocessed = postprocessBrowserAsrPayloadOrThrow(retry.payload, effectiveChunk, asrConfig, {
         requestFields: retry.requestFields,
@@ -1737,7 +1749,9 @@ async function transcribeBrowserAudioChunk(chunk, asrConfig, options = {}) {
       postprocessed = retryPostprocessed;
       diagnostics.matureAsrPlan = cloneJsonForDiagnostics(retry.matureAsrPlan);
     }
-    const coverageRetry = browserAsrCoverageRetryPlan(postprocessed.finalSegments, effectiveChunk, clipTimestamps, transcription.requestFields);
+    const coverageRetry = browserAsrCoverageRetryPlan(postprocessed.finalSegments, effectiveChunk, clipTimestamps, transcription.requestFields, supportedRequestFields, {
+      externalVadPrecheck: Boolean(diagnostics.vad?.endpoint)
+    });
     if (coverageRetry) {
       const clipTimestampsPostprocessed = postprocessed;
       diagnostics[coverageRetry.attemptKey] = {
@@ -1775,7 +1789,9 @@ async function transcribeBrowserAudioChunk(chunk, asrConfig, options = {}) {
         forceVadHallucinationGuard: coverageRetry.forceVadHallucinationGuard
       });
       const retryPostprocessed = coverageRetry.filterToCoverageGap
-        ? filterBrowserAsrCoverageRetryPostprocess(clipTimestampsPostprocessed, rawRetryPostprocessed, effectiveChunk, retry.payload, asrConfig)
+        ? filterBrowserAsrCoverageRetryPostprocess(clipTimestampsPostprocessed, rawRetryPostprocessed, effectiveChunk, retry.payload, asrConfig, {
+          strictVadRecoveryFilter: coverageRetry.strictVadRecoveryFilter
+        })
         : rawRetryPostprocessed;
       diagnostics.retry = {
         reason: coverageRetry.reason,
@@ -1845,28 +1861,27 @@ function shouldUseBrowserAsrNativeVadTranscription(supportedRequestFields, speec
 }
 
 function shouldUseBrowserAsrCollectedSpeechAudio(reliableSpeechIntervals, supportedRequestFields, speechTimestampsEndpoint = "", clipTimestamps = "", asrConfig = {}) {
+  const clipTimestampsRequestAvailable = Boolean(clipTimestamps)
+    && asrRequestFieldSupported({ supportedRequestFields }, "clip_timestamps");
   return Boolean(
-    asrConfig?.experimentalCollectedSpeechAudio === true
-    && speechTimestampsEndpoint
+    speechTimestampsEndpoint
     && Array.isArray(reliableSpeechIntervals)
     && reliableSpeechIntervals.length
-    && !asrRequestFieldSupported({ supportedRequestFields }, "clip_timestamps")
-    && !browserAsrTranscriptionEndpointSupportsMatureVadParameters(supportedRequestFields)
+    && !clipTimestampsRequestAvailable
+    && browserAsrCollectedSpeechAudioExplicitlyEnabled(asrConfig)
   );
 }
 
-function browserAsrTranscriptionEndpointSupportsMatureVadParameters(supportedRequestFields) {
-  const options = { supportedRequestFields };
-  if (asrRequestFieldSupported(options, "vad_parameters")) {
-    return true;
+function browserAsrCollectedSpeechAudioExplicitlyEnabled(asrConfig = {}) {
+  const value = String(asrConfig?.collectedSpeechAudio || asrConfig?.collectSpeechAudio || "").trim().toLowerCase();
+  return ["1", "true", "on", "force", "collect"].includes(value);
+}
+
+function shouldDisableBrowserAsrServerVadForRecall(asrConfig = {}, reliableSpeechIntervals = null, clipTimestamps = "") {
+  if (normalizeProviderType(asrConfig?.providerType) !== "openai") {
+    return false;
   }
-  return [
-    "threshold",
-    "min_speech_duration_ms",
-    "max_speech_duration_s",
-    "min_silence_duration_ms",
-    "speech_pad_ms"
-  ].every(name => asrRequestFieldSupported(options, name));
+  return normalizeAsrVadFilterMode(asrConfig?.vadFilter || asrConfig?.vad_filter || asrConfig?.vadFilterMode) === "auto";
 }
 
 async function transcribeBrowserCollectedSpeechAudioChunk({
@@ -1887,7 +1902,7 @@ async function transcribeBrowserCollectedSpeechAudioChunk({
     .map((chunk, index) => normalizeBrowserAsrCollectedSpeechChunk(sourceChunk, chunk, index))
     .filter(Boolean);
   diagnostics.collectedSpeech = {
-    strategy: "speaches_clip_windows",
+    strategy: "external_vad_collect_chunks",
     chunks: cloneJsonForDiagnostics(chunks.map(browserAsrCollectedSpeechChunkInfo)),
     sourceSpeechIntervals: cloneJsonForDiagnostics(reliableSpeechIntervals)
   };
@@ -2101,11 +2116,8 @@ function createBrowserAsrPostprocessPolicy(options = {}) {
   const collectedSpeechRequest = options.collectedSpeechRequest === true;
   const matureVadRequest = clipTimestampRequest
     || vadFilterRequest
-    || externalVadPrecheck
-    || externalVadServiceAvailable
     || nativeVadRequest
     || collectedSpeechRequest;
-  const reliableExternalVadEvidence = externalVadPrecheck || nativeVadRequest || collectedSpeechRequest;
   return {
     clipTimestampRequest,
     vadFilterRequest,
@@ -2114,7 +2126,7 @@ function createBrowserAsrPostprocessPolicy(options = {}) {
     nativeVadRequest,
     collectedSpeechRequest,
     matureVadRequest,
-    speechActivityFilterApplied: reliableExternalVadEvidence && !clipTimestampRequest && !collectedSpeechRequest,
+    speechActivityFilterApplied: nativeVadRequest && !clipTimestampRequest && !collectedSpeechRequest,
     qualityFiltersDisabled: matureVadRequest,
     customRunFiltersDisabled: clipTimestampRequest,
     vadHallucinationGuardDisabled: false
@@ -2332,7 +2344,7 @@ function postprocessBrowserAsrCollectedSpeechPayload(payload, sourceChunk, colle
   const normalizedCompressed = normalizeAsrSegments(payload, 0, collectedDuration, {
     providerType: asrConfig?.providerType,
     disableCustomRunFilters: policy.customRunFiltersDisabled,
-    disableCustomQualityFilters: policy.qualityFiltersDisabled
+    disableCustomQualityFilters: false
   });
   const normalized = restoreBrowserAsrCollectedSpeechSegments(normalizedCompressed, collectedChunk?.timeMap || []);
   const speechFiltered = filterAsrSegmentsBySpeechActivity(normalized, sourceChunk);
@@ -2372,7 +2384,7 @@ function postprocessBrowserAsrCollectedSpeechPayload(payload, sourceChunk, colle
       collectedSpeechRequest: true,
       matureVadRequest: true,
       speechActivityFilterApplied: true,
-      qualityFiltersDisabled: policy.qualityFiltersDisabled,
+      qualityFiltersDisabled: false,
       customRunFiltersDisabled: policy.customRunFiltersDisabled,
       vadHallucinationGuardDisabled: policy.vadHallucinationGuardDisabled,
       segmentCounts,
@@ -2578,7 +2590,7 @@ function browserAsrRequestIncludesVadFilter(requestFields = []) {
   ));
 }
 
-function browserAsrCoverageRetryPlan(segments, chunk = {}, clipTimestamps = "", requestFields = []) {
+function browserAsrCoverageRetryPlan(segments, chunk = {}, clipTimestamps = "", requestFields = [], supportedRequestFields = new Set(), options = {}) {
   const coverageStats = browserAsrReliableSpeechCoverageStats(segments, chunk);
   if (!browserAsrReliableSpeechCoverageMissingFromStats(coverageStats)) {
     return null;
@@ -2587,7 +2599,28 @@ function browserAsrCoverageRetryPlan(segments, chunk = {}, clipTimestamps = "", 
     return {
       attemptKey: "clipTimestampsAttempt",
       reason: "可靠 VAD 语音区间未被 clip_timestamps 识别结果覆盖，已不带 clip_timestamps 重试。",
-      disableVadFilter: false
+      disableVadFilter: false,
+      forceSpeechActivityFilter: true,
+      forceQualityFilters: true,
+      forceCustomRunFilters: true,
+      forceVadHallucinationGuard: true,
+      filterToCoverageGap: true
+    };
+  }
+  if (!browserAsrRequestIncludesClipTimestamps(requestFields)
+    && !browserAsrRequestIncludesVadFilter(requestFields)
+    && options.externalVadPrecheck === true
+    && asrRequestFieldSupported({ supportedRequestFields }, "vad_filter")) {
+    return {
+      attemptKey: "directAttempt",
+      reason: "可靠 VAD 语音区间未被直连识别结果覆盖，已开启服务端 VAD 重试。",
+      disableVadFilter: false,
+      forceSpeechActivityFilter: true,
+      forceQualityFilters: true,
+      forceCustomRunFilters: true,
+      forceVadHallucinationGuard: true,
+      filterToCoverageGap: true,
+      strictVadRecoveryFilter: true
     };
   }
   return null;
@@ -2633,7 +2666,7 @@ function filterBrowserAsrStrictVadRecoveryPostprocess(postprocessed = {}) {
   };
 }
 
-function filterBrowserAsrCoverageRetryPostprocess(attemptPostprocessed, retryPostprocessed, chunk = {}, rawPayload = null, asrConfig = {}) {
+function filterBrowserAsrCoverageRetryPostprocess(attemptPostprocessed, retryPostprocessed, chunk = {}, rawPayload = null, asrConfig = {}, options = {}) {
   const retrySegments = retryPostprocessed?.finalSegments || [];
   const uncoveredIntervals = browserAsrUncoveredSpeechIntervalsForSegments(attemptPostprocessed?.finalSegments || [], chunk);
   if (!uncoveredIntervals.length || !retrySegments.length) {
@@ -2646,7 +2679,10 @@ function filterBrowserAsrCoverageRetryPostprocess(attemptPostprocessed, retryPos
   const rawRetrySegments = normalizeBrowserAsrRetryPayloadSegments(rawPayload, chunk, asrConfig);
   const repeatedKeys = browserAsrRepeatedCoverageRetryKeys(rawRetrySegments.length ? rawRetrySegments : retrySegments);
   const coverageSegments = retrySegments.filter(segment => browserAsrSegmentOverlapsCoverageGap(segment, uncoveredIntervals));
-  const finalSegments = browserAsrDropRepeatedCoverageRetrySegments(coverageSegments, repeatedKeys);
+  const gapSegments = browserAsrDropRepeatedCoverageRetrySegments(coverageSegments, repeatedKeys);
+  const finalSegments = options.strictVadRecoveryFilter
+    ? filterAsrStrictVadRecoverySegments(gapSegments)
+    : gapSegments;
   return {
     ...retryPostprocessed,
     finalSegments,
@@ -2859,11 +2895,11 @@ async function detectBrowserAsrSpeechIntervals(chunk, asrConfig, fileBuffer, fil
     diagnostics.vad = {
       endpoint: sanitizeDiagnosticUrl(endpoint),
       requestFields: [
-        ["threshold", "0.5"],
+        ["threshold", "0.15"],
         ["min_speech_duration_ms", "0"],
         ["max_speech_duration_s", "30"],
         ["min_silence_duration_ms", "160"],
-        ["speech_pad_ms", "400"]
+        ["speech_pad_ms", "800"]
       ],
       speechIntervals: null,
       reliable: false
@@ -2874,11 +2910,11 @@ async function detectBrowserAsrSpeechIntervals(chunk, asrConfig, fileBuffer, fil
   try {
     const formData = new FormData();
     formData.append("file", new Blob([fileBuffer], { type: chunk.file?.mime || "audio/mpeg" }), fileName);
-    formData.append("threshold", "0.5");
+    formData.append("threshold", "0.15");
     formData.append("min_speech_duration_ms", "0");
     formData.append("max_speech_duration_s", "30");
     formData.append("min_silence_duration_ms", "160");
-    formData.append("speech_pad_ms", "400");
+    formData.append("speech_pad_ms", "800");
     const response = await fetch(endpoint, {
       method: "POST",
       headers: {
@@ -3150,7 +3186,7 @@ async function getBrowserAudioChunkBuffer(file) {
 }
 
 function normalizeBrowserSourceSegmentsForTranslation(segments, chunkIndex) {
-  const usableSegments = (segments || [])
+  const usableSegments = filterAsrDistributedRepeatedRuns(segments || [])
     .filter(isUsableTimedTextSegment)
     .map(segment => {
       const { rawSegment, words, ...publicSegment } = segment;
@@ -3476,7 +3512,7 @@ async function attachBrowserJobVttIfReady(record) {
   const response = await sendMessageToMediaFrame(record.tabId, {
     type: MESSAGE.ATTACH_VTT,
     vtt: attachment.vtt,
-    label: "浮光译影",
+    label: "LLM 生肉翻译",
     signature
   });
   if (response?.ok) {
@@ -4181,6 +4217,151 @@ async function cancelPreload(tabId, jobId) {
   return { job };
 }
 
+function scheduleBrowserAudioCacheMaintenance() {
+  try {
+    chrome.alarms?.onAlarm?.addListener?.(alarm => {
+      if (alarm?.name === WEB_FFMPEG_AUDIO_CACHE_CLEANUP_ALARM) {
+        requestBrowserAudioCacheMaintenance({ force: true }).catch(() => {});
+      }
+    });
+    const created = chrome.alarms?.create?.(WEB_FFMPEG_AUDIO_CACHE_CLEANUP_ALARM, {
+      delayInMinutes: WEB_FFMPEG_AUDIO_CACHE_CLEANUP_INTERVAL_MINUTES,
+      periodInMinutes: WEB_FFMPEG_AUDIO_CACHE_CLEANUP_INTERVAL_MINUTES
+    });
+    created?.catch?.(() => {});
+  } catch {
+    // Cache cleanup is opportunistic; manual clearing must keep working even if alarms are unavailable.
+  }
+}
+
+function requestBrowserAudioCacheMaintenance(options = {}) {
+  const now = Date.now();
+  if (!options.force && now - browserAudioCacheLastCleanupAt < WEB_FFMPEG_AUDIO_CACHE_MIN_CLEANUP_INTERVAL_MS) {
+    return browserAudioCacheCleanupPromise || Promise.resolve(null);
+  }
+  browserAudioCacheLastCleanupAt = now;
+  if (!browserAudioCacheCleanupPromise) {
+    browserAudioCacheCleanupPromise = pruneBrowserAudioCache().finally(() => {
+      browserAudioCacheCleanupPromise = null;
+    });
+  }
+  return browserAudioCacheCleanupPromise;
+}
+
+async function pruneBrowserAudioCache(options = {}) {
+  const maxAgeMs = Number(options.maxAgeMs ?? WEB_FFMPEG_AUDIO_CACHE_MAX_AGE_MS);
+  const maxBytes = Number(options.maxBytes ?? WEB_FFMPEG_AUDIO_CACHE_MAX_BYTES);
+  const cache = await caches.open(WEB_FFMPEG_AUDIO_CACHE);
+  const protectedJobIds = [...browserPreloadJobs.values()]
+    .filter(record => record && !record.cancelled && browserJobIsRunning(record.job))
+    .map(record => record.job?.id)
+    .filter(Boolean);
+  const keys = await cache.keys().catch(() => []);
+  const entries = [];
+  const now = Date.now();
+  for (const key of keys) {
+    const url = typeof key === "string" ? key : key?.url;
+    if (!isBrowserAudioCacheUrl(url)) {
+      continue;
+    }
+    if (protectedJobIds.some(jobId => isBrowserAudioCacheUrlForJob(url, jobId))) {
+      continue;
+    }
+    const response = await cache.match(url).catch(() => null);
+    const info = await browserAudioCacheEntryInfo(url, response);
+    entries.push({ key, url, ...info });
+  }
+  const toDelete = new Set();
+  if (Number.isFinite(maxAgeMs) && maxAgeMs > 0) {
+    for (const entry of entries) {
+      if (entry.cachedAt && now - entry.cachedAt > maxAgeMs) {
+        toDelete.add(entry);
+      }
+    }
+  }
+  const keptByAge = entries.filter(entry => !toDelete.has(entry));
+  let totalBytes = keptByAge.reduce((sum, entry) => sum + Math.max(0, Number(entry.bytes || 0) || 0), 0);
+  if (Number.isFinite(maxBytes) && maxBytes > 0 && totalBytes > maxBytes) {
+    const oldestFirst = [...keptByAge].sort((left, right) => (
+      (left.cachedAt || 0) - (right.cachedAt || 0) || String(left.url).localeCompare(String(right.url))
+    ));
+    for (const entry of oldestFirst) {
+      if (totalBytes <= maxBytes) {
+        break;
+      }
+      toDelete.add(entry);
+      totalBytes -= Math.max(0, Number(entry.bytes || 0) || 0);
+    }
+  }
+  let removed = 0;
+  let removedBytes = 0;
+  for (const entry of toDelete) {
+    if (await cache.delete(entry.url)) {
+      removed += 1;
+      removedBytes += Math.max(0, Number(entry.bytes || 0) || 0);
+    }
+  }
+  return { removed, removedBytes, scanned: entries.length };
+}
+
+function browserJobIsRunning(job) {
+  return Boolean(job && !["done", "completed", "error", "failed", "cancelled"].includes(String(job.status || "")));
+}
+
+async function browserAudioCacheEntryInfo(url, response) {
+  const cachedAt = browserAudioCacheEntryTime(url, response);
+  let bytes = Number(browserAudioCacheResponseHeader(response, "x-fuguang-bytes"));
+  if (!Number.isFinite(bytes) || bytes < 0) {
+    bytes = await browserAudioCacheResponseBytes(response);
+  }
+  return { cachedAt, bytes: Number.isFinite(bytes) && bytes > 0 ? bytes : 0 };
+}
+
+function browserAudioCacheEntryTime(url, response) {
+  const fromHeader = Number(browserAudioCacheResponseHeader(response, "x-fuguang-cached-at"));
+  if (Number.isFinite(fromHeader) && fromHeader > 0) {
+    return fromHeader;
+  }
+  try {
+    const parsed = new URL(String(url || ""));
+    const filename = parsed.pathname.split("/").filter(Boolean).at(-1) || "";
+    const match = filename.match(/^(\d{12,})-/);
+    const timestamp = Number(match?.[1]);
+    return Number.isFinite(timestamp) && timestamp > 0 ? timestamp : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function browserAudioCacheResponseHeader(response, name) {
+  const headers = response?.headers;
+  if (!headers) {
+    return "";
+  }
+  if (typeof headers.get === "function") {
+    return headers.get(name) || headers.get(name.toLowerCase()) || headers.get(name.toUpperCase()) || "";
+  }
+  const target = String(name || "").toLowerCase();
+  for (const [key, value] of Object.entries(headers)) {
+    if (String(key).toLowerCase() === target) {
+      return String(value || "");
+    }
+  }
+  return "";
+}
+
+async function browserAudioCacheResponseBytes(response) {
+  if (!response || typeof response.arrayBuffer !== "function") {
+    return 0;
+  }
+  try {
+    const copy = typeof response.clone === "function" ? response.clone() : response;
+    return (await copy.arrayBuffer()).byteLength;
+  } catch {
+    return 0;
+  }
+}
+
 async function clearPreloadAudioCache(tabId, jobId) {
   const state = getState(tabId);
   const targetJobId = jobId || state.preloadJob?.id;
@@ -4306,6 +4487,19 @@ function isBrowserAudioCacheUrlForJob(rawUrl, jobId) {
     suffix.startsWith("/") ||
     /^-(?:\d+|logical(?:-|\/|$))/.test(suffix)
   );
+}
+
+function isBrowserAudioCacheUrl(rawUrl) {
+  if (!rawUrl) {
+    return false;
+  }
+  try {
+    const url = new URL(String(rawUrl));
+    return url.origin === WEB_FFMPEG_AUDIO_CACHE_ORIGIN
+      && url.pathname.startsWith(`${WEB_FFMPEG_AUDIO_CACHE_PREFIX}/`);
+  } catch {
+    return false;
+  }
 }
 
 function safeAudioCachePathPart(value) {
@@ -4439,7 +4633,7 @@ async function attachVttText(tabId, vtt) {
   const response = await sendMessageToMediaFrame(tabId, {
     type: MESSAGE.ATTACH_VTT,
     vtt,
-    label: "浮光译影",
+    label: "LLM 生肉翻译",
     signature
   });
   if (!response?.ok) {

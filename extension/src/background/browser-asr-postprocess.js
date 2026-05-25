@@ -1,13 +1,13 @@
 export const FuguangBrowserAsrPostprocess = (() => {
   const ASR_HALLUCINATION_COMPRESSION_RATIO = 8;
+  const ASR_VAD_BACKED_HALLUCINATION_COMPRESSION_RATIO = 4;
+  const ASR_VAD_BACKED_HALLUCINATION_NO_SPEECH_PROBABILITY = 0.35;
   const ASR_HALLUCINATION_NO_SPEECH_PROBABILITY = 0.6;
-  const ASR_SUSPICIOUS_TEXT_NO_SPEECH_PROBABILITY = 0.5;
   const ASR_HALLUCINATION_LOG_PROBABILITY = -1.0;
   const ASR_REPEATED_RUN_MIN_COUNT = 4;
   const ASR_REPEATED_RUN_MIN_TEXT_CHARS = 6;
+  const ASR_REPEATED_RUN_MIN_NON_LATIN_TEXT_CHARS = 3;
   const ASR_REPEATED_RUN_MIN_DURATION_SECONDS = 6;
-  const ASR_SUSPICIOUS_REPEAT_MIN_COUNT = 2;
-  const ASR_SUSPICIOUS_REPEAT_MIN_DURATION_SECONDS = 2;
   const ASR_LOW_INFORMATION_RUN_MIN_COUNT = 5;
   const ASR_LOW_INFORMATION_RUN_MIN_SPAN_SECONDS = 10;
   const ASR_LOW_INFORMATION_SINGLE_MIN_SPAN_SECONDS = 3;
@@ -21,47 +21,38 @@ export const FuguangBrowserAsrPostprocess = (() => {
   const ASR_WORD_SHORT_DURATION_SECONDS = 0.133;
   const ASR_WORD_LONG_DURATION_SECONDS = 2.0;
   const ASR_WORD_ANOMALY_SCORE_THRESHOLD = 3.0;
-  const ASR_SEGMENT_WORD_GAP_MIN_SEGMENT_SECONDS = 30.0;
+  const ASR_SEGMENT_WORD_GAP_MIN_SEGMENT_SECONDS = 8.0;
   const ASR_SEGMENT_WORD_GAP_SPLIT_SECONDS = 10.0;
   const ASR_HALLUCINATION_SILENCE_THRESHOLD_SECONDS = 1.0;
+  const ASR_SEVERE_WORD_TIMING_MIN_SEGMENT_SECONDS = 6.0;
+  const ASR_SEVERE_WORD_TIMING_LONG_WORD_SECONDS = 6.0;
+  const ASR_DISTRIBUTED_REPEAT_MIN_COUNT = 2;
+  const ASR_DISTRIBUTED_REPEAT_MIN_SUSPICIOUS_COUNT = 2;
+  const ASR_DISTRIBUTED_REPEAT_MIN_SPAN_SECONDS = 60;
+  const ASR_DISTRIBUTED_REPEAT_MEDIUM_COUNT = 5;
+  const ASR_DISTRIBUTED_REPEAT_MEDIUM_SPAN_SECONDS = 600;
+  const ASR_DISTRIBUTED_REPEAT_MEDIUM_MIN_SUSPICIOUS_COUNT = 2;
+  const ASR_DISTRIBUTED_REPEAT_MEDIUM_MIN_WEAK_RATIO = 0.25;
+  const ASR_DISTRIBUTED_REPEAT_WEAK_MIN_TEXT_CHARS = 3;
+  const ASR_DISTRIBUTED_REPEAT_WEAK_MAX_TEXT_CHARS = 24;
+  const ASR_DISTRIBUTED_REPEAT_HIGH_COUNT = 8;
+  const ASR_DISTRIBUTED_REPEAT_HIGH_SPAN_SECONDS = 300;
+  const ASR_WORD_TEXT_COVERAGE_MIN_CHARS = 10;
+  const ASR_WORD_TEXT_COVERAGE_MIN_RATIO = 0.35;
+  const ASR_EMPTY_VAD_WEAK_TEXT_MIN_CHARS = 10;
+  const ASR_WEAK_WORD_EVIDENCE_MIN_TEXT_CHARS = 6;
   const ASR_STABLE_TS_NONSPEECH_ERROR_RATIO = 0.3;
   const ASR_STABLE_TS_MIN_WORD_DURATION_SECONDS = 0.1;
   const ASR_CHUNK_OWNERSHIP_TOLERANCE_SECONDS = 1.5;
   const ASR_CHUNK_OWNERSHIP_MIN_DRIFT_OVERLAP_SECONDS = 0.08;
   const ASR_CHUNK_OWNERSHIP_MAX_DRIFT_ONLY_DURATION_SECONDS = 8;
-  const ASR_SUSPICIOUS_HALLUCINATION_PATTERNS = [
-    /ご視聴.*ありがとう/,
-    /ご覧.*ありがとう/,
-    /チャンネル登録/,
-    /おやすみなさい/,
-    /(?:今日|本日)の映像はここまで/,
-    /次の映像で.*会い/,
-    /また.*会いしましょう/,
-    /thank(?:s|you).*watch/,
-    /thanks.*watch/,
-    /like.*subscribe/,
-    /subscribe.*channel/,
-    /see.*next.*(?:video|time)/,
-    /goodnight/,
-    /subtitles?by/,
-    /captions?by/,
-    /amaraorg/,
-    /感谢.*观看/,
-    /感謝.*觀看/,
-    /谢谢.*观看/,
-    /謝謝.*觀看/,
-    /请.*订阅/,
-    /請.*訂閱/,
-    /下(?:期|次)再见/,
-    /晚安/,
-    /시청해주셔서감사/,
-    /구독.*좋아요/,
-    /안녕히주무세요/,
-    /untertitel/,
-    /gracias.*ver/,
-    /suscr[ií]b/,
-    /merci.*regard/
-  ];
+  const ASR_STRICT_VAD_RECOVERY_HIGH_NO_SPEECH_PROBABILITY = 0.5;
+  const ASR_STRICT_VAD_RECOVERY_MIN_SUBSTANTIVE_CHARS = 10;
+  const ASR_STRICT_VAD_RECOVERY_MIN_COMPACT_CHARS = 5;
+  const ASR_STRICT_VAD_RECOVERY_MIN_COMPACT_WORDS = 5;
+  const ASR_STRICT_VAD_RECOVERY_MIN_COMPACT_AVG_LOG_PROBABILITY = -0.45;
+  const ASR_STRICT_VAD_RECOVERY_MAX_COMPACT_NO_SPEECH_PROBABILITY = 0.8;
+  const ASR_STRICT_VAD_RECOVERY_MAX_COMPACT_COMPRESSION_RATIO = 2.5;
   
   function cleanVttText(value) {
     return String(value || "")
@@ -186,18 +177,18 @@ export const FuguangBrowserAsrPostprocess = (() => {
       return [];
     }
     const ownerSlack = 0.45;
-    return segments.map(segment => {
-      const speechSuppressed = suppressAsrSegmentNonspeechWords(segment, speechIntervals);
-      if (speechSuppressed) {
-        return speechSuppressed;
+    return segments.flatMap(segment => {
+      const speechSuppressedSegments = suppressAsrSegmentNonspeechWords(segment, speechIntervals);
+      if (speechSuppressedSegments) {
+        return speechSuppressedSegments;
       }
       if (normalizeAsrWordTimingItems(segment?.words || []).length) {
-        return null;
+        return [];
       }
       const start = Number(segment?.start);
       const end = Number(segment?.end);
       if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
-        return null;
+        return [];
       }
       const duration = Math.max(0, end - start);
       const ownerTime = start + duration / 2;
@@ -209,8 +200,8 @@ export const FuguangBrowserAsrPostprocess = (() => {
         const overlap = Math.min(end, interval.end + ownerSlack) - Math.max(start, interval.start - ownerSlack);
         return overlap >= minOverlap;
       });
-      return hasSpeechEvidence ? segment : null;
-    }).filter(Boolean);
+      return hasSpeechEvidence ? [segment] : [];
+    });
   }
   
   function filterAsrSegmentsByHallucinationGuard(segments, chunk = {}, options = {}) {
@@ -221,9 +212,23 @@ export const FuguangBrowserAsrPostprocess = (() => {
       ? normalizeAsrSpeechIntervals(chunk?.speechIntervals)
       : null;
     const speechFiltered = segments.filter(segment => {
+      if (isAsrSevereWordTimingHallucination(segment)) {
+        return false;
+      }
+      if (isAsrWordTextCoverageSuspicious(segment)) {
+        return false;
+      }
+      const words = normalizeAsrWordTimingItems(segment?.words || []);
+      if (speechIntervals && !hasStrongSpeechEvidence(segment, speechIntervals)) {
+        if (isAsrLikelyNonspeechHallucination(segment, speechIntervals)) {
+          return false;
+        }
+      }
+      if (speechIntervals && speechIntervals.length && !words.length && !hasStrongSpeechEvidence(segment, speechIntervals)) {
+        return false;
+      }
       const wordAnomaly = isAsrWordAnomalySegment(segment);
-      const suspiciousText = isLikelyAsrHallucinationText(segment?.text);
-      if (!wordAnomaly && !suspiciousText) {
+      if (!wordAnomaly) {
         return true;
       }
       if (speechIntervals === null) {
@@ -238,7 +243,7 @@ export const FuguangBrowserAsrPostprocess = (() => {
       if (wordAnomaly && isAsrSegmentSurroundedByNonspeech(segment, speechIntervals)) {
         return false;
       }
-      return !suspiciousText;
+      return true;
     });
     if (options.disableCustomRunFilters) {
       return speechFiltered;
@@ -262,16 +267,107 @@ export const FuguangBrowserAsrPostprocess = (() => {
     if (!Number.isFinite(duration) || duration <= 0 || duration > 8) {
       return false;
     }
-    if (isLikelyAsrHallucinationText(text) || asrLowInformationTextKind(text)) {
+    if (asrLowInformationTextKind(text)) {
+      return false;
+    }
+    if (isAsrStrictVadRecoveryWeakFragment(segment, text)) {
       return false;
     }
     if (isAsrSingleLowInformationHallucination(segment) || isAsrSingleRepeatedPhraseHallucination(segment, duration)) {
       return false;
     }
-    if (isAsrWordAnomalySegment(segment) || isAsrSuspiciousWordTimingSegment(segment)) {
+    const hasStrongEvidence = hasStrongStrictVadRecoveryEvidence(segment, text);
+    if (isAsrWordAnomalySegment(segment) && !hasStrongEvidence) {
+      return false;
+    }
+    if (isAsrSuspiciousWordTimingSegment(segment) && !hasStrongEvidence) {
       return false;
     }
     return true;
+  }
+
+  function isAsrStrictVadRecoveryWeakFragment(segment, text) {
+    const textLength = asrSegmentTextContentLength(text);
+    const noSpeechProbability = asrSegmentQualityNumber(segment, ["noSpeechProbability", "no_speech_prob"]);
+    if (noSpeechProbability === null) {
+      return false;
+    }
+    if (textLength <= 2 && noSpeechProbability >= 0.35) {
+      return true;
+    }
+    if (noSpeechProbability < ASR_STRICT_VAD_RECOVERY_HIGH_NO_SPEECH_PROBABILITY) {
+      return false;
+    }
+    if (isFragmentedCjkAsrText(text)) {
+      return true;
+    }
+    if (textLength < ASR_STRICT_VAD_RECOVERY_MIN_SUBSTANTIVE_CHARS) {
+      return !hasCompactStrictVadRecoveryEvidence(segment, text);
+    }
+    const avgLogProbability = asrSegmentQualityNumber(segment, ["avgLogProbability", "avg_logprob", "avg_log_probability"]);
+    const stats = asrWordEvidenceStats(segment);
+    if (hasCompactStrictVadRecoveryEvidence(segment, text)) {
+      return false;
+    }
+    return textLength < ASR_STRICT_VAD_RECOVERY_MIN_SUBSTANTIVE_CHARS + 4
+      && ((avgLogProbability !== null && avgLogProbability <= -0.5)
+        || (stats.lowProbabilityCount > 0 && stats.maxWordDuration >= 1));
+  }
+
+  function hasStrongStrictVadRecoveryEvidence(segment, text) {
+    return hasSubstantiveStrictVadRecoveryEvidence(segment, text)
+      || hasCompactStrictVadRecoveryEvidence(segment, text);
+  }
+
+  function hasSubstantiveStrictVadRecoveryEvidence(segment, text) {
+    const stats = asrWordEvidenceStats(segment);
+    const avgLogProbability = asrSegmentQualityNumber(segment, ["avgLogProbability", "avg_logprob", "avg_log_probability"]);
+    const noSpeechProbability = asrSegmentQualityNumber(segment, ["noSpeechProbability", "no_speech_prob"]);
+    return asrSegmentTextContentLength(text) >= ASR_STRICT_VAD_RECOVERY_MIN_SUBSTANTIVE_CHARS
+      && stats.words.length >= 6
+      && stats.lowProbabilityCount === 0
+      && stats.maxWordDuration <= 1
+      && (avgLogProbability === null || avgLogProbability >= -0.75)
+      && (noSpeechProbability === null || noSpeechProbability <= 0.58);
+  }
+
+  function hasCompactStrictVadRecoveryEvidence(segment, text) {
+    if (isFragmentedCjkAsrText(text)) {
+      return false;
+    }
+    const stats = asrWordEvidenceStats(segment);
+    const avgLogProbability = asrSegmentQualityNumber(segment, ["avgLogProbability", "avg_logprob", "avg_log_probability"]);
+    const noSpeechProbability = asrSegmentQualityNumber(segment, ["noSpeechProbability", "no_speech_prob"]);
+    const compressionRatio = asrSegmentQualityNumber(segment, ["compressionRatio", "compression_ratio"]);
+    return asrSegmentTextContentLength(text) >= ASR_STRICT_VAD_RECOVERY_MIN_COMPACT_CHARS
+      && stats.words.length >= ASR_STRICT_VAD_RECOVERY_MIN_COMPACT_WORDS
+      && stats.coverageRatio >= 0.8
+      && stats.lowProbabilityCount <= 1
+      && stats.maxWordDuration <= 0.75
+      && (avgLogProbability !== null && avgLogProbability >= ASR_STRICT_VAD_RECOVERY_MIN_COMPACT_AVG_LOG_PROBABILITY)
+      && (noSpeechProbability === null || noSpeechProbability <= ASR_STRICT_VAD_RECOVERY_MAX_COMPACT_NO_SPEECH_PROBABILITY)
+      && (compressionRatio === null || compressionRatio <= ASR_STRICT_VAD_RECOVERY_MAX_COMPACT_COMPRESSION_RATIO);
+  }
+
+  function isFragmentedCjkAsrText(text) {
+    const raw = cleanVttText(text || "");
+    if (!/\s/u.test(raw)) {
+      return false;
+    }
+    const parts = raw
+      .split(/\s+/u)
+      .map(part => part.replace(/[\s.,!?;:'"()[\]{}，。！？；：“”‘’（）【】《》、·…—\-~〜ー]+/gu, ""))
+      .filter(Boolean);
+    if (parts.length < 2) {
+      return false;
+    }
+    const compactLength = asrSegmentTextContentLength(raw);
+    if (compactLength < 3) {
+      return false;
+    }
+    const cjkParts = parts.filter(part => /\p{Script=Han}|\p{Script=Hiragana}|\p{Script=Katakana}|\p{Script=Hangul}/u.test(part));
+    const shortCjkParts = cjkParts.filter(part => Array.from(part).length <= 2);
+    return cjkParts.length >= 2 && shortCjkParts.length / parts.length >= 0.6;
   }
   
   function suppressAsrSegmentNonspeechWords(segment, speechIntervals) {
@@ -279,17 +375,75 @@ export const FuguangBrowserAsrPostprocess = (() => {
     if (!words.length) {
       return null;
     }
-    const keptWords = words.map(word => suppressAsrWordNonspeechTiming(word, speechIntervals)).filter(Boolean);
+    const keptWords = words.map(word => {
+      const kept = suppressAsrWordNonspeechTiming(word, speechIntervals);
+      if (!kept) {
+        return null;
+      }
+      return {
+        ...kept,
+        speechIntervalIndex: asrWordSpeechIntervalIndex(kept, speechIntervals)
+      };
+    }).filter(Boolean);
     if (!keptWords.length) {
       return null;
     }
-    return {
-      ...segment,
-      start: Math.min(...keptWords.map(word => word.start)),
-      end: Math.max(...keptWords.map(word => word.end)),
-      text: joinAsrWords(keptWords.map(word => word.text)),
-      words: keptWords
-    };
+    return splitAsrWordsBySpeechIntervals(keptWords)
+      .map(group => asrSegmentFromWordGroup(segment, group.map(cleanAsrSpeechWordGroupItem)))
+      .filter(item => item.text);
+  }
+
+  function splitAsrWordsBySpeechIntervals(words) {
+    const groups = [];
+    let current = [];
+    for (const word of words) {
+      const previous = current.at(-1);
+      if (previous && shouldSplitAsrSpeechWordGroup(previous, word)) {
+        groups.push(current);
+        current = [word];
+      } else {
+        current.push(word);
+      }
+    }
+    if (current.length) {
+      groups.push(current);
+    }
+    return groups;
+  }
+
+  function shouldSplitAsrSpeechWordGroup(previous, word) {
+    const gap = Number(word?.start) - Number(previous?.end);
+    if (!Number.isFinite(gap) || gap <= 0) {
+      return false;
+    }
+    if (gap > ASR_SEGMENT_WORD_GAP_SPLIT_SECONDS) {
+      return true;
+    }
+    const previousIndex = Number(previous?.speechIntervalIndex);
+    const currentIndex = Number(word?.speechIntervalIndex);
+    return Number.isInteger(previousIndex)
+      && Number.isInteger(currentIndex)
+      && previousIndex !== currentIndex
+      && gap > ASR_VAD_SPLIT_MIN_SILENCE_SECONDS;
+  }
+
+  function cleanAsrSpeechWordGroupItem(word) {
+    const { speechIntervalIndex: _speechIntervalIndex, ...cleanWord } = word || {};
+    return cleanWord;
+  }
+
+  function asrWordSpeechIntervalIndex(word, speechIntervals) {
+    let bestIndex = -1;
+    let bestOverlap = 0;
+    for (let index = 0; index < speechIntervals.length; index += 1) {
+      const interval = speechIntervals[index];
+      const overlap = Math.max(0, Math.min(Number(word?.end), interval.end) - Math.max(Number(word?.start), interval.start));
+      if (overlap > bestOverlap) {
+        bestIndex = index;
+        bestOverlap = overlap;
+      }
+    }
+    return bestIndex;
   }
   
   function suppressAsrWordNonspeechTiming(word, speechIntervals) {
@@ -335,6 +489,33 @@ export const FuguangBrowserAsrPostprocess = (() => {
     const required = Math.min(1, Math.max(0.35, duration * 0.45));
     return overlap >= required || overlap / duration >= 0.55;
   }
+
+  function isAsrLikelyNonspeechHallucination(segment, speechIntervals) {
+    if (!Array.isArray(speechIntervals)) {
+      return false;
+    }
+    if (isAsrWordTextCoverageSuspicious(segment)) {
+      return true;
+    }
+    const duration = asrSegmentDuration(segment);
+    if (isAsrSingleLowInformationHallucination(segment) || isAsrSingleRepeatedPhraseHallucination(segment, duration)) {
+      return true;
+    }
+    if (!speechIntervals.length) {
+      return isAsrWeakEmptyVadTextSegment(segment) || isAsrVadBackedQualityHallucination(segment);
+    }
+    return (isAsrWeakWordEvidenceSegment(segment) || isAsrVadBackedQualityHallucination(segment))
+      && isAsrSegmentSurroundedByNonspeech(segment, speechIntervals);
+  }
+
+  function isAsrVadBackedQualityHallucination(segment) {
+    const compressionRatio = asrSegmentQualityNumber(segment, ["compressionRatio", "compression_ratio"]);
+    const noSpeechProbability = asrSegmentQualityNumber(segment, ["noSpeechProbability", "no_speech_prob"]);
+    return compressionRatio !== null
+      && compressionRatio >= ASR_VAD_BACKED_HALLUCINATION_COMPRESSION_RATIO
+      && noSpeechProbability !== null
+      && noSpeechProbability >= ASR_VAD_BACKED_HALLUCINATION_NO_SPEECH_PROBABILITY;
+  }
   
   function isAsrWordAnomalySegment(segment) {
     const words = normalizeAsrWordTimingItems(segment?.words || nestedAsrWordItemsFromSegment(segment?.rawSegment));
@@ -346,6 +527,72 @@ export const FuguangBrowserAsrPostprocess = (() => {
     }
     const score = contentWords.reduce((sum, word) => sum + asrWordAnomalyScore(word), 0);
     return score >= ASR_WORD_ANOMALY_SCORE_THRESHOLD || score + 0.01 >= contentWords.length;
+  }
+
+  function isAsrWeakWordEvidenceSegment(segment) {
+    const stats = asrWordEvidenceStats(segment);
+    if (!stats.words.length || stats.textLength < ASR_WEAK_WORD_EVIDENCE_MIN_TEXT_CHARS) {
+      return false;
+    }
+    if (stats.coverageSuspicious) {
+      return true;
+    }
+    if (stats.lowProbabilityCount >= 1
+      && stats.textLength >= ASR_EMPTY_VAD_WEAK_TEXT_MIN_CHARS
+      && stats.coverageRatio < 0.7) {
+      return true;
+    }
+    if (stats.lowProbabilityCount >= 2) {
+      return true;
+    }
+    return stats.lowProbabilityCount >= 1
+      && (stats.duration >= 3 || stats.maxWordDuration >= 2.5 || stats.words.length <= 2);
+  }
+
+  function isAsrWordTextCoverageSuspicious(segment) {
+    const stats = asrWordEvidenceStats(segment);
+    return stats.coverageSuspicious;
+  }
+
+  function isAsrWeakEmptyVadTextSegment(segment) {
+    const stats = asrWordEvidenceStats(segment);
+    return stats.textLength >= ASR_EMPTY_VAD_WEAK_TEXT_MIN_CHARS
+      && stats.lowProbabilityCount > 0
+      && stats.coverageRatio < 0.7;
+  }
+
+  function asrWordEvidenceStats(segment) {
+    const words = normalizeAsrWordTimingItems(segment?.words || nestedAsrWordItemsFromSegment(segment?.rawSegment))
+      .filter(word => !isAsrPunctuationOnlyWord(word.text));
+    const textLength = asrSegmentTextContentLength(segment?.text);
+    const wordTextLength = asrSegmentTextContentLength(words.map(word => word.text).join(""));
+    const coverageRatio = textLength > 0 ? wordTextLength / textLength : 1;
+    const lowProbabilityCount = words.filter(word => {
+      const probability = optionalAsrNumber(word, ["probability", "prob"]);
+      return probability !== null && probability < ASR_WORD_LOW_PROBABILITY_THRESHOLD;
+    }).length;
+    const maxWordDuration = words.reduce((max, word) => {
+      const duration = Number(word?.end) - Number(word?.start);
+      return Number.isFinite(duration) ? Math.max(max, duration) : max;
+    }, 0);
+    return {
+      words,
+      textLength,
+      wordTextLength,
+      coverageRatio,
+      lowProbabilityCount,
+      maxWordDuration,
+      duration: asrSegmentDuration(segment),
+      coverageSuspicious: textLength >= ASR_WORD_TEXT_COVERAGE_MIN_CHARS
+        && wordTextLength > 0
+        && coverageRatio < ASR_WORD_TEXT_COVERAGE_MIN_RATIO
+    };
+  }
+
+  function asrSegmentTextContentLength(text) {
+    return cleanVttText(text)
+      .replace(/[\s.,!?;:'"()[\]{}，。！？；：“”‘’（）【】《》、·…—-]+/gu, "")
+      .length;
   }
   
   function asrWordAnomalyScore(word) {
@@ -475,9 +722,6 @@ export const FuguangBrowserAsrPostprocess = (() => {
       preserveTinyFragments: options.disableCustomRunFilters || options.disableCustomQualityFilters
     });
     const qualityFilteredSegments = wordGapSplitSegments.filter(segment => {
-      if (isAsrSuspiciousTextWithWeakModelEvidence(segment)) {
-        return false;
-      }
       if (options.disableCustomQualityFilters) {
         return true;
       }
@@ -487,7 +731,10 @@ export const FuguangBrowserAsrPostprocess = (() => {
       ? qualityFilteredSegments
       : filterAsrLowInformationRuns(filterAsrSuspiciousRepeatedRuns(filterAsrRepeatedRuns(qualityFilteredSegments)));
     const output = runFilteredSegments
-      .map(({ rawSegment, ...segment }) => segment);
+      .map(({ rawSegment, ...segment }) => {
+        const asrQuality = asrSegmentQualityFromRawSegment(rawSegment);
+        return asrQuality ? { ...segment, asrQuality } : segment;
+      });
   
     if (output.length) {
       return output;
@@ -799,6 +1046,42 @@ export const FuguangBrowserAsrPostprocess = (() => {
     }
     return null;
   }
+
+  function asrSegmentQualityFromRawSegment(rawSegment) {
+    if (!rawSegment || typeof rawSegment !== "object") {
+      return null;
+    }
+    const quality = {};
+    const compressionRatio = optionalAsrNumber(rawSegment, ["compression_ratio", "compressionRatio"]);
+    if (compressionRatio !== null) {
+      quality.compressionRatio = compressionRatio;
+    }
+    const noSpeechProbability = optionalAsrNumber(rawSegment, ["no_speech_prob", "noSpeechProbability"]);
+    if (noSpeechProbability !== null) {
+      quality.noSpeechProbability = noSpeechProbability;
+    }
+    const avgLogProbability = optionalAsrNumber(rawSegment, [
+      "avg_logprob",
+      "avg_log_probability",
+      "avg_log_prob",
+      "average_logprob",
+      "average_log_probability",
+      "logprob",
+      "log_prob"
+    ]);
+    if (avgLogProbability !== null) {
+      quality.avgLogProbability = avgLogProbability;
+    }
+    return Object.keys(quality).length ? quality : null;
+  }
+
+  function asrSegmentQualityNumber(segment, keys) {
+    const fromQuality = optionalAsrNumber(segment?.asrQuality, keys);
+    if (fromQuality !== null) {
+      return fromQuality;
+    }
+    return optionalAsrNumber(segment?.rawSegment || segment, keys);
+  }
   
   function joinAsrWords(words) {
     return words.some(containsCjk) ? words.join("") : words.join(" ");
@@ -845,18 +1128,6 @@ export const FuguangBrowserAsrPostprocess = (() => {
     return Number.isFinite(compressionRatio) && compressionRatio >= ASR_HALLUCINATION_COMPRESSION_RATIO;
   }
 
-  function isAsrSuspiciousTextWithWeakModelEvidence(segment) {
-    if (!isLikelyAsrHallucinationText(segment?.text)) {
-      return false;
-    }
-    if (isAsrWordAnomalySegment(segment) || isAsrSuspiciousWordTimingSegment(segment)) {
-      return true;
-    }
-    const noSpeechProbability = Number(segment?.rawSegment?.no_speech_prob);
-    return Number.isFinite(noSpeechProbability)
-      && noSpeechProbability >= ASR_SUSPICIOUS_TEXT_NO_SPEECH_PROBABILITY;
-  }
-
   function isAsrSuspiciousWordTimingSegment(segment) {
     const words = normalizeAsrWordTimingItems(segment?.words || nestedAsrWordItemsFromSegment(segment?.rawSegment));
     const contentWords = words
@@ -872,6 +1143,44 @@ export const FuguangBrowserAsrPostprocess = (() => {
         || (Number.isFinite(duration) && (duration < ASR_WORD_SHORT_DURATION_SECONDS || duration > ASR_WORD_LONG_DURATION_SECONDS));
     });
     return weakWords.length >= 2;
+  }
+
+  function isAsrSevereWordTimingHallucination(segment) {
+    const duration = asrSegmentDuration(segment);
+    if (!Number.isFinite(duration) || duration < ASR_SEVERE_WORD_TIMING_MIN_SEGMENT_SECONDS) {
+      return false;
+    }
+    const words = normalizeAsrWordTimingItems(segment?.words || nestedAsrWordItemsFromSegment(segment?.rawSegment))
+      .filter(word => !isAsrPunctuationOnlyWord(word.text));
+    if (!words.length || words.length > 12) {
+      return false;
+    }
+    const durations = words
+      .map(word => Number(word.end) - Number(word.start))
+      .filter(value => Number.isFinite(value) && value > 0);
+    if (!durations.length) {
+      return false;
+    }
+    const maxWordDuration = Math.max(...durations);
+    const lowProbabilityCount = words.filter(word => {
+      const probability = optionalAsrNumber(word, ["probability", "prob"]);
+      return probability !== null && probability < 0.2;
+    }).length;
+    const veryLongWord = maxWordDuration >= Math.min(
+      ASR_SEVERE_WORD_TIMING_LONG_WORD_SECONDS,
+      Math.max(3.5, duration * 0.45)
+    );
+    if (veryLongWord && (duration >= 10 || lowProbabilityCount > 0)) {
+      return true;
+    }
+    const noSpeechProbability = optionalAsrNumber(segment?.rawSegment || segment, ["no_speech_prob", "noSpeechProbability"]);
+    if (noSpeechProbability !== null && noSpeechProbability >= ASR_HALLUCINATION_NO_SPEECH_PROBABILITY) {
+      if (isAsrSuspiciousWordTimingSegment(segment)) {
+        return true;
+      }
+      return duration >= 8 && words.length <= 8 && maxWordDuration >= 3;
+    }
+    return false;
   }
   
   function filterAsrRepeatedRuns(segments) {
@@ -890,26 +1199,89 @@ export const FuguangBrowserAsrPostprocess = (() => {
     }
     return output;
   }
+
+  function filterAsrDistributedRepeatedRuns(segments) {
+    if (!Array.isArray(segments) || !segments.length) {
+      return [];
+    }
+    const runs = new Map();
+    for (const segment of segments) {
+      const key = normalizeAsrHallucinationText(segment?.text);
+      if (!isAsrRepeatedRunKeyEligible(key)) {
+        continue;
+      }
+      if (!runs.has(key)) {
+        runs.set(key, []);
+      }
+      runs.get(key).push(segment);
+    }
+    const droppedKeys = new Set();
+    for (const [key, run] of runs.entries()) {
+      if (isAsrDistributedRepeatedRunHallucination(key, run)) {
+        droppedKeys.add(key);
+      }
+    }
+    if (!droppedKeys.size) {
+      return segments;
+    }
+    return segments.filter(segment => !droppedKeys.has(normalizeAsrHallucinationText(segment?.text)));
+  }
+
+  function isAsrDistributedRepeatedRunHallucination(key, run) {
+    if (!isAsrRepeatedRunKeyEligible(key) || !Array.isArray(run) || run.length < ASR_DISTRIBUTED_REPEAT_MIN_COUNT) {
+      return false;
+    }
+    const sorted = [...run].sort((left, right) => Number(left?.start) - Number(right?.start));
+    const firstStart = Number(sorted[0]?.start);
+    const lastEnd = Number(sorted.at(-1)?.end);
+    const span = Number.isFinite(firstStart) && Number.isFinite(lastEnd) ? Math.max(0, lastEnd - firstStart) : 0;
+    if (span < ASR_DISTRIBUTED_REPEAT_MIN_SPAN_SECONDS) {
+      return false;
+    }
+    const suspicious = sorted.filter(segment => isAsrSuspiciousDistributedRepeatOccurrence(segment));
+    if (sorted.length >= ASR_DISTRIBUTED_REPEAT_HIGH_COUNT && span >= ASR_DISTRIBUTED_REPEAT_HIGH_SPAN_SECONDS) {
+      return true;
+    }
+    if (sorted.length >= ASR_DISTRIBUTED_REPEAT_MEDIUM_COUNT && span >= ASR_DISTRIBUTED_REPEAT_MEDIUM_SPAN_SECONDS) {
+      const weak = sorted.filter(segment => isAsrWeakDistributedRepeatOccurrence(segment));
+      if (weak.length >= ASR_DISTRIBUTED_REPEAT_MEDIUM_MIN_SUSPICIOUS_COUNT
+        && weak.length / sorted.length >= ASR_DISTRIBUTED_REPEAT_MEDIUM_MIN_WEAK_RATIO) {
+        return true;
+      }
+    }
+    return suspicious.length >= ASR_DISTRIBUTED_REPEAT_MIN_SUSPICIOUS_COUNT
+      && suspicious.length / sorted.length >= 0.5;
+  }
+
+  function isAsrSuspiciousDistributedRepeatOccurrence(segment) {
+    const duration = asrSegmentDuration(segment);
+    if (!Number.isFinite(duration) || duration <= 0) {
+      return false;
+    }
+    if (isAsrSevereWordTimingHallucination(segment) || isAsrSingleLowInformationHallucination(segment)) {
+      return true;
+    }
+    if (isAsrWeakWordEvidenceSegment(segment)) {
+      return true;
+    }
+    const noSpeechProbability = optionalAsrNumber(segment?.rawSegment || segment, ["no_speech_prob", "noSpeechProbability"]);
+    return duration >= 3
+      && noSpeechProbability !== null
+      && noSpeechProbability >= ASR_HALLUCINATION_NO_SPEECH_PROBABILITY;
+  }
+
+  function isAsrWeakDistributedRepeatOccurrence(segment) {
+    if (isAsrSuspiciousDistributedRepeatOccurrence(segment)) {
+      return true;
+    }
+    const stats = asrWordEvidenceStats(segment);
+    return stats.textLength >= ASR_DISTRIBUTED_REPEAT_WEAK_MIN_TEXT_CHARS
+      && stats.textLength <= ASR_DISTRIBUTED_REPEAT_WEAK_MAX_TEXT_CHARS
+      && stats.lowProbabilityCount >= 1;
+  }
   
   function filterAsrSuspiciousRepeatedRuns(segments) {
-    const output = [];
-    for (let index = 0; index < segments.length;) {
-      const key = normalizeAsrHallucinationText(segments[index]?.text);
-      let nextIndex = index + 1;
-      while (
-        nextIndex < segments.length
-        && key
-        && normalizeAsrHallucinationText(segments[nextIndex]?.text) === key
-      ) {
-        nextIndex += 1;
-      }
-      const run = segments.slice(index, nextIndex);
-      if (!isAsrSuspiciousRepeatedRunHallucination(key, run)) {
-        output.push(...run);
-      }
-      index = nextIndex;
-    }
-    return output;
+    return filterAsrRepeatedRuns(Array.isArray(segments) ? segments : []);
   }
 
   function filterAsrLowInformationRuns(segments) {
@@ -947,7 +1319,7 @@ export const FuguangBrowserAsrPostprocess = (() => {
       return false;
     }
     const kind = asrLowInformationTextKind(segment?.text);
-    if (kind === "vocalization" && duration >= ASR_LOW_INFORMATION_SINGLE_MIN_SPAN_SECONDS) {
+    if (kind === "low_information" && duration >= ASR_LOW_INFORMATION_SINGLE_MIN_SPAN_SECONDS) {
       return true;
     }
     return isAsrSingleRepeatedPhraseHallucination(segment, duration);
@@ -1013,40 +1385,75 @@ export const FuguangBrowserAsrPostprocess = (() => {
     if (!compact) {
       return null;
     }
-    if (/^(?:笑い声|笑声|笑聲|笑い|笑|laughter|laughs|laughing)+$/u.test(compact)) {
-      return "sound";
-    }
-    if (/^(?:うん|ウン|嗯|啊|呃|哈|呵)+$/u.test(compact)) {
-      return "vocalization";
-    }
-    if (/^[あぁうぅんンえぇおぉはハぁァへっッ嗯啊呃哈呵]+$/u.test(compact)) {
-      return "vocalization";
+    if (isStructurallyLowInformationAsrText(compact)) {
+      return "low_information";
     }
     return null;
   }
+
+  function isStructurallyLowInformationAsrText(compact) {
+    const chars = Array.from(String(compact || ""));
+    if (!chars.length || /\p{Number}/u.test(compact)) {
+      return false;
+    }
+    if (/^[a-z]+$/i.test(compact)) {
+      if (chars.length <= 4 && !/[aeiouy]/i.test(compact)) {
+        return true;
+      }
+      if (isRepeatedAsrUnit(chars, 1, 4, 3)) {
+        return true;
+      }
+      const uniqueCount = new Set(chars).size;
+      return chars.length >= 8 && uniqueCount / chars.length <= 0.25;
+    }
+    const uniqueCount = new Set(chars).size;
+    if (chars.length === 1) {
+      return true;
+    }
+    if (isRepeatedAsrUnit(chars, 1, 4, 2)) {
+      return true;
+    }
+    return chars.length >= 8 && uniqueCount / chars.length <= 0.25;
+  }
+
+  function isRepeatedAsrUnit(chars, minUnitLength = 1, maxUnitLength = 4, minRepeats = 2) {
+    if (!Array.isArray(chars) || !chars.length) {
+      return false;
+    }
+    const maxLength = Math.min(maxUnitLength, Math.floor(chars.length / minRepeats));
+    for (let unitLength = minUnitLength; unitLength <= maxLength; unitLength += 1) {
+      if (chars.length % unitLength !== 0) {
+        continue;
+      }
+      const unit = chars.slice(0, unitLength).join("");
+      if (!unit.trim()) {
+        continue;
+      }
+      const repeats = chars.length / unitLength;
+      if (repeats >= minRepeats && unit.repeat(repeats) === chars.join("")) {
+        return true;
+      }
+    }
+    return false;
+  }
   
   function isAsrRepeatedRunHallucination(key, run) {
-    if (!key || key.length < ASR_REPEATED_RUN_MIN_TEXT_CHARS || run.length < ASR_REPEATED_RUN_MIN_COUNT) {
+    if (!isAsrRepeatedRunKeyEligible(key) || run.length < ASR_REPEATED_RUN_MIN_COUNT) {
       return false;
     }
     const duration = run.reduce((sum, segment) => sum + Math.max(0, Number(segment.end) - Number(segment.start)), 0);
     return duration >= ASR_REPEATED_RUN_MIN_DURATION_SECONDS;
   }
-  
-  function isAsrSuspiciousRepeatedRunHallucination(key, run) {
-    if (!key || run.length < ASR_SUSPICIOUS_REPEAT_MIN_COUNT || !isLikelyAsrHallucinationText(key)) {
+
+  function isAsrRepeatedRunKeyEligible(key) {
+    const text = String(key || "");
+    if (text.length >= ASR_REPEATED_RUN_MIN_TEXT_CHARS) {
+      return true;
+    }
+    if (text.length < ASR_REPEATED_RUN_MIN_NON_LATIN_TEXT_CHARS) {
       return false;
     }
-    const duration = run.reduce((sum, segment) => sum + Math.max(0, Number(segment.end) - Number(segment.start)), 0);
-    return duration >= ASR_SUSPICIOUS_REPEAT_MIN_DURATION_SECONDS;
-  }
-  
-  function isLikelyAsrHallucinationText(text) {
-    const normalizedText = normalizeAsrHallucinationText(text);
-    if (normalizedText.length < ASR_REPEATED_RUN_MIN_TEXT_CHARS) {
-      return false;
-    }
-    return ASR_SUSPICIOUS_HALLUCINATION_PATTERNS.some(pattern => pattern.test(normalizedText));
+    return /[^\p{Script=Latin}\p{Number}_]/u.test(text);
   }
   
   function normalizeAsrHallucinationText(text) {
@@ -1124,6 +1531,7 @@ export const FuguangBrowserAsrPostprocess = (() => {
     return {
     ASR_VAD_SPLIT_MIN_SILENCE_SECONDS,
     filterAsrSegmentsByChunkOwnership,
+    filterAsrDistributedRepeatedRuns,
     filterAsrSegmentsByHallucinationGuard,
     filterAsrSegmentsBySpeechActivity,
     filterAsrStrictVadRecoverySegments,

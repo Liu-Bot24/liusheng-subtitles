@@ -4,6 +4,7 @@
   const SUBTITLE_CACHE_STORE = "subtitles";
   const SUBTITLE_CACHE_MAX_ENTRIES = 80;
   const SUBTITLE_CACHE_MAX_AGE_DAYS = 30;
+  const SUBTITLE_CACHE_MAX_BYTES = 8 * 1024 * 1024;
 
   function openSubtitleCacheDb() {
     return new Promise((resolve, reject) => {
@@ -128,6 +129,21 @@
         for (const item of sorted.slice(SUBTITLE_CACHE_MAX_ENTRIES)) {
           idsToDelete.add(item.entry.id);
         }
+        const keptByAgeAndCount = sorted.filter(item => !idsToDelete.has(item.entry.id));
+        let totalBytes = keptByAgeAndCount.reduce((sum, item) => sum + subtitleCacheEntryBytes(item.entry), 0);
+        if (totalBytes > SUBTITLE_CACHE_MAX_BYTES) {
+          for (const item of [...keptByAgeAndCount].reverse()) {
+            if (totalBytes <= SUBTITLE_CACHE_MAX_BYTES) {
+              break;
+            }
+            const id = item.entry?.id;
+            if (!id || id === protectedId) {
+              continue;
+            }
+            idsToDelete.add(id);
+            totalBytes -= subtitleCacheEntryBytes(item.entry);
+          }
+        }
         for (const id of idsToDelete) {
           if (id && id !== protectedId) {
             store.delete(id);
@@ -146,12 +162,25 @@
     });
   }
 
+  function subtitleCacheEntryBytes(entry) {
+    const approxBytes = Number(entry?.approxBytes);
+    if (Number.isFinite(approxBytes) && approxBytes > 0) {
+      return approxBytes;
+    }
+    try {
+      return JSON.stringify(entry || {}).length;
+    } catch {
+      return 0;
+    }
+  }
+
   Object.assign(global, {
     SUBTITLE_CACHE_DB_NAME,
     SUBTITLE_CACHE_DB_VERSION,
     SUBTITLE_CACHE_STORE,
     SUBTITLE_CACHE_MAX_ENTRIES,
     SUBTITLE_CACHE_MAX_AGE_DAYS,
+    SUBTITLE_CACHE_MAX_BYTES,
     openSubtitleCacheDb,
     getSubtitleCacheEntry,
     getAllSubtitleCacheEntries,

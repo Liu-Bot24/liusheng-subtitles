@@ -274,8 +274,8 @@ vm.runInContext(appSource, context, { filename: "web-ffmpeg-app.js" });
       index: 0,
       name: "collected-000.mp3",
       sourceStart: 31,
-      sourceEnd: 32,
-      duration: 1,
+      sourceEnd: 59,
+      duration: 2,
       parts: [
         {
           relativeStart: 1,
@@ -285,30 +285,21 @@ vm.runInContext(appSource, context, { filename: "web-ffmpeg-app.js" });
           outputStart: 0,
           outputEnd: 1,
           duration: 1
+        },
+        {
+          relativeStart: 28,
+          relativeEnd: 29,
+          sourceStart: 58,
+          sourceEnd: 59,
+          outputStart: 1,
+          outputEnd: 2,
+          duration: 1
         }
       ]
     },
     {
       index: 1,
       name: "collected-001.mp3",
-      sourceStart: 58,
-      sourceEnd: 59,
-      duration: 1,
-      parts: [
-        {
-          relativeStart: 28,
-          relativeEnd: 29,
-          sourceStart: 58,
-          sourceEnd: 59,
-          outputStart: 0,
-          outputEnd: 1,
-          duration: 1
-        }
-      ]
-    },
-    {
-      index: 2,
-      name: "collected-002.mp3",
       sourceStart: 75,
       sourceEnd: 76,
       duration: 1,
@@ -458,13 +449,18 @@ vm.runInContext(appSource, context, { filename: "web-ffmpeg-app.js" });
   const chunk = await context.collectSpeechSegmentOutput(ffmpeg, "audio.mp3", spec, new Set());
   assert.equal(chunk.start, 31);
   assert.equal(chunk.end, 59);
-  assert.equal(chunk.duration, 28);
-  assert.deepEqual(JSON.parse(JSON.stringify(chunk.timeMap)), [
-    { outputStart: 0, outputEnd: 28, sourceStart: 31, sourceEnd: 59 }
+  assert.equal(chunk.duration, 2);
+  assert.deepEqual(JSON.parse(JSON.stringify(chunk.speechIntervals)), [
+    { start: 31, end: 32 },
+    { start: 58, end: 59 }
   ]);
-  assert.equal(commands.length, 2);
+  assert.deepEqual(JSON.parse(JSON.stringify(chunk.timeMap)), [
+    { outputStart: 0, outputEnd: 1, sourceStart: 31, sourceEnd: 32 },
+    { outputStart: 1, outputEnd: 2, sourceStart: 58, sourceEnd: 59 }
+  ]);
+  assert.equal(commands.length, 3);
   assert.equal(commands[0].includes("-ss"), true);
-  assert.equal(commands[1].some(item => String(item).includes("concat=n=1:v=0:a=1[aout]")), false);
+  assert.equal(commands[2].some(item => String(item).includes("concat=n=2:v=0:a=1[aout]")), true);
 }
 
 {

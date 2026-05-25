@@ -52,6 +52,7 @@ assert.equal(mainWorldSnifferScript.all_frames, true);
 assert.equal(mainWorldSnifferScript.world, "MAIN");
 
 for (const [permission, apiName] of [
+  ["alarms", "chrome.alarms"],
   ["offscreen", "chrome.offscreen"],
   ["declarativeNetRequestWithHostAccess", "chrome.declarativeNetRequest"],
   ["sidePanel", "chrome.sidePanel"],

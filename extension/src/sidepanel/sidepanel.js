@@ -11,7 +11,6 @@ const MESSAGE = {
   CHECK_PRELOAD_JOB: "FUGUANG_CHECK_PRELOAD_JOB",
   GET_PRELOAD_VTT: "FUGUANG_GET_PRELOAD_VTT",
   GET_PRELOAD_TRANSCRIPT: "FUGUANG_GET_PRELOAD_TRANSCRIPT",
-  GET_PRELOAD_DIAGNOSTICS: "FUGUANG_GET_PRELOAD_DIAGNOSTICS",
   GET_VIDEO_STATE: "FUGUANG_GET_VIDEO_STATE",
   ATTACH_VTT_TEXT: "FUGUANG_ATTACH_VTT_TEXT",
   DETACH_PRELOAD_VTT: "FUGUANG_DETACH_PRELOAD_VTT",
@@ -31,6 +30,497 @@ const DEFAULTS = {
   subtitleDisplayMode: "translated"
 };
 const MODEL_SETTINGS_VERSION = 5;
+const UI_LOCALE_STORAGE_KEY = "fuguangUiLocale";
+const DEFAULT_LOCALE = "zh";
+const LOCALES = new Set(["en", "zh"]);
+const I18N = {
+  zh: {
+    appName: "LLM 生肉翻译",
+    documentTitle: "LLM 生肉翻译",
+    currentTab: "当前标签页",
+    languageLabel: "语言",
+    tabsLabel: "页面切换",
+    statusIdle: "待机",
+    tabTask: "任务与字幕",
+    tabSettings: "设置",
+    mediaSources: "媒体源",
+    refreshSources: "刷新源",
+    readingSources: "正在读取当前页面媒体源。",
+    taskTitle: "预加载任务",
+    sourceLanguage: "原音频语言",
+    sourceAuto: "自动识别",
+    langChinese: "中文",
+    langEnglish: "英语",
+    langJapanese: "日语",
+    langKorean: "韩语",
+    langFrench: "法语",
+    langGerman: "德语",
+    langRussian: "俄语",
+    langSpanish: "西语",
+    langPortuguese: "葡语",
+    langItalian: "意语",
+    targetChinese: "中文（简体）",
+    targetEnglish: "英文",
+    start: "开始",
+    startExtract: "开始抽取",
+    restartExtract: "重新抽取",
+    retryFailed: "重试失败",
+    retryFailedCount: "重试失败 {count}",
+    retryFailedSegmentsCount: "重试失败识别分段 {count}",
+    retry: "重试",
+    retranslate: "重翻译字幕",
+    retranslateShort: "重翻译",
+    continueTranslate: "继续翻译",
+    continueAsr: "继续 ASR",
+    stop: "停止",
+    clearAudio: "清音频缓存",
+    refresh: "刷新",
+    fullSubtitles: "完整字幕",
+    overlayOn: "浮层开",
+    overlayOff: "浮层关",
+    bilingualOn: "双语开",
+    bilingual: "双语",
+    exportSrt: "导出SRT",
+    importSubtitle: "导入",
+    clearSubtitleCache: "清字幕缓存",
+    taskDetails: "任务详情",
+    collapseTask: "收起任务",
+    subtitlePlaceholder: "字幕生成后会显示在这里。",
+    asrSettings: "语音识别",
+    translationModel: "翻译模型",
+    editingProfile: "正在编辑",
+    addProfile: "新增档案",
+    deleteProfile: "删除档案",
+    profileName: "档案名称",
+    apiBaseUrl: "接口地址",
+    modelName: "模型名称",
+    vadFilter: "VAD 过滤",
+    auto: "自动",
+    forceOn: "强制开启（自建）",
+    off: "关闭",
+    apiKey: "API 密钥",
+    apiFormat: "接口格式",
+    openaiFormat: "OpenAI 格式",
+    anthropicFormat: "Anthropic 格式",
+    targetLanguage: "目标语言",
+    asrWorkers: "ASR 并发",
+    translationWorkers: "翻译并发",
+    chunkMinutes: "翻译分段时长（分钟）",
+    subtitleStyle: "字幕样式",
+    fontSize: "文字大小（像素）",
+    backgroundOpacity: "背景透明度 %",
+    saveSettings: "保存设置",
+    noTab: "没有可用的当前标签页。",
+    oldJobMissing: "旧任务已失效。请重新提交任务。",
+    noTrackedJob: "还没有正在跟踪的任务。",
+    noTrackedPreloadJob: "还没有正在跟踪的预加载任务。",
+    backendNoJob: "后台没有返回任务详情。请刷新或重新提交任务。",
+    tabChangedReading: "当前标签页已变化，正在读取新的媒体源。",
+    tabChangedCancel: "当前标签页已经变化，已取消提交。请确认媒体源后再开始。",
+    tabChangedIgnore: "当前标签页已经变化，已忽略刚才返回的旧任务。",
+    noCandidates: "还没有发现可抽取的媒体源。请确认页面里有视频，或播放/刷新页面后再试。",
+    sourcesEmpty: "还没有发现可抽取的媒体源。",
+    sourcesRefreshed: "已刷新 {count} 个媒体源。",
+    sourcesSummary: "{count} 个来源，已选择第 {index} 个{hidden}。",
+    sourcesHidden: "，另外 {count} 个已折叠在列表外",
+    unnamedMedia: "未命名媒体",
+    submittingSource: "正在提交当前页面的媒体源...",
+    taskSubmitted: "任务已提交。",
+    waitingNewSubtitles: "正在等待新任务的字幕。",
+    startFailedNoJob: "后台没有创建任务，请重新加载扩展后重试。",
+    statusCompletedWarnings: "完成，有警告",
+    statusCompleted: "字幕已完成",
+    statusFailed: "任务失败",
+    statusCancelled: "任务已停止",
+    statusRunning: "处理中",
+    jobExtractingTranslating: "正在边抽边译",
+    jobAsrTranslation: "正在识别和翻译",
+    jobRetryFailed: "正在重试失败分段",
+    jobPreloading: "正在预加载音频",
+    stageQueued: "排队中",
+    stageExtracting: "抽取",
+    stageExtractingTranslating: "边抽边译",
+    stageAsr: "语音识别",
+    stageAsrTranslation: "识别翻译",
+    stageRetryFailed: "重试失败",
+    stageTranslating: "识别翻译",
+    stageTranslated: "完成",
+    stageCompleted: "完成",
+    stageCancelled: "已停止",
+    stageFailed: "失败",
+    stageProcessing: "处理中",
+    chunkQueued: "排队",
+    chunkAsr: "识别",
+    chunkAsrDone: "待翻译",
+    chunkTranslation: "翻译",
+    chunkCompleted: "完成",
+    chunkPartial: "部分完成",
+    chunkFailed: "失败",
+    chunkStopped: "停止",
+    metricExtract: "抽取",
+    metricAsrTranslation: "识别 / 翻译",
+    metricCurrentStep: "当前步骤",
+    metricChunkMinutes: "分段时长",
+    metricReady: "已可用",
+    metricDoneChunks: "分段完成",
+    metricAsrActive: "识别中",
+    metricTranslating: "翻译中",
+    metricAsrWorkers: "ASR 并发",
+    metricTranslationWorkers: "翻译并发",
+    metricFailed: "失败",
+    metricElapsed: "耗时",
+    audioExtract: "音频抽取",
+    asrTranslation: "识别 / 翻译",
+    minutes: "{count} 分钟",
+    taskSubtitle: "任务 {id} · {source}",
+    noSpeech: "无语音",
+    sourceSegments: "原文 {count}",
+    translatedSegments: "译文 {count}",
+    asrFailures: "{count} 个音频分段识别失败",
+    attemptCount: "第 {count} 次尝试",
+    waitingDuration: "已等待 {duration}",
+    waitingFirstChunk: "等待首个音频切片生成",
+    readyAudio: "已生成 {duration} 可处理音频",
+    internalChunks: "内部媒体切片 {done}/{total}",
+    downloadSegments: "下载媒体切片 {done}/{total}",
+    completedPercent: "100%",
+    failedShort: "失败",
+    jsonError: "模型返回内容无法解析。建议降低翻译并发，或切换到更稳定的翻译模型后重试。",
+    noSubtitleItems: "模型没有返回字幕条目。可以重试这段任务。",
+    retryPreloadMessage: "正在重试失败分段...",
+    reuseSourceMessage: "正在继续翻译...",
+    reuseAudioMessage: "正在继续识别...",
+    continueTaskMessage: "正在继续处理任务...",
+    retranslateOnlyMessage: "正在重新翻译字幕，不会重新识别音频...",
+    retryChunkMessage: "正在重试第 {index} 个失败分段...",
+    retranslateChunkMessage: "正在重翻译第 {index} 个分段...",
+    retrySubmitted: "已提交失败分段重试。",
+    retranslateSubmitted: "已提交字幕重翻译。",
+    retryChunkSubmitted: "已提交第 {index} 个失败分段重试。",
+    retranslateChunkSubmitted: "已提交第 {index} 个分段重翻译。",
+    stoppingTask: "正在停止任务...",
+    stoppedTask: "任务已停止。",
+    noAudioCacheTask: "没有可清理音频缓存的任务。",
+    runningNoClearAudio: "任务仍在运行中，请先停止或等待结束。",
+    clearingAudio: "正在清除当前任务的音频缓存...",
+    audioCleared: "当前任务音频缓存已清除。",
+    subtitleEmptyFile: "字幕文件为空。",
+    noRealTranslationMode: "当前模式下没有可显示的译文。",
+    cueJumpTitle: "双击跳转到这句字幕",
+    seekDone: "已跳转到字幕时间点。",
+    cacheLoaded: "已加载本地缓存：{title}",
+    unnamedSubtitle: "未命名字幕",
+    bilingualNeedsSource: "双语显示需要原文轨。请重新生成字幕，或导入带原文的字幕文件。",
+    onlyTranslationTrack: "这份字幕只有译文轨。",
+    sourcePreview: "字幕会先显示原文，译文完成后自动更新。",
+    partialTranslationPreview: "部分译文已完成，剩余句子会暂时显示原文。",
+    noPlayer: "当前页面没有可挂载字幕的播放器。",
+    noExportSubtitle: "还没有可导出的字幕。",
+    noExportRealTranslation: "当前模式下还没有可导出的译文。",
+    srtExported: "SRT 字幕已导出。",
+    importNoSubtitle: "导入文件没有可用字幕。",
+    importNoContext: "导入文件缺少网页或媒体信息，无法保存到当前页面。",
+    importDone: "已导入 {format} 字幕，并保存到当前页面。",
+    importFailed: "导入失败：{error}",
+    fuguangJson: "LLM 生肉翻译 JSON",
+    subtitleGeneric: "字幕",
+    noCacheLocation: "当前页面没有可定位的字幕缓存。",
+    noSavedSubtitleCache: "当前页面没有已保存的字幕缓存。",
+    subtitleCacheCleared: "已清除当前页面字幕缓存。",
+    subtitleCacheClearedCount: "已清除当前页面字幕缓存（{count} 条）。",
+    subtitleCacheClearedBackendFailed: "已清除当前页面字幕缓存（{count} 条），但页面状态同步失败：{error}",
+    subtitleCacheDisplayCleared: "当前页面没有已保存的字幕缓存，已清除当前显示的缓存字幕。",
+    subtitleCacheClearFailed: "清除字幕缓存失败：{error}",
+    backgroundClearFailed: "后台没有完成字幕状态清理。",
+    noSavedCacheAndDisplayCleared: "当前页面没有已保存的字幕缓存，已清除当前显示。",
+    settingsSaved: "设置已保存。新任务会使用当前配置。",
+    profileAdded: "已新增空白档案。请填写接口地址、模型名称和 API 密钥后保存。",
+    profileDeleted: "已删除当前档案。保存设置后会更新本机存储。",
+    unnamedProfile: "未命名档案",
+    localOnlyPlaceholder: "只保存在本机浏览器",
+    xaiModelPlaceholder: "可选备注",
+    xaiHint: "xAI ASR 调用 /stt；模型名称只作为配置备注。API 密钥只保存在本机浏览器。",
+    asrKeyHint: "API 密钥只保存在本机浏览器。自动 VAD 只对兼容的自建接口启用。",
+    llmKeyHint: "API 密钥只保存在本机浏览器。",
+    startTitle: "从当前媒体源抽取音频并生成字幕。",
+    restartTitle: "从选中的媒体源重新抽取音频并创建新任务。",
+    retryNeedsExtractTitle: "音频缓存已清除，需要重新抽取全部。",
+    continueTranslateTitle: "继续翻译已有原文，不重新识别音频。",
+    continueAsrTitle: "继续识别已抽取的音频，不重新下载媒体。",
+    retryFailedTitle: "只重试当前任务里的失败分段。",
+    retranslateTitle: "只重新翻译已有原文。",
+    clearAudioRunningTitle: "任务运行中不能清理音频缓存。",
+    clearAudioAgainTitle: "再次清除当前任务的浏览器音频缓存；字幕缓存不受影响。",
+    clearAudioTitle: "只清除当前任务的浏览器音频缓存；字幕缓存不受影响。",
+    chunkRetryRunningTitle: "当前任务仍在运行，结束后可单独重试。",
+    chunkRetryTitle: "重新识别并翻译这个失败分段。",
+    chunkRetranslateTitle: "只重跑这个翻译分段。",
+    roleAudio: "音频轨",
+    roleVideo: "视频轨",
+    rolePlaylist: "播放列表",
+    roleMedia: "媒体",
+    sourceRequestHeaders: "请求头",
+    sourceRequest: "请求",
+    sourceResponse: "响应",
+    sourcePage: "页面",
+    sourceMediaElement: "播放器",
+    sourceJsonParse: "页面数据",
+    sourceHlsParse: "HLS 列表",
+    sourceDashParse: "DASH 列表",
+    folded: "折叠 {count}",
+    waitFirstSegment: "等待首段",
+    activeProcessing: "{count} 处理中",
+    failedCount: "{count} 失败",
+    contextInvalidated: "扩展上下文已失效，请重新加载扩展并刷新当前页面。",
+    receivingEndMissing: "页面脚本还没有准备好，请刷新当前页面后重试。",
+    portClosed: "后台响应中断，请重试。",
+    unknownError: "未知错误",
+    backendNoResponse: "扩展后台暂时没有响应：{error}"
+  },
+  en: {
+    appName: "LLM Raw Translator",
+    documentTitle: "LLM Raw Translator",
+    currentTab: "Current tab",
+    languageLabel: "Language",
+    tabsLabel: "Tabs",
+    statusIdle: "Idle",
+    tabTask: "Tasks & Subtitles",
+    tabSettings: "Settings",
+    mediaSources: "Media Sources",
+    refreshSources: "Refresh Sources",
+    readingSources: "Reading media sources from this page.",
+    taskTitle: "Preload Task",
+    sourceLanguage: "Source Language",
+    sourceAuto: "Auto detect",
+    langChinese: "Chinese",
+    langEnglish: "English",
+    langJapanese: "Japanese",
+    langKorean: "Korean",
+    langFrench: "French",
+    langGerman: "German",
+    langRussian: "Russian",
+    langSpanish: "Spanish",
+    langPortuguese: "Portuguese",
+    langItalian: "Italian",
+    targetChinese: "Chinese (Simplified)",
+    targetEnglish: "English",
+    start: "Start",
+    startExtract: "Start",
+    restartExtract: "Restart",
+    retryFailed: "Retry Failed",
+    retryFailedCount: "Retry Failed {count}",
+    retryFailedSegmentsCount: "Retry Failed ASR {count}",
+    retry: "Retry",
+    retranslate: "Retranslate",
+    retranslateShort: "Retranslate",
+    continueTranslate: "Continue Translation",
+    continueAsr: "Continue ASR",
+    stop: "Stop",
+    clearAudio: "Clear Audio",
+    refresh: "Refresh",
+    fullSubtitles: "Full Subtitles",
+    overlayOn: "Overlay On",
+    overlayOff: "Overlay Off",
+    bilingualOn: "Bilingual On",
+    bilingual: "Bilingual",
+    exportSrt: "Export SRT",
+    importSubtitle: "Import",
+    clearSubtitleCache: "Clear Subtitles",
+    taskDetails: "Task Details",
+    collapseTask: "Hide Task",
+    subtitlePlaceholder: "Subtitles will appear here.",
+    asrSettings: "Speech Recognition",
+    translationModel: "Translation Model",
+    editingProfile: "Editing",
+    addProfile: "Add Profile",
+    deleteProfile: "Delete Profile",
+    profileName: "Profile Name",
+    apiBaseUrl: "API Base URL",
+    modelName: "Model",
+    vadFilter: "VAD Filter",
+    auto: "Auto",
+    forceOn: "Force On (self-hosted)",
+    off: "Off",
+    apiKey: "API Key",
+    apiFormat: "API Format",
+    openaiFormat: "OpenAI Compatible",
+    anthropicFormat: "Anthropic",
+    targetLanguage: "Target Language",
+    asrWorkers: "ASR Workers",
+    translationWorkers: "Translation Workers",
+    chunkMinutes: "Segment Minutes",
+    subtitleStyle: "Subtitle Style",
+    fontSize: "Font Size (px)",
+    backgroundOpacity: "Background Opacity %",
+    saveSettings: "Save Settings",
+    noTab: "No active tab is available.",
+    oldJobMissing: "The previous task is no longer available. Start a new task.",
+    noTrackedJob: "No task is being tracked.",
+    noTrackedPreloadJob: "No preload task is being tracked.",
+    backendNoJob: "The background service did not return task details. Refresh or start again.",
+    tabChangedReading: "The current tab changed. Reading sources from the new page.",
+    tabChangedCancel: "The current tab changed, so the request was cancelled.",
+    tabChangedIgnore: "The current tab changed. The previous result was ignored.",
+    noCandidates: "No usable media source was found. Play or refresh the page, then try again.",
+    sourcesEmpty: "No usable media source was found.",
+    sourcesRefreshed: "Refreshed {count} media source(s).",
+    sourcesSummary: "{count} source(s), selected #{index}{hidden}.",
+    sourcesHidden: ", {count} more folded",
+    unnamedMedia: "Untitled media",
+    submittingSource: "Submitting the selected media source...",
+    taskSubmitted: "Task submitted.",
+    waitingNewSubtitles: "Waiting for subtitles from the new task.",
+    startFailedNoJob: "The background service did not create a task. Reload the extension and try again.",
+    statusCompletedWarnings: "Completed, with warnings",
+    statusCompleted: "Subtitles ready",
+    statusFailed: "Task failed",
+    statusCancelled: "Stopped",
+    statusRunning: "Processing",
+    jobExtractingTranslating: "Extracting and translating",
+    jobAsrTranslation: "Recognizing and translating",
+    jobRetryFailed: "Retrying failed segments",
+    jobPreloading: "Preloading audio",
+    stageQueued: "Queued",
+    stageExtracting: "Extracting",
+    stageExtractingTranslating: "Extracting + translating",
+    stageAsr: "Speech recognition",
+    stageAsrTranslation: "ASR + translation",
+    stageRetryFailed: "Retrying failed",
+    stageTranslating: "ASR + translation",
+    stageTranslated: "Done",
+    stageCompleted: "Done",
+    stageCancelled: "Stopped",
+    stageFailed: "Failed",
+    stageProcessing: "Processing",
+    chunkQueued: "Queued",
+    chunkAsr: "ASR",
+    chunkAsrDone: "To translate",
+    chunkTranslation: "Translating",
+    chunkCompleted: "Done",
+    chunkPartial: "Partial",
+    chunkFailed: "Failed",
+    chunkStopped: "Stopped",
+    metricExtract: "Extract",
+    metricAsrTranslation: "ASR / Translation",
+    metricCurrentStep: "Current Step",
+    metricChunkMinutes: "Segment Length",
+    metricReady: "Ready Audio",
+    metricDoneChunks: "Segments Done",
+    metricAsrActive: "ASR Active",
+    metricTranslating: "Translating",
+    metricAsrWorkers: "ASR Workers",
+    metricTranslationWorkers: "Translation Workers",
+    metricFailed: "Failed",
+    metricElapsed: "Elapsed",
+    audioExtract: "Audio Extraction",
+    asrTranslation: "ASR / Translation",
+    minutes: "{count} min",
+    taskSubtitle: "Task {id} · {source}",
+    noSpeech: "No speech",
+    sourceSegments: "Source {count}",
+    translatedSegments: "Translated {count}",
+    asrFailures: "{count} ASR segment(s) failed",
+    attemptCount: "Attempt {count}",
+    waitingDuration: "Waited {duration}",
+    waitingFirstChunk: "Waiting for the first audio segment",
+    readyAudio: "{duration} of audio ready",
+    internalChunks: "Internal media segments {done}/{total}",
+    downloadSegments: "Downloaded media segments {done}/{total}",
+    completedPercent: "100%",
+    failedShort: "Failed",
+    jsonError: "The model response could not be parsed. Lower translation concurrency or switch to a more stable translation model.",
+    noSubtitleItems: "The model did not return subtitle items. You can retry this segment.",
+    retryPreloadMessage: "Retrying failed segments...",
+    reuseSourceMessage: "Continuing translation...",
+    reuseAudioMessage: "Continuing ASR...",
+    continueTaskMessage: "Continuing the task...",
+    retranslateOnlyMessage: "Retranslating subtitles without running ASR again...",
+    retryChunkMessage: "Retrying failed segment #{index}...",
+    retranslateChunkMessage: "Retranslating segment #{index}...",
+    retrySubmitted: "Failed segment retry submitted.",
+    retranslateSubmitted: "Subtitle retranslation submitted.",
+    retryChunkSubmitted: "Failed segment #{index} retry submitted.",
+    retranslateChunkSubmitted: "Segment #{index} retranslation submitted.",
+    stoppingTask: "Stopping task...",
+    stoppedTask: "Task stopped.",
+    noAudioCacheTask: "No task has audio cache to clear.",
+    runningNoClearAudio: "The task is still running. Stop it or wait for it to finish.",
+    clearingAudio: "Clearing audio cache for this task...",
+    audioCleared: "Audio cache cleared for this task.",
+    subtitleEmptyFile: "The subtitle file is empty.",
+    noRealTranslationMode: "No translated subtitles are available in this mode.",
+    cueJumpTitle: "Double-click to seek to this subtitle",
+    seekDone: "Jumped to subtitle time.",
+    cacheLoaded: "Loaded local cache: {title}",
+    unnamedSubtitle: "Untitled subtitles",
+    bilingualNeedsSource: "Bilingual mode needs a source track. Regenerate subtitles or import a file with source text.",
+    onlyTranslationTrack: "This subtitle file only has a translation track.",
+    sourcePreview: "Source subtitles are shown first and will update as translations finish.",
+    partialTranslationPreview: "Some translations are ready; remaining lines temporarily show source text.",
+    noPlayer: "No subtitle-capable player was found on this page.",
+    noExportSubtitle: "There are no subtitles to export yet.",
+    noExportRealTranslation: "There are no translated subtitles to export in this mode yet.",
+    srtExported: "SRT exported.",
+    importNoSubtitle: "The imported file does not contain usable subtitles.",
+    importNoContext: "The imported file does not contain page or media information for caching.",
+    importDone: "Imported {format} subtitles and saved them for this page.",
+    importFailed: "Import failed: {error}",
+    fuguangJson: "LLM Raw JSON",
+    subtitleGeneric: "Subtitles",
+    noCacheLocation: "No subtitle cache can be matched to this page.",
+    noSavedSubtitleCache: "This page has no saved subtitle cache.",
+    subtitleCacheCleared: "Subtitle cache cleared for this page.",
+    subtitleCacheClearedCount: "Cleared {count} subtitle cache item(s).",
+    subtitleCacheClearedBackendFailed: "Cleared {count} subtitle cache item(s), but page state sync failed: {error}",
+    subtitleCacheDisplayCleared: "No saved cache was found; the currently displayed cached subtitles were cleared.",
+    subtitleCacheClearFailed: "Failed to clear subtitle cache: {error}",
+    backgroundClearFailed: "The background service did not clear subtitle state.",
+    noSavedCacheAndDisplayCleared: "No saved subtitle cache was found; current display was cleared.",
+    settingsSaved: "Settings saved. New tasks will use this configuration.",
+    profileAdded: "Added a blank profile. Fill in the API URL, model, and key, then save.",
+    profileDeleted: "Deleted the current profile. Save settings to update local storage.",
+    unnamedProfile: "Untitled profile",
+    localOnlyPlaceholder: "Stored in this browser only",
+    xaiModelPlaceholder: "Optional note",
+    xaiHint: "xAI ASR uses /stt; the model field is only a profile note. The API key stays in this browser.",
+    asrKeyHint: "The API key stays in this browser. Auto VAD is enabled only for compatible self-hosted endpoints.",
+    llmKeyHint: "The API key stays in this browser.",
+    startTitle: "Extract audio from the selected source and generate subtitles.",
+    restartTitle: "Extract audio again from the selected source and create a new task.",
+    retryNeedsExtractTitle: "Audio cache was cleared. Start a full extraction again.",
+    continueTranslateTitle: "Continue translating existing source text without running ASR again.",
+    continueAsrTitle: "Continue ASR from extracted audio without downloading media again.",
+    retryFailedTitle: "Retry only failed segments in this task.",
+    retranslateTitle: "Retranslate existing source text only.",
+    clearAudioRunningTitle: "Audio cache cannot be cleared while the task is running.",
+    clearAudioAgainTitle: "Clear this task's browser audio cache again; subtitle cache is unchanged.",
+    clearAudioTitle: "Clear this task's browser audio cache only; subtitle cache is unchanged.",
+    chunkRetryRunningTitle: "This task is still running. Retry this segment after it finishes.",
+    chunkRetryTitle: "Recognize and translate this failed segment again.",
+    chunkRetranslateTitle: "Retranslate this segment only.",
+    roleAudio: "Audio",
+    roleVideo: "Video",
+    rolePlaylist: "Playlist",
+    roleMedia: "Media",
+    sourceRequestHeaders: "Request headers",
+    sourceRequest: "Request",
+    sourceResponse: "Response",
+    sourcePage: "Page",
+    sourceMediaElement: "Player",
+    sourceJsonParse: "Page data",
+    sourceHlsParse: "HLS playlist",
+    sourceDashParse: "DASH playlist",
+    folded: "Folded {count}",
+    waitFirstSegment: "Waiting for first segment",
+    activeProcessing: "{count} active",
+    failedCount: "{count} failed",
+    contextInvalidated: "Extension context expired. Reload the extension and refresh this page.",
+    receivingEndMissing: "The page script is not ready. Refresh this page and try again.",
+    portClosed: "Background response was interrupted. Try again.",
+    unknownError: "Unknown error",
+    backendNoResponse: "Extension background did not respond: {error}"
+  }
+};
 const LEGACY_MODEL_SYNC_KEYS = [
   "asrApiKey",
   "llmApiKey",
@@ -70,6 +560,10 @@ const uniqueProfiles = FuguangSidepanelProfiles.uniqueProfiles;
 const elements = {
   pageTitle: document.querySelector("#pageTitle"),
   status: document.querySelector("#status"),
+  localeSwitch: document.querySelector("#localeSwitch"),
+  localeEnglish: document.querySelector("#localeEnglish"),
+  localeChinese: document.querySelector("#localeChinese"),
+  tabsNav: document.querySelector("#tabsNav"),
   tabTask: document.querySelector("#tabTask"),
   tabSettings: document.querySelector("#tabSettings"),
   taskPanel: document.querySelector("#taskPanel"),
@@ -88,7 +582,6 @@ const elements = {
   subtitleOverlayToggle: document.querySelector("#subtitleOverlayToggle"),
   subtitleModeToggle: document.querySelector("#subtitleModeToggle"),
   exportSubtitle: document.querySelector("#exportSubtitle"),
-  exportDiagnostics: document.querySelector("#exportDiagnostics"),
   importSubtitle: document.querySelector("#importSubtitle"),
   clearSubtitleCache: document.querySelector("#clearSubtitleCache"),
   subtitleImportFile: document.querySelector("#subtitleImportFile"),
@@ -125,6 +618,7 @@ const elements = {
 };
 
 let activeTab = null;
+let currentLocale = resolveInitialLocale();
 let currentJobId = "";
 let currentJob = null;
 let renderedSubtitleJobId = "";
@@ -172,6 +666,8 @@ setSubtitleOutputRuntimeStateProvider(() => ({
 }));
 
 document.addEventListener("DOMContentLoaded", init);
+elements.localeEnglish.addEventListener("click", () => setLocale("en"));
+elements.localeChinese.addEventListener("click", () => setLocale("zh"));
 elements.tabTask.addEventListener("click", () => showTab("task"));
 elements.tabSettings.addEventListener("click", () => showTab("settings"));
 elements.startPreload.addEventListener("click", () => startPreloadFromSidePanel());
@@ -184,7 +680,6 @@ elements.refreshCandidates.addEventListener("click", () => refreshCandidates());
 elements.subtitleOverlayToggle.addEventListener("click", () => toggleSubtitleOverlay());
 elements.subtitleModeToggle.addEventListener("click", () => toggleSubtitleMode());
 elements.exportSubtitle.addEventListener("click", () => exportCurrentSubtitle());
-elements.exportDiagnostics.addEventListener("click", () => exportCurrentDiagnostics());
 elements.importSubtitle.addEventListener("click", () => elements.subtitleImportFile.click());
 elements.clearSubtitleCache.addEventListener("click", () => clearCurrentSubtitleCache());
 elements.subtitleImportFile.addEventListener("change", () => importSubtitleFile());
@@ -229,9 +724,108 @@ elements.llmProviderType.addEventListener("change", () => {
   elements.llmBaseUrl.placeholder = placeholderBaseUrl(elements.llmProviderType.value);
 });
 
+function resolveInitialLocale() {
+  const stored = readStoredLocale();
+  if (stored) {
+    return stored;
+  }
+  return browserPrefersChinese() ? "zh" : "en";
+}
+
+function readStoredLocale() {
+  try {
+    const value = window.localStorage?.getItem(UI_LOCALE_STORAGE_KEY);
+    return LOCALES.has(value) ? value : "";
+  } catch {
+    return "";
+  }
+}
+
+function browserPrefersChinese() {
+  const languages = [];
+  if (Array.isArray(globalThis.navigator?.languages)) {
+    languages.push(...globalThis.navigator.languages);
+  }
+  if (globalThis.navigator?.language) {
+    languages.push(globalThis.navigator.language);
+  }
+  if (!languages.length) {
+    return DEFAULT_LOCALE === "zh";
+  }
+  return languages.some(language => String(language || "").toLowerCase().startsWith("zh"));
+}
+
+function setLocale(locale) {
+  const nextLocale = LOCALES.has(locale) ? locale : DEFAULT_LOCALE;
+  if (currentLocale === nextLocale) {
+    return;
+  }
+  currentLocale = nextLocale;
+  try {
+    window.localStorage?.setItem(UI_LOCALE_STORAGE_KEY, currentLocale);
+  } catch {
+    // Local storage may be unavailable in extension tests or privacy modes.
+  }
+  applyLocale();
+}
+
+function t(key, values = {}) {
+  const dictionary = I18N[currentLocale] || I18N[DEFAULT_LOCALE];
+  const fallback = I18N[DEFAULT_LOCALE] || {};
+  const template = dictionary[key] ?? fallback[key] ?? key;
+  return String(template).replace(/\{(\w+)\}/g, (_match, name) => (
+    values[name] === undefined || values[name] === null ? "" : String(values[name])
+  ));
+}
+
+function applyLocale() {
+  const htmlLang = currentLocale === "zh" ? "zh-CN" : "en";
+  if (document.documentElement) {
+    document.documentElement.lang = htmlLang;
+  }
+  if ("title" in document) {
+    document.title = t("documentTitle");
+  }
+  if (typeof document.querySelectorAll === "function") {
+    document.querySelectorAll("[data-i18n]").forEach(element => {
+      element.textContent = t(element.dataset.i18n);
+    });
+  }
+  elements.localeEnglish.classList.toggle("active", currentLocale === "en");
+  elements.localeChinese.classList.toggle("active", currentLocale === "zh");
+  elements.localeEnglish.setAttribute("aria-pressed", String(currentLocale === "en"));
+  elements.localeChinese.setAttribute("aria-pressed", String(currentLocale === "zh"));
+  elements.localeSwitch.setAttribute("aria-label", t("languageLabel"));
+  elements.tabsNav.setAttribute("aria-label", t("tabsLabel"));
+  elements.localeEnglish.title = "English";
+  elements.localeChinese.title = "中文";
+  if (candidates.length || renderedCandidateSignature) {
+    renderedCandidateSignature = "";
+    renderCandidates(candidates);
+  } else {
+    elements.candidateSummary.textContent = t("readingSources");
+  }
+  renderSubtitleModeButton();
+  renderSubtitleOverlayButton();
+  updateActionButtons(currentJob);
+  updateTaskPanelFocus(currentJob);
+  renderSubtitleNotice();
+  if (subtitleCues.length) {
+    renderSubtitleCueList();
+  }
+  if (asrProfiles.length && elements.asrProfileId.value) {
+    renderSelectedProfile("asr");
+  }
+  if (llmProfiles.length && elements.llmProfileId.value) {
+    renderSelectedProfile("llm");
+  }
+}
+
 async function init() {
+  applyLocale();
   [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
   await loadSettings();
+  applyLocale();
   await activateCurrentPage();
   await refreshStatus();
   pollTimer = window.setInterval(refreshStatus, 1500);
@@ -255,8 +849,8 @@ async function refreshActiveTab() {
       renderedCandidateSignature = "";
       lastActivatedTabKey = "";
       clearedSubtitleJobIds.clear();
-      clearSubtitles("字幕生成后会显示在这里。");
-      renderEmptyJob("当前标签页已变化，正在读取新的媒体源。");
+      clearSubtitles(t("subtitlePlaceholder"));
+      renderEmptyJob(t("tabChangedReading"));
     }
   }
   return activeTab;
@@ -399,11 +993,11 @@ function renderSelectedProfile(kind) {
     elements.asrApiKey.disabled = false;
     elements.asrModel.disabled = usesXaiAsr;
     elements.asrBaseUrl.placeholder = placeholderBaseUrl(profile.providerType);
-    elements.asrModel.placeholder = usesXaiAsr ? "xAI 不发送 model；这里只作可选备注" : "";
-    elements.asrApiKey.placeholder = "只保存在本机浏览器";
+    elements.asrModel.placeholder = usesXaiAsr ? t("xaiModelPlaceholder") : "";
+    elements.asrApiKey.placeholder = t("localOnlyPlaceholder");
     elements.asrApiKeyHint.textContent = usesXaiAsr
-        ? "xAI ASR 调用 /stt；模型名称仅用于配置标识，请求里不会发送 model 字段。API 密钥只保存在本机浏览器。"
-        : "API 密钥只保存在本机浏览器。自动 VAD 对自建兼容接口只读取 openapi.json 判断 vad_filter 支持；不会探测 OpenAI、Groq 或 xAI。";
+        ? t("xaiHint")
+        : t("asrKeyHint");
     return;
   }
   elements.llmProviderType.value = ["openai", "anthropic"].includes(profile.providerType) ? profile.providerType : "openai";
@@ -412,14 +1006,14 @@ function renderSelectedProfile(kind) {
   elements.llmModel.value = profile.model || "";
   elements.llmApiKey.value = profile.apiKey || "";
   elements.llmBaseUrl.placeholder = placeholderBaseUrl(elements.llmProviderType.value);
-  elements.llmApiKey.placeholder = "只保存在本机浏览器";
-  elements.llmApiKeyHint.textContent = "API 密钥只保存在本机浏览器的扩展本地存储中。";
+  elements.llmApiKey.placeholder = t("localOnlyPlaceholder");
+  elements.llmApiKeyHint.textContent = t("llmKeyHint");
 }
 
 function saveProfileFields(kind, profileId) {
   if (kind === "asr") {
     const profile = profileById(asrProfiles, profileId || elements.asrProfileId.value);
-    profile.name = elements.asrProfileName.value.trim() || profile.name || profile.model || "未命名档案";
+    profile.name = elements.asrProfileName.value.trim() || profile.name || profile.model || t("unnamedProfile");
     profile.baseUrl = elements.asrBaseUrl.value.trim();
     profile.model = elements.asrModel.value.trim();
     profile.vadFilter = normalizeAsrVadFilterMode(elements.asrVadFilter.value);
@@ -427,7 +1021,7 @@ function saveProfileFields(kind, profileId) {
     return;
   }
   const profile = profileById(llmProfiles, profileId || elements.llmProfileId.value);
-  profile.name = elements.llmProfileName.value.trim() || profile.name || profile.model || "未命名档案";
+  profile.name = elements.llmProfileName.value.trim() || profile.name || profile.model || t("unnamedProfile");
   profile.providerType = elements.llmProviderType.value.trim() || "openai";
   profile.baseUrl = elements.llmBaseUrl.value.trim();
   profile.model = elements.llmModel.value.trim();
@@ -447,7 +1041,7 @@ function addProfile(kind) {
     currentLlmProfileId = profile.id;
   }
   renderSelectedProfile(kind);
-  setMessage("已新增空白档案。请填写接口格式、接口地址、模型名称和 API 密钥后保存。");
+  setMessage(t("profileAdded"));
 }
 
 function deleteProfile(kind) {
@@ -468,7 +1062,7 @@ function deleteProfile(kind) {
     currentLlmProfileId = select.value;
   }
   renderSelectedProfile(kind);
-  setMessage("已删除当前档案。本机存储会在保存设置后更新。");
+  setMessage(t("profileDeleted"));
 }
 
 async function saveSettings() {
@@ -498,7 +1092,7 @@ async function saveSettings() {
     chunkMinutes: Math.round(clampSetting(elements.chunkMinutes.value, 1, 60, DEFAULTS.chunkMinutes))
   });
   await chrome.storage.local.remove(["asrApiKey", "llmApiKey", "asrBaseUrl", "asrModel", "llmBaseUrl", "llmModel", "llmProviderType"]).catch(() => {});
-  setMessage("设置已保存。新的预加载任务会使用当前 ASR 和翻译配置档。");
+  setMessage(t("settingsSaved"));
 }
 
 async function saveSourceLanguageSetting() {
@@ -515,7 +1109,7 @@ async function refreshStatus() {
   try {
   await refreshActiveTab();
   if (!activeTab?.id) {
-    renderEmptyJob("没有可用的当前标签页。");
+    renderEmptyJob(t("noTab"));
     return;
   }
   if (activeTabKey(activeTab) !== lastActivatedTabKey) {
@@ -526,7 +1120,7 @@ async function refreshStatus() {
     renderEmptyJob(response.error);
     return;
   }
-  elements.pageTitle.textContent = response.page?.title || response.page?.url || "当前标签页";
+  elements.pageTitle.textContent = response.page?.title || response.page?.url || t("currentTab");
   elements.status.textContent = statusLabel(response);
   candidates = response.candidates || [];
   ensureSelection();
@@ -539,8 +1133,8 @@ async function refreshStatus() {
     if (jobResponse.ok) {
       if (jobResponse.missing || !jobResponse.job) {
         currentJobId = "";
-        clearSubtitles("字幕生成后会显示在这里。");
-        renderEmptyJob("旧预加载任务已失效。请重新提交任务。");
+        clearSubtitles(t("subtitlePlaceholder"));
+        renderEmptyJob(t("oldJobMissing"));
         await tryLoadCachedSubtitleForCurrentPage();
         return;
       }
@@ -560,13 +1154,13 @@ async function refreshStatus() {
       }
       return;
     }
-    setMessage(jobResponse.error || "无法读取任务状态。");
+    setMessage(jobResponse.error || t("backendNoResponse", { error: "" }));
     currentJobId = "";
-    renderEmptyJob(`无法读取旧任务状态：${jobResponse.error || "扩展后台没有响应"}。可以重新提交当前媒体源。`);
+    renderEmptyJob(jobResponse.error || t("backendNoResponse", { error: t("unknownError") }));
     await tryLoadCachedSubtitleForCurrentPage();
     return;
   }
-  renderEmptyJob("还没有正在跟踪的预加载任务。");
+  renderEmptyJob(t("noTrackedPreloadJob"));
   await tryLoadCachedSubtitleForCurrentPage();
   } finally {
     refreshStatusInFlight = false;
@@ -589,17 +1183,17 @@ async function startPreloadFromSidePanel() {
   const requestTabUrl = activeTab?.url || "";
   const selected = getSelectedCandidate();
   if (!selected) {
-    setMessage("还没有发现可抽取的媒体源。请确认页面里有视频，或播放/刷新页面后再试。");
+    setMessage(t("noCandidates"));
     return;
   }
   await saveSourceLanguageSetting();
   startRequestInFlight = true;
   updateActionButtons(currentJob);
-  setMessage("正在提交当前页面的媒体源...");
+  setMessage(t("submittingSource"));
   try {
     await refreshActiveTab();
     if (activeTab?.id !== requestTabId || (activeTab?.url || "") !== requestTabUrl) {
-      setMessage("当前标签页已经变化，已取消提交。请确认媒体源后再开始。");
+      setMessage(t("tabChangedCancel"));
       return;
     }
     const response = await send({
@@ -612,19 +1206,19 @@ async function startPreloadFromSidePanel() {
       return;
     }
     if (!response.job?.id) {
-      setMessage(response.message || "后台没有创建预加载任务，请重新加载扩展后重试。");
+      setMessage(response.message || t("startFailedNoJob"));
       await refreshStatus();
       return;
     }
     await refreshActiveTab();
     if (activeTab?.id !== requestTabId || (activeTab?.url || "") !== requestTabUrl) {
-      setMessage("当前标签页已经变化，已忽略刚才返回的旧任务。");
+      setMessage(t("tabChangedIgnore"));
       return;
     }
     currentJobId = response.job.id;
     clearedSubtitleJobIds.clear();
-    clearSubtitles("正在等待新任务的字幕。", currentJobId);
-    setMessage("任务已提交。");
+    clearSubtitles(t("waitingNewSubtitles"), currentJobId);
+    setMessage(t("taskSubmitted"));
     renderJob(response.job);
   } finally {
     startRequestInFlight = false;
@@ -635,7 +1229,7 @@ async function startPreloadFromSidePanel() {
 async function refreshCandidates(options = {}) {
   await refreshActiveTab();
   if (!activeTab?.id) {
-    setMessage("没有可用的当前标签页。");
+    setMessage(t("noTab"));
     return false;
   }
   if (!options.skipActivate) {
@@ -650,7 +1244,7 @@ async function refreshCandidates(options = {}) {
   ensureSelection();
   renderCandidates(candidates);
   if (!options.silent) {
-    setMessage(candidates.length ? `已刷新 ${candidates.length} 个媒体源。` : "还没有发现可抽取的媒体源。");
+    setMessage(candidates.length ? t("sourcesRefreshed", { count: candidates.length }) : t("sourcesEmpty"));
   }
   return true;
 }
@@ -671,14 +1265,14 @@ async function retryPreloadFromSidePanel() {
       return;
     }
     if (!(await sidepanelRequestStillCurrent(requestContext))) {
-      setMessage("当前标签页已经变化，已忽略刚才返回的旧任务。");
+      setMessage(t("tabChangedIgnore"));
       return;
     }
     currentJobId = response.job?.id || "";
     if (currentJobId) {
       clearedSubtitleJobIds.delete(currentJobId);
     }
-    setMessage(response.message || "已提交失败识别分段重试。");
+    setMessage(response.message || t("retrySubmitted"));
     renderJob(response.job);
   } finally {
     retryRequestInFlight = false;
@@ -690,15 +1284,15 @@ function retryPreloadMessage(job) {
   const failed = Number(job?.translation?.chunksFailed || job?.progress?.chunksFailed || 0);
   const asrPartialFailed = Number(job?.translation?.chunksAsrPartialFailed || job?.progress?.translation?.chunksAsrPartialFailed || 0);
   if (failed + asrPartialFailed > 0) {
-    return "正在重试失败识别分段...";
+    return t("retryPreloadMessage");
   }
   if (countReusableSourceChunks(job) > 0) {
-    return "正在复用 ASR 原文继续翻译...";
+    return t("reuseSourceMessage");
   }
   if (countReusableAudioChunks(job) > 0) {
-    return "正在复用音频缓存继续 ASR...";
+    return t("reuseAudioMessage");
   }
-  return "正在继续处理任务...";
+  return t("continueTaskMessage");
 }
 
 async function retryTranslationFromSidePanel(chunkIndexes = []) {
@@ -709,7 +1303,7 @@ async function retryTranslationFromSidePanel(chunkIndexes = []) {
   const requestContext = captureSidepanelRequestContext();
   translationRetryRequestInFlight = true;
   updateActionButtons(currentJob);
-  setMessage("正在只重翻译字幕，不会重新语音识别...");
+  setMessage(t("retranslateOnlyMessage"));
   try {
     const response = await send({
       type: MESSAGE.RETRANSLATE_PRELOAD,
@@ -721,14 +1315,14 @@ async function retryTranslationFromSidePanel(chunkIndexes = []) {
       return;
     }
     if (!(await sidepanelRequestStillCurrent(requestContext))) {
-      setMessage("当前标签页已经变化，已忽略刚才返回的旧任务。");
+      setMessage(t("tabChangedIgnore"));
       return;
     }
     currentJobId = response.job?.id || currentJobId;
     if (currentJobId) {
       clearedSubtitleJobIds.delete(currentJobId);
     }
-    setMessage(response.message || "已提交字幕重翻译。");
+    setMessage(response.message || t("retranslateSubmitted"));
     renderJob(response.job);
   } finally {
     translationRetryRequestInFlight = false;
@@ -739,7 +1333,7 @@ async function retryTranslationFromSidePanel(chunkIndexes = []) {
 async function retryChunkFromSidePanel(index, options = {}) {
   await refreshActiveTab();
   if (!currentJobId || !Number.isFinite(index)) {
-    setMessage("没有可重试的识别分段。");
+    setMessage(t("noTrackedJob"));
     return;
   }
   const requestContext = captureSidepanelRequestContext();
@@ -748,7 +1342,7 @@ async function retryChunkFromSidePanel(index, options = {}) {
   }
   retryingChunks.add(index);
   updateActionButtons(currentJob);
-  setMessage(options.translationOnly ? `正在重翻译第 ${index + 1} 个翻译分段...` : `正在重试第 ${index + 1} 个失败识别分段...`);
+  setMessage(options.translationOnly ? t("retranslateChunkMessage", { index: index + 1 }) : t("retryChunkMessage", { index: index + 1 }));
   try {
     const response = await send({
       type: options.translationOnly ? MESSAGE.RETRANSLATE_PRELOAD : MESSAGE.RETRY_PRELOAD_CHUNKS,
@@ -760,13 +1354,13 @@ async function retryChunkFromSidePanel(index, options = {}) {
       return;
     }
     if (!(await sidepanelRequestStillCurrent(requestContext))) {
-      setMessage("当前标签页已经变化，已忽略刚才返回的旧任务。");
+      setMessage(t("tabChangedIgnore"));
       return;
     }
     if (currentJobId) {
       clearedSubtitleJobIds.delete(currentJobId);
     }
-    setMessage(response.message || (options.translationOnly ? `已提交第 ${index + 1} 个翻译分段重翻译。` : `已提交第 ${index + 1} 个失败识别分段重试。`));
+    setMessage(response.message || (options.translationOnly ? t("retranslateChunkSubmitted", { index: index + 1 }) : t("retryChunkSubmitted", { index: index + 1 })));
     renderJob(response.job);
   } finally {
     retryingChunks.delete(index);
@@ -799,31 +1393,31 @@ function sidepanelRequestContextStillCurrent(requestContext) {
 async function cancelPreloadFromSidePanel() {
   await refreshActiveTab();
   if (!currentJobId) {
-    setMessage("没有正在跟踪的任务。");
+    setMessage(t("noTrackedJob"));
     return;
   }
-  setMessage("正在停止任务...");
+  setMessage(t("stoppingTask"));
   const response = await send({ type: MESSAGE.CANCEL_PRELOAD, tabId: activeTab?.id, jobId: currentJobId });
   if (!response.ok) {
     setMessage(response.error);
     return;
   }
-  setMessage("任务已停止。");
+  setMessage(t("stoppedTask"));
   renderJob(response.job);
 }
 
 async function clearCurrentAudioCache() {
   await refreshActiveTab();
   if (!currentJobId) {
-    setMessage("没有可清理音频缓存的预加载任务。");
+    setMessage(t("noAudioCacheTask"));
     return;
   }
   const running = isRunningJob(currentJob);
   if (running) {
-    setMessage("任务仍在运行中，不能清除它的音频缓存。请先停止或等待结束。");
+    setMessage(t("runningNoClearAudio"));
     return;
   }
-  setMessage("正在清除当前任务的音频缓存...");
+  setMessage(t("clearingAudio"));
   const response = await send({
     type: MESSAGE.CLEAR_PRELOAD_AUDIO_CACHE,
     tabId: activeTab?.id,
@@ -833,13 +1427,13 @@ async function clearCurrentAudioCache() {
     setMessage(response.error);
     return;
   }
-  setMessage(response.message || "当前任务音频缓存已清除。");
+  setMessage(response.message || t("audioCleared"));
   renderJob(response.job);
 }
 
 function renderJob(job) {
   if (!job) {
-    renderEmptyJob("后台没有返回任务详情。请刷新或重新提交任务。");
+    renderEmptyJob(t("backendNoJob"));
     return;
   }
   currentJob = job || null;
@@ -855,7 +1449,7 @@ function renderJob(job) {
     currentJobId = job.id;
   }
   if (job?.id && renderedSubtitleJobId && renderedSubtitleJobId !== job.id) {
-    clearSubtitles("正在等待新任务的字幕。", job.id);
+    clearSubtitles(t("waitingNewSubtitles"), job.id);
   }
   const progress = job.progress || {};
   const extraction = progress.extraction || job.extract || progress;
@@ -873,7 +1467,7 @@ function renderJob(job) {
   title.textContent = jobTitle(job);
   const subtitle = document.createElement("div");
   subtitle.className = "job-subtitle";
-  subtitle.textContent = `任务 ${job.id} · ${shorten(job.sourceUrl || job.source || "", 88)}`;
+  subtitle.textContent = t("taskSubtitle", { id: job.id, source: shorten(job.sourceUrl || job.source || "", 88) });
   titleWrap.append(title, subtitle);
   const stage = document.createElement("span");
   const stageKey = job.stage || progress.stage || job.status;
@@ -884,24 +1478,24 @@ function renderJob(job) {
   const metrics = document.createElement("div");
   metrics.className = "metrics";
   metrics.append(
-    metric("抽取", extractionProgressText(extraction, job.status)),
-    metric("识别 / 翻译", translationProgressText(translation)),
-    metric("当前步骤", extractionActivityText(extraction)),
-    metric("翻译分段时长", extraction.chunkSeconds ? `${Math.round(Number(extraction.chunkSeconds) / 60)} 分钟` : "-"),
-    metric("已可用", extraction.readySeconds ? formatDuration(extraction.readySeconds) : "-"),
-    metric("翻译分段完成", `${translation.chunksDone || 0}/${translation.chunksTotal || "?"}`),
-    metric("识别中", translation.chunksAsr || 0),
-    metric("翻译中", translation.chunksTranslating || 0),
-    metric("ASR 并发", translation.asrWorkers || "-"),
-    metric("翻译并发", translation.translationWorkers || "-"),
-    metric("失败", translation.chunksFailed || 0),
-    metric("耗时", formatElapsedSeconds(progress.elapsedSeconds || translation.elapsedSeconds || 0), "elapsed")
+    metric(t("metricExtract"), extractionProgressText(extraction, job.status)),
+    metric(t("metricAsrTranslation"), translationProgressText(translation)),
+    metric(t("metricCurrentStep"), extractionActivityText(extraction)),
+    metric(t("metricChunkMinutes"), extraction.chunkSeconds ? t("minutes", { count: Math.round(Number(extraction.chunkSeconds) / 60) }) : "-"),
+    metric(t("metricReady"), extraction.readySeconds ? formatDuration(extraction.readySeconds) : "-"),
+    metric(t("metricDoneChunks"), `${translation.chunksDone || 0}/${translation.chunksTotal || "?"}`),
+    metric(t("metricAsrActive"), translation.chunksAsr || 0),
+    metric(t("metricTranslating"), translation.chunksTranslating || 0),
+    metric(t("metricAsrWorkers"), translation.asrWorkers || "-"),
+    metric(t("metricTranslationWorkers"), translation.translationWorkers || "-"),
+    metric(t("metricFailed"), translation.chunksFailed || 0),
+    metric(t("metricElapsed"), formatElapsedSeconds(progress.elapsedSeconds || translation.elapsedSeconds || 0), "elapsed")
   );
 
   const children = [
     header,
-    progressBar("音频抽取", normalizedPercent(progress.extractPercent ?? extraction.percent, job.status), extractionProgressText(extraction, job.status)),
-    progressBar("识别 / 翻译", normalizedPercent(progress.translationPercent ?? translation.percent, job.status), translationProgressText(translation)),
+    progressBar(t("audioExtract"), normalizedPercent(progress.extractPercent ?? extraction.percent, job.status), extractionProgressText(extraction, job.status)),
+    progressBar(t("asrTranslation"), normalizedPercent(progress.translationPercent ?? translation.percent, job.status), translationProgressText(translation)),
     metrics,
     chunkList(translation.chunkStatuses || progress.chunkStatuses || [])
   ];
@@ -939,8 +1533,12 @@ function renderCandidates(items) {
   const visibleItems = items.slice(0, 5);
   const hiddenCount = Math.max(items.length - visibleItems.length, 0);
   elements.candidateSummary.textContent = items.length
-    ? `${items.length} 个来源，已选择第 ${selectedIndex() + 1} 个${hiddenCount ? `，另外 ${hiddenCount} 个已折叠在列表外` : ""}。`
-    : "还没有发现可抽取的媒体源。";
+    ? t("sourcesSummary", {
+      count: items.length,
+      index: selectedIndex() + 1,
+      hidden: hiddenCount ? t("sourcesHidden", { count: hiddenCount }) : ""
+    })
+    : t("sourcesEmpty");
   if (!items.length) {
     updateActionButtons(currentJob);
     return;
@@ -957,7 +1555,7 @@ function renderCandidates(items) {
 
     const title = document.createElement("span");
     title.className = "candidate-title";
-    title.textContent = item.title || item.filename || item.origin || "未命名媒体";
+    title.textContent = item.title || item.filename || item.origin || t("unnamedMedia");
     const meta = document.createElement("span");
     meta.className = "candidate-meta";
     meta.textContent = candidateMetaText(item);
@@ -1045,7 +1643,7 @@ function candidateMetaText(item) {
     parts.push(item.quality.label);
   }
   if (item.hiddenCount) {
-    parts.push(`折叠 ${item.hiddenCount}`);
+    parts.push(t("folded", { count: item.hiddenCount }));
   }
   if (item.source) {
     parts.push(formatSource(item.source));
@@ -1132,17 +1730,17 @@ async function loadSubtitleCues(jobId) {
 
 function renderSubtitleCueList() {
   elements.subtitleList.replaceChildren();
-  const visibleCues = subtitleCues
-    .map((cue, index) => ({ cue, index }))
-    .filter(item => shouldIncludeCueInSubtitleOutput(item.cue, subtitleDisplayMode, subtitleCues));
+  const visibleCues = visibleSubtitleCueItems();
   if (!subtitleCues.length) {
-    elements.subtitleList.textContent = renderedSubtitleJobId ? "字幕文件为空。" : "字幕生成后会显示在这里。";
+    elements.subtitleList.textContent = renderedSubtitleJobId ? t("subtitleEmptyFile") : t("subtitlePlaceholder");
     renderSubtitleNotice();
+    updateTaskPanelFocus(currentJob);
     return;
   }
   if (!visibleCues.length) {
-    elements.subtitleList.textContent = "当前模式下没有可显示的真实译文。";
+    elements.subtitleList.textContent = t("noRealTranslationMode");
     renderSubtitleNotice();
+    updateTaskPanelFocus(currentJob);
     return;
   }
   for (const { cue, index } of visibleCues) {
@@ -1164,13 +1762,22 @@ function renderSubtitleCueList() {
     text.className = "subtitle-text";
     text.textContent = cue.text;
     textWrap.appendChild(text);
-    item.title = "双击跳转到这句字幕";
+    item.title = t("cueJumpTitle");
     item.addEventListener("dblclick", () => seekToCue(cue.start, index));
     item.append(time, textWrap);
     elements.subtitleList.appendChild(item);
   }
+  if (activeCueIndex >= 0) {
+    setActiveCueIndex(activeCueIndex);
+  } else {
+    const firstVisible = visibleCues[0]?.index ?? -1;
+    if (firstVisible >= 0) {
+      setActiveCueIndex(firstVisible);
+    }
+  }
   renderSubtitleModeButton();
   renderSubtitleNotice();
+  updateTaskPanelFocus(currentJob);
 }
 
 function clearSubtitles(text, jobId = "") {
@@ -1190,7 +1797,8 @@ function clearSubtitles(text, jobId = "") {
   stopSubtitleFollow();
   renderSubtitleNotice("");
   elements.subtitleList.replaceChildren();
-  elements.subtitleList.textContent = text || "字幕生成后会显示在这里。";
+  elements.subtitleList.textContent = text || t("subtitlePlaceholder");
+  updateTaskPanelFocus(currentJob);
 }
 
 async function seekToCue(start, preferredIndex = null) {
@@ -1201,11 +1809,11 @@ async function seekToCue(start, preferredIndex = null) {
   const response = await send({ type: MESSAGE.SEEK_MEDIA, tabId: activeTab.id, time });
   if (response.ok) {
     releaseSubtitleListAutoFollow();
-    const index = Number.isInteger(preferredIndex) && preferredIndex >= 0 ? preferredIndex : findCueIndexAt(time);
+    const index = Number.isInteger(preferredIndex) && preferredIndex >= 0 ? preferredIndex : findCueIndexForProgress(time);
     activeCueIndex = -1;
     setActiveCueIndex(index, { forceScroll: true });
   }
-  setMessage(response.ok ? "已跳转到字幕时间点。" : response.error);
+  setMessage(response.ok ? t("seekDone") : response.error);
 }
 
 function startSubtitleFollow() {
@@ -1237,11 +1845,17 @@ async function syncSubtitleHighlight() {
       && response.state?.synthetic !== true
       && Number.isFinite(time)
     ) {
-      setActiveCueIndex(findCueIndexAt(time));
+      setActiveCueIndex(findCueIndexForProgress(time));
     }
   } finally {
     subtitleFollowBusy = false;
   }
+}
+
+function visibleSubtitleCueItems() {
+  return subtitleCues
+    .map((cue, index) => ({ cue, index }))
+    .filter(item => shouldIncludeCueInSubtitleOutput(item.cue, subtitleDisplayMode, subtitleCues));
 }
 
 function findCueIndexAt(time) {
@@ -1270,6 +1884,37 @@ function findCueIndexAt(time) {
     }
   });
   return bestIndex;
+}
+
+function findCueIndexForProgress(time) {
+  const current = Number(time);
+  if (!Number.isFinite(current)) {
+    return -1;
+  }
+  const visibleCues = visibleSubtitleCueItems();
+  if (!visibleCues.length) {
+    return -1;
+  }
+  const exactIndex = findCueIndexAt(current);
+  if (visibleCues.some(item => item.index === exactIndex)) {
+    return exactIndex;
+  }
+  let previousIndex = visibleCues[0].index;
+  for (const { cue, index } of visibleCues) {
+    const start = Number(cue.start);
+    const end = Number(cue.end);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+      continue;
+    }
+    if (current < start) {
+      return previousIndex;
+    }
+    previousIndex = index;
+    if (current < end || index === visibleCues[visibleCues.length - 1].index) {
+      return index;
+    }
+  }
+  return previousIndex;
 }
 
 function markSubtitleListUserControl() {
@@ -1348,12 +1993,12 @@ async function setSubtitleOverlayEnabled(enabled) {
 
 function renderSubtitleModeButton() {
   const bilingual = subtitleDisplayMode === "bilingual";
-  elements.subtitleModeToggle.textContent = bilingual ? "双语开" : "双语";
+  elements.subtitleModeToggle.textContent = bilingual ? t("bilingualOn") : t("bilingual");
   elements.subtitleModeToggle.setAttribute("aria-pressed", String(bilingual));
 }
 
 function renderSubtitleOverlayButton() {
-  elements.subtitleOverlayToggle.textContent = subtitleOverlayEnabled ? "浮层开" : "浮层关";
+  elements.subtitleOverlayToggle.textContent = subtitleOverlayEnabled ? t("overlayOn") : t("overlayOff");
   elements.subtitleOverlayToggle.setAttribute("aria-pressed", String(subtitleOverlayEnabled));
 }
 
@@ -1368,7 +2013,7 @@ function subtitleNoticeText() {
     return "";
   }
   if (currentSubtitleCacheEntry) {
-    return `已加载本地缓存：${currentSubtitleCacheEntry.title || "未命名字幕"}`;
+    return t("cacheLoaded", { title: currentSubtitleCacheEntry.title || t("unnamedSubtitle") });
   }
   const sourcePreviewText = subtitleSourcePreviewNoticeText();
   if (sourcePreviewText) {
@@ -1376,10 +2021,10 @@ function subtitleNoticeText() {
   }
   if (subtitleDisplayMode === "bilingual") {
     if (subtitleCueSource !== "transcript") {
-      return "双语需要读取字幕原文；当前只拿到 VTT 译文。请重新生成字幕或导入带原文的字幕文件。";
+      return t("bilingualNeedsSource");
     }
     if (!subtitleCues.some(cue => cue.sourceText)) {
-      return "这份字幕没有原文轨，只能显示译文。";
+      return t("onlyTranslationTrack");
     }
   }
   return "";
@@ -1395,10 +2040,10 @@ function subtitleSourcePreviewNoticeText() {
     return "";
   }
   if (!translatedCount) {
-    return "字幕列表、浮层和导出会先用 ASR 原文补位；译文完成后会自动替换，若模型最终拒绝翻译也不会留下空白。";
+    return t("sourcePreview");
   }
   if (translatedCount < sourceCount) {
-    return "部分译文已完成；缺译句已用 ASR 原文补位，字幕列表、浮层和导出保持完整，重翻译成功后会自动替换。";
+    return t("partialTranslationPreview");
   }
   return "";
 }
@@ -1409,15 +2054,22 @@ function toggleTaskDetails() {
 }
 
 function updateTaskPanelFocus(job) {
-  const ready = isCompleteJobWithSubtitles(job);
+  const ready = hasDisplayableSubtitles() || isCompleteJobWithSubtitles(job);
   const focusSubtitles = ready && !taskDetailsExpanded;
   elements.taskPanel.classList.toggle("subtitles-focus", focusSubtitles);
   elements.toggleTaskDetails.hidden = !ready;
-  elements.toggleTaskDetails.textContent = focusSubtitles ? "任务详情" : "收起任务";
+  elements.toggleTaskDetails.textContent = focusSubtitles ? t("taskDetails") : t("collapseTask");
+}
+
+function hasDisplayableSubtitles() {
+  return subtitleCues.some(cue => shouldIncludeCueInSubtitleOutput(cue, subtitleDisplayMode, subtitleCues));
 }
 
 function isCompleteJobWithSubtitles(job) {
   if (!job) {
+    return false;
+  }
+  if (job.subtitleCleared) {
     return false;
   }
   const translation = job.translation || job.progress?.translation || {};
@@ -1528,13 +2180,13 @@ function chunkList(statuses) {
       const retry = document.createElement("button");
       retry.className = "chunk-retry";
       retry.type = "button";
-      retry.textContent = sourceAvailable ? "重翻译" : "重试";
+      retry.textContent = sourceAvailable ? t("retranslateShort") : t("retry");
       retry.disabled = running || (!sourceAvailable && audioCacheRemoved) || retryingChunks.has(Number(status.index));
       retry.title = audioCacheRemoved
-        ? (sourceAvailable ? "后台仍保留当前任务的 ASR 原文时，只重跑这个翻译分段；如果浏览器回收了后台任务状态，需要重新抽取。" : "当前任务的音频缓存已清除，需要重新抽取全部。")
+        ? (sourceAvailable ? t("chunkRetranslateTitle") : t("retryNeedsExtractTitle"))
         : running
-          ? "当前任务仍在运行，结束后可单独重试这个失败识别分段。"
-          : (sourceAvailable ? "后台仍保留当前任务的 ASR 原文时，只重跑这个翻译分段；如果浏览器回收了后台任务状态，需要重新抽取。" : "重新识别并翻译这个失败识别分段。");
+          ? t("chunkRetryRunningTitle")
+          : (sourceAvailable ? t("chunkRetranslateTitle") : t("chunkRetryTitle"));
       retry.addEventListener("click", event => {
         event.preventDefault();
         event.stopPropagation();
@@ -1576,7 +2228,7 @@ async function attachCurrentSubtitlesToPage() {
   const signature = subtitleAttachSignature(requestContext.tabId, vtt);
   const response = await send({ type: MESSAGE.ATTACH_VTT_TEXT, tabId: requestContext.tabId, vtt });
   if (!response.ok) {
-    renderSubtitleNotice(response.error || "当前页面没有可挂载字幕的播放器。");
+    renderSubtitleNotice(response.error || t("noPlayer"));
     return;
   }
   if (!sidepanelRequestContextStillCurrent(requestContext)) {
@@ -1677,43 +2329,17 @@ async function cacheCurrentSubtitles() {
 
 async function exportCurrentSubtitle() {
   if (!subtitleCues.length) {
-    setMessage("还没有可导出的字幕。");
+    setMessage(t("noExportSubtitle"));
     return;
   }
   const srt = cuesToSrt(subtitleCues, subtitleDisplayMode, { allowRunningSourcePreview: false });
   if (!/\d+\n\d{2}:\d{2}:\d{2},\d{3}\s+-->\s+\d{2}:\d{2}:\d{2},\d{3}/.test(srt)) {
-    setMessage("当前模式下还没有可导出的真实译文。");
+    setMessage(t("noExportRealTranslation"));
     return;
   }
   const blob = new Blob([srt], { type: "application/x-subrip;charset=utf-8" });
-  await downloadBlob(blob, `${safeFilename(elements.pageTitle.textContent || "fuguang-subtitle")}.srt`);
-  setMessage("SRT 字幕已导出。");
-}
-
-async function exportCurrentDiagnostics() {
-  const jobId = currentJobId || renderedSubtitleJobId;
-  if (!jobId) {
-    setMessage("还没有可导出的诊断任务。");
-    return;
-  }
-  const response = await send({ type: MESSAGE.GET_PRELOAD_DIAGNOSTICS, jobId });
-  if (!response.ok || !response.diagnostics) {
-    setMessage(response.error || "ASR 诊断导出失败。");
-    return;
-  }
-  const baseName = `${safeFilename(elements.pageTitle.textContent || "fuguang-subtitle")}-asr-diagnostics`;
-  const audioFiles = normalizeDiagnosticAudioFiles(response.audioFiles);
-  if (audioFiles.length) {
-    const archive = buildDiagnosticsTarArchive(response.diagnostics, audioFiles);
-    const blob = new Blob([archive], { type: "application/x-tar" });
-    await downloadBlob(blob, `${baseName}.tar`);
-    setMessage(`ASR 诊断已导出（含 ${audioFiles.length} 个音频分段）。`);
-    return;
-  }
-  const json = JSON.stringify(response.diagnostics, null, 2);
-  const blob = new Blob([json], { type: "application/json;charset=utf-8" });
-  await downloadBlob(blob, `${baseName}.json`);
-  setMessage("ASR 诊断已导出。");
+  await downloadBlob(blob, `${safeFilename(elements.pageTitle.textContent || "llm-raw-subtitle")}.srt`);
+  setMessage(t("srtExported"));
 }
 
 function downloadBlob(blob, filename) {
@@ -1723,128 +2349,6 @@ function downloadBlob(blob, filename) {
   anchor.download = filename;
   anchor.click();
   URL.revokeObjectURL(url);
-}
-
-function normalizeDiagnosticAudioFiles(files) {
-  if (!Array.isArray(files)) {
-    return [];
-  }
-  return files
-    .map((file, index) => {
-      const bytes = diagnosticFileBytes(file?.buffer) || diagnosticBase64FileBytes(file?.base64);
-      if (!bytes?.byteLength) {
-        return null;
-      }
-      return {
-        path: safeTarPath(file.path || `audio/chunk-${String(index).padStart(4, "0")}.mp3`),
-        bytes
-      };
-    })
-    .filter(Boolean);
-}
-
-function diagnosticFileBytes(buffer) {
-  if (buffer instanceof ArrayBuffer) {
-    return new Uint8Array(buffer);
-  }
-  if (ArrayBuffer.isView(buffer)) {
-    return new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
-  }
-  return null;
-}
-
-function diagnosticBase64FileBytes(value) {
-  const text = String(value || "").replace(/\s+/g, "");
-  if (!text) {
-    return null;
-  }
-  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-  const clean = text.replace(/=+$/, "");
-  const bytes = [];
-  for (let index = 0; index < clean.length; index += 4) {
-    const first = alphabet.indexOf(clean[index]);
-    const second = alphabet.indexOf(clean[index + 1]);
-    const third = alphabet.indexOf(clean[index + 2]);
-    const fourth = alphabet.indexOf(clean[index + 3]);
-    if (first < 0 || second < 0) {
-      return null;
-    }
-    const triplet = (first << 18)
-      | (second << 12)
-      | ((third >= 0 ? third : 0) << 6)
-      | (fourth >= 0 ? fourth : 0);
-    bytes.push((triplet >> 16) & 255);
-    if (third >= 0 && index + 2 < clean.length) {
-      bytes.push((triplet >> 8) & 255);
-    }
-    if (fourth >= 0 && index + 3 < clean.length) {
-      bytes.push(triplet & 255);
-    }
-  }
-  return new Uint8Array(bytes);
-}
-
-function buildDiagnosticsTarArchive(diagnostics, audioFiles) {
-  const encoder = new TextEncoder();
-  const jsonBytes = encoder.encode(JSON.stringify(diagnostics, null, 2));
-  const entries = [
-    { path: "diagnostics.json", bytes: jsonBytes },
-    ...audioFiles
-  ];
-  const totalBytes = entries.reduce((sum, entry) => sum + 512 + tarPaddedSize(entry.bytes.byteLength), 1024);
-  const archive = new Uint8Array(totalBytes);
-  let offset = 0;
-  for (const entry of entries) {
-    writeTarHeader(archive, offset, entry.path, entry.bytes.byteLength);
-    offset += 512;
-    archive.set(entry.bytes, offset);
-    offset += tarPaddedSize(entry.bytes.byteLength);
-  }
-  return archive;
-}
-
-function tarPaddedSize(size) {
-  return Math.ceil(Math.max(0, Number(size) || 0) / 512) * 512;
-}
-
-function writeTarHeader(archive, offset, path, size) {
-  const header = archive.subarray(offset, offset + 512);
-  writeTarString(header, 0, 100, safeTarPath(path));
-  writeTarOctal(header, 100, 8, 0o644);
-  writeTarOctal(header, 108, 8, 0);
-  writeTarOctal(header, 116, 8, 0);
-  writeTarOctal(header, 124, 12, size);
-  writeTarOctal(header, 136, 12, Math.floor(Date.now() / 1000));
-  for (let index = 148; index < 156; index += 1) {
-    header[index] = 32;
-  }
-  header[156] = 48;
-  writeTarString(header, 257, 6, "ustar");
-  writeTarString(header, 263, 2, "00");
-  const checksum = header.reduce((sum, byte) => sum + byte, 0);
-  writeTarOctal(header, 148, 8, checksum);
-}
-
-function writeTarString(header, offset, length, value) {
-  const bytes = new TextEncoder().encode(String(value || ""));
-  header.set(bytes.slice(0, length), offset);
-}
-
-function writeTarOctal(header, offset, length, value) {
-  const text = Math.max(0, Number(value) || 0)
-    .toString(8)
-    .padStart(length - 1, "0")
-    .slice(-(length - 1));
-  writeTarString(header, offset, length - 1, text);
-  header[offset + length - 1] = 0;
-}
-
-function safeTarPath(value = "") {
-  return String(value || "")
-    .replace(/^\/+/, "")
-    .replace(/\.\.(?:\/|$)/g, "")
-    .replace(/[\\\u0000-\u001f]+/g, "_")
-    .slice(0, 100) || "diagnostics.bin";
 }
 
 async function importSubtitleFile() {
@@ -1861,11 +2365,11 @@ async function importSubtitleFile() {
     const transcript = parsed.transcript;
     const cues = cuesFromTranscript(transcript);
     if (!cues.length) {
-      throw new Error("导入文件没有可用字幕。");
+      throw new Error(t("importNoSubtitle"));
     }
     const entry = await buildSubtitleCacheEntry(transcript, parsed.metadata || {});
     if (!entry.id) {
-      throw new Error("导入文件缺少可用于保存的网页链接或媒体源。");
+      throw new Error(t("importNoContext"));
     }
     await putSubtitleCacheEntry(entry);
     currentSubtitleCacheEntry = entry;
@@ -1878,20 +2382,20 @@ async function importSubtitleFile() {
     renderSubtitleCueList();
     await attachCurrentSubtitlesToPage();
     startSubtitleFollow();
-    setMessage(`已导入 ${formatImportedSubtitleType(parsed.format)} 字幕，并已纳入当前页面缓存。`);
+    setMessage(t("importDone", { format: formatImportedSubtitleType(parsed.format) }));
   } catch (error) {
-    setMessage(`导入失败：${formatRuntimeError(error.message)}`);
+    setMessage(t("importFailed", { error: formatRuntimeError(error.message) }));
   }
 }
 
 function formatImportedSubtitleType(format) {
   return {
-    json: "浮光 JSON",
+    json: t("fuguangJson"),
     srt: "SRT",
     vtt: "VTT",
     ass: "ASS",
     ssa: "SSA"
-  }[format] || "字幕";
+  }[format] || t("subtitleGeneric");
 }
 
 async function clearCurrentSubtitleCache() {
@@ -1912,7 +2416,7 @@ async function clearCurrentSubtitleCache() {
     }
     const cacheIds = [...ids].filter(Boolean);
     if (!cacheIds.length) {
-      setMessage("当前页面没有可定位的字幕缓存。");
+      setMessage(t("noCacheLocation"));
       return;
     }
 
@@ -1930,7 +2434,7 @@ async function clearCurrentSubtitleCache() {
 
     if (!deleted && !wasShowingClearedCache) {
       renderSubtitleNotice();
-      setMessage("当前页面没有已保存的字幕缓存。");
+      setMessage(t("noSavedSubtitleCache"));
       return;
     }
     let suppressError = "";
@@ -1945,19 +2449,19 @@ async function clearCurrentSubtitleCache() {
         }
       }
       await detachCurrentSubtitlesFromPage();
-      clearSubtitles("已清除当前页面字幕缓存。");
+      clearSubtitles(t("subtitleCacheCleared"));
     } else {
       renderSubtitleNotice();
     }
     if (suppressError) {
-      setMessage(`已清除当前页面字幕缓存（${deleted} 条），但后台字幕状态清理失败：${suppressError}`);
+      setMessage(t("subtitleCacheClearedBackendFailed", { count: deleted, error: suppressError }));
     } else if (deleted) {
-      setMessage(`已清除当前页面字幕缓存（${deleted} 条）。`);
+      setMessage(t("subtitleCacheClearedCount", { count: deleted }));
     } else {
-      setMessage("当前页面没有已保存的字幕缓存，已清除当前显示的缓存字幕。");
+      setMessage(t("subtitleCacheDisplayCleared"));
     }
   } catch (error) {
-    setMessage(`清除字幕缓存失败：${formatRuntimeError(error.message)}`);
+    setMessage(t("subtitleCacheClearFailed", { error: formatRuntimeError(error.message) }));
   }
 }
 
@@ -1975,7 +2479,7 @@ async function suppressPreloadSubtitleState(jobId) {
     jobId
   });
   if (!response.ok) {
-    throw new Error(response.error || "后台没有完成字幕状态清理。");
+    throw new Error(response.error || t("backgroundClearFailed"));
   }
 }
 
@@ -2231,17 +2735,19 @@ function textContentSignature(value) {
 }
 
 function safeFilename(value) {
-  const text = String(value || "fuguang-subtitle")
+  const text = String(value || "llm-raw-subtitle")
     .replace(/[\\/:*?"<>|]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
-  return (text || "fuguang-subtitle").slice(0, 80);
+  return (text || "llm-raw-subtitle").slice(0, 80);
 }
 
 function showTab(tab) {
   const task = tab === "task";
   elements.tabTask.classList.toggle("active", task);
   elements.tabSettings.classList.toggle("active", !task);
+  elements.tabTask.setAttribute("aria-selected", String(task));
+  elements.tabSettings.setAttribute("aria-selected", String(!task));
   elements.taskPanel.classList.toggle("active", task);
   elements.settingsPanel.classList.toggle("active", !task);
 }
@@ -2250,86 +2756,86 @@ function statusLabel(status) {
   const preloadStatus = status?.preloadJob?.status || status?.preload;
   const preloadStage = status?.preloadJob?.stage;
   if (preloadStage === "completed_with_warnings") {
-    return "完成，有警告";
+    return t("statusCompletedWarnings");
   }
   if (preloadStatus === "done" || preloadStatus === "completed") {
-    return "字幕已完成";
+    return t("statusCompleted");
   }
   if (preloadStatus === "error" || preloadStatus === "failed") {
-    return "任务失败";
+    return t("statusFailed");
   }
   if (preloadStatus === "cancelled") {
-    return "任务已停止";
+    return t("statusCancelled");
   }
   if (preloadStatus && preloadStatus !== "idle") {
-    return "预加载";
+    return t("statusRunning");
   }
-  return "待机";
+  return t("statusIdle");
 }
 
 function formatRole(role) {
   return {
-    audio: "音频轨",
-    video: "视频轨",
-    playlist: "播放列表"
-  }[role] || "媒体";
+    audio: t("roleAudio"),
+    video: t("roleVideo"),
+    playlist: t("rolePlaylist")
+  }[role] || t("roleMedia");
 }
 
 function formatSource(source) {
   return {
-    "request-headers": "请求头",
-    request: "请求",
-    response: "响应",
-    page: "页面",
-    "media-element": "播放器",
-    "json-parse": "页面数据",
-    "hls-parse": "HLS 列表",
-    "dash-parse": "DASH 列表"
+    "request-headers": t("sourceRequestHeaders"),
+    request: t("sourceRequest"),
+    response: t("sourceResponse"),
+    page: t("sourcePage"),
+    "media-element": t("sourceMediaElement"),
+    "json-parse": t("sourceJsonParse"),
+    "hls-parse": t("sourceHlsParse"),
+    "dash-parse": t("sourceDashParse")
   }[source] || source || "";
 }
 
 function jobTitle(job) {
   if (job.stage === "completed_with_warnings") {
-    return "完成，有警告";
+    return t("statusCompletedWarnings");
   }
   if (job.status === "done" || job.status === "completed") {
-    return "字幕已完成";
+    return t("statusCompleted");
   }
   if (job.status === "error" || job.status === "failed") {
-    return "任务失败";
+    return t("statusFailed");
   }
   if (job.status === "cancelled") {
-    return "任务已停止";
+    return t("statusCancelled");
   }
   if (job.stage === "extracting_translating") {
-    return "正在边抽边译";
+    return t("jobExtractingTranslating");
   }
   if (job.stage === "asr_translation") {
-    return "正在识别和翻译分段";
+    return t("jobAsrTranslation");
   }
   if (job.stage === "retry_failed") {
-    return "正在重试失败识别分段";
+    return t("jobRetryFailed");
   }
-  return "正在预加载音频";
+  return t("jobPreloading");
 }
 
 function stageLabel(stage) {
   return {
-    queued: "排队中",
-    extracting: "抽取",
-    extracting_translating: "边抽边译",
-    asr: "语音识别",
-    asr_translation: "识别翻译",
-    retry_failed: "重试失败",
-    translating: "识别翻译",
-    translated: "完成",
-    completed: "完成",
-    completed_with_warnings: "完成，有警告",
-    cancelled: "已停止",
-    failed: "失败",
-    done: "完成",
-    error: "失败"
-  }[stage] || stage || "处理中";
+    queued: t("stageQueued"),
+    extracting: t("stageExtracting"),
+    extracting_translating: t("stageExtractingTranslating"),
+    asr: t("stageAsr"),
+    asr_translation: t("stageAsrTranslation"),
+    retry_failed: t("stageRetryFailed"),
+    translating: t("stageTranslating"),
+    translated: t("stageTranslated"),
+    completed: t("stageCompleted"),
+    completed_with_warnings: t("statusCompletedWarnings"),
+    cancelled: t("stageCancelled"),
+    failed: t("stageFailed"),
+    done: t("stageCompleted"),
+    error: t("stageFailed")
+  }[stage] || stage || t("stageProcessing");
 }
 
 function stageClassName(stage) {
@@ -2338,16 +2844,16 @@ function stageClassName(stage) {
 
 function chunkStageLabel(stage) {
   return {
-    queued: "排队",
-    asr: "识别",
-    asr_done: "待翻译",
-    translation: "翻译",
-    completed: "完成",
-    completed_with_warnings: "部分完成",
-    done: "完成",
-    failed: "失败",
-    cancelled: "停止"
-  }[stage] || stage || "排队";
+    queued: t("chunkQueued"),
+    asr: t("chunkAsr"),
+    asr_done: t("chunkAsrDone"),
+    translation: t("chunkTranslation"),
+    completed: t("chunkCompleted"),
+    completed_with_warnings: t("chunkPartial"),
+    done: t("chunkCompleted"),
+    failed: t("chunkFailed"),
+    cancelled: t("chunkStopped")
+  }[stage] || stage || t("chunkQueued");
 }
 
 function chunkMetaText(status) {
@@ -2356,26 +2862,26 @@ function chunkMetaText(status) {
   const parts = [];
   const message = String(status.message || "").trim();
   if (status.attempts) {
-    parts.push(`第 ${status.attempts} 次尝试`);
+    parts.push(t("attemptCount", { count: status.attempts }));
   }
   if (status.stage === "done" && !sourceSegments && !translatedSegments) {
-    parts.push("无语音");
+    parts.push(t("noSpeech"));
   }
   if (sourceSegments) {
-    parts.push(`原文 ${sourceSegments}`);
+    parts.push(t("sourceSegments", { count: sourceSegments }));
   }
   if (translatedSegments) {
-    parts.push(`译文 ${translatedSegments}`);
+    parts.push(t("translatedSegments", { count: translatedSegments }));
   }
   const asrFailures = Number(status.asrFailures || status.asr_failures || 0);
   if (asrFailures > 0) {
-    parts.push(`${asrFailures} 个音频分段识别失败`);
+    parts.push(t("asrFailures", { count: asrFailures }));
   }
   if (!sourceSegments && status.sourceCount) {
-    parts.push(`原文 ${status.sourceCount}`);
+    parts.push(t("sourceSegments", { count: status.sourceCount }));
   }
   if (!translatedSegments && status.translatedCount) {
-    parts.push(`译文 ${status.translatedCount}`);
+    parts.push(t("translatedSegments", { count: status.translatedCount }));
   }
   if (message) {
     const duplicateMessage = parts.some(part => part === message);
@@ -2398,7 +2904,7 @@ function runningChunkWaitText(status) {
   if (!Number.isFinite(startedAt) || startedAt <= 0) {
     return "";
   }
-  return `已等待 ${formatDuration((Date.now() - startedAt) / 1000)}`;
+  return t("waitingDuration", { duration: formatDuration((Date.now() - startedAt) / 1000) });
 }
 
 function waitingFirstChunkText(job) {
@@ -2409,15 +2915,15 @@ function waitingFirstChunkText(job) {
   if (activity && activity !== "-") {
     parts.push(activity);
   } else {
-    parts.push("等待首个音频切片生成");
+    parts.push(t("waitingFirstChunk"));
   }
   const elapsed = Number(progress.elapsedSeconds || extraction.elapsedSeconds || 0) || 0;
   if (elapsed > 0) {
-    parts.push(`已等待 ${formatDuration(elapsed)}`);
+    parts.push(t("waitingDuration", { duration: formatDuration(elapsed) }));
   }
   const readySeconds = Number(extraction.readySeconds || 0) || 0;
   if (readySeconds > 0) {
-    parts.push(`已生成 ${formatDuration(readySeconds)} 可处理音频`);
+    parts.push(t("readyAudio", { duration: formatDuration(readySeconds) }));
   }
   return `${parts.join(" · ")}。`;
 }
@@ -2428,10 +2934,10 @@ function extractionActivityText(extraction) {
   }
   const status = extraction.status || extraction.phase;
   if (status === "done" || status === "completed") {
-    return "已完成";
+    return t("stageCompleted");
   }
   if (status === "error" || status === "failed") {
-    return "失败";
+    return t("stageFailed");
   }
   if (extraction.message) {
     return shorten(extraction.message, 34);
@@ -2439,12 +2945,12 @@ function extractionActivityText(extraction) {
   const done = Number(extraction.internalChunksDone || 0) || 0;
   const total = Number(extraction.internalChunksTotal || 0) || 0;
   if (total) {
-    return `内部媒体切片 ${done}/${total}`;
+    return t("internalChunks", { done, total });
   }
   const downloaded = Number(extraction.downloadedSegments || 0) || 0;
   const segmentTotal = Number(extraction.totalSegments || 0) || 0;
   if (segmentTotal) {
-    return `下载媒体切片 ${downloaded}/${segmentTotal}`;
+    return t("downloadSegments", { done: downloaded, total: segmentTotal });
   }
   return "-";
 }
@@ -2455,10 +2961,10 @@ function friendlyChunkError(error) {
     return "";
   }
   if (text.includes("自动修复也失败") || text.includes("Expecting value") || text.includes("Expecting ',' delimiter")) {
-    return "模型返回的 JSON 无法自动修复。建议降低翻译并发，或切换到更稳定的翻译模型后重试。";
+    return t("jsonError");
   }
   if (text.includes("没有可用字幕")) {
-    return "模型没有返回可用字幕条目。已保留失败状态，可重试。";
+    return t("noSubtitleItems");
   }
   return shorten(text, 120);
 }
@@ -2475,34 +2981,34 @@ function updateActionButtons(job) {
   const canRetryPreload = retryableAsrFailures > 0 || canResumeAudio || canResumeTranslation;
   const audioCacheRemoved = Boolean(job?.audioCacheRemoved);
   elements.startPreload.disabled = startRequestInFlight || running;
-  elements.startPreload.textContent = job ? "重新抽取全部" : "开始抽取";
-  elements.startPreload.title = job ? "放弃当前任务状态，从选中的媒体源重新抽取音频并创建新任务。" : "从当前选中的媒体源抽取音频并生成字幕。";
+  elements.startPreload.textContent = job ? t("restartExtract") : t("startExtract");
+  elements.startPreload.title = job ? t("restartTitle") : t("startTitle");
   elements.retryPreload.textContent = retryableAsrFailures
-    ? `重试失败识别分段 ${retryableAsrFailures}`
+    ? t("retryFailedSegmentsCount", { count: retryableAsrFailures })
     : canResumeTranslation
-      ? "继续翻译"
+      ? t("continueTranslate")
       : canResumeAudio
-        ? "继续 ASR"
-        : "重试失败识别分段";
+        ? t("continueAsr")
+        : t("retryFailed");
   elements.retryPreload.title = audioCacheRemoved
-    ? "当前任务的音频缓存已清除，需要重新抽取全部。"
+    ? t("retryNeedsExtractTitle")
     : canResumeTranslation && !retryableAsrFailures
-      ? "后台仍保留当前任务的 ASR 原文时，继续翻译不重新抽取音频，也不重新语音识别。"
+      ? t("continueTranslateTitle")
       : canResumeAudio && !retryableAsrFailures
-        ? "复用已抽取的音频缓存继续语音识别和翻译，不重新下载媒体切片。"
-        : "只重试当前任务里的失败识别分段，优先复用已有 ASR 原文，其次复用已抽取的音频缓存。";
+        ? t("continueAsrTitle")
+        : t("retryFailedTitle");
   elements.retryPreload.disabled = retryRequestInFlight || !job || running || audioCacheRemoved || !canRetryPreload;
-  elements.retryTranslation.textContent = "重翻译字幕";
-  elements.retryTranslation.title = "后台仍保留当前任务的 ASR 原文时，只重新翻译字幕；如果浏览器回收了后台任务状态，需要重新抽取。";
+  elements.retryTranslation.textContent = t("retranslate");
+  elements.retryTranslation.title = t("retranslateTitle");
   elements.retryTranslation.disabled = translationRetryRequestInFlight || !job || running || sourceChunks <= 0;
   elements.cancelPreload.disabled = !running;
   elements.clearAudioCache.disabled = !job || running;
-  elements.clearAudioCache.textContent = "清音频缓存";
+  elements.clearAudioCache.textContent = t("clearAudio");
   elements.clearAudioCache.title = running
-    ? "任务运行中不能清音频缓存，请先停止或等待结束。"
+    ? t("clearAudioRunningTitle")
     : audioCacheRemoved
-      ? "再次清除当前任务的浏览器本地音频切片缓存；字幕缓存不受影响。"
-      : "只清除当前任务的浏览器本地音频切片缓存；字幕缓存不受影响。";
+      ? t("clearAudioAgainTitle")
+      : t("clearAudioTitle");
 }
 
 function countReusableSourceChunks(job) {
@@ -2540,10 +3046,10 @@ function isRunningJob(job) {
 
 function extractionProgressText(progress, status) {
   if (status === "error" || status === "failed") {
-    return "失败";
+    return t("stageFailed");
   }
   if (progress?.status === "done" || progress?.status === "completed") {
-    return "100%";
+    return t("completedPercent");
   }
   if (progress?.message && Number.isFinite(Number(progress?.percent))) {
     return `${Number(progress.percent).toFixed(1)}% · ${shorten(progress.message, 24)}`;
@@ -2560,14 +3066,14 @@ function translationProgressText(translation) {
   const active = (translation?.chunksAsr || 0) + (translation?.chunksTranslating || 0);
   const failed = translation?.chunksFailed || 0;
   if (!total) {
-    return "等待首段";
+    return t("waitFirstSegment");
   }
   const parts = [`${done}/${total}`];
   if (active) {
-    parts.push(`${active} 处理中`);
+    parts.push(t("activeProcessing", { count: active }));
   }
   if (failed) {
-    parts.push(`${failed} 失败`);
+    parts.push(t("failedCount", { count: failed }));
   }
   return parts.join(" · ");
 }
@@ -2642,20 +3148,20 @@ function valueOrDefault(value, fallback) {
 function send(message) {
   return chrome.runtime.sendMessage(message).catch(error => ({
     ok: false,
-    error: `扩展后台暂时没有响应：${formatRuntimeError(error.message)}`
+    error: t("backendNoResponse", { error: formatRuntimeError(error.message) })
   }));
 }
 
 function formatRuntimeError(message = "") {
   const text = String(message || "").trim();
   if (/Extension context invalidated/i.test(text)) {
-    return "扩展上下文已失效，请重新加载扩展并刷新当前页面。";
+    return t("contextInvalidated");
   }
   if (/Receiving end does not exist/i.test(text)) {
-    return "页面脚本还没有准备好，请刷新当前页面后重试。";
+    return t("receivingEndMissing");
   }
   if (/message port closed/i.test(text)) {
-    return "后台响应中断，请重试。";
+    return t("portClosed");
   }
-  return text || "未知错误";
+  return text || t("unknownError");
 }

@@ -71,7 +71,7 @@
       return false;
     }
     if (message?.type === MESSAGE.ATTACH_VTT) {
-      sendResponse({ ok: attachVtt(message.vtt, message.label || "浮光译影", message.signature || "") });
+      sendResponse({ ok: attachVtt(message.vtt, message.label || "LLM 生肉翻译", message.signature || "") });
       return false;
     }
     if (message?.type === MESSAGE.GET_VIDEO_STATE) {

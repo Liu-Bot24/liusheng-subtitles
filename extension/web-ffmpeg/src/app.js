@@ -847,42 +847,50 @@ function buildCollectedSpeechSegmentSpecs(outputPattern, speechIntervals = [], m
   }
   const pattern = segmentPatternParts(outputPattern);
   const specs = [];
-  const sourceStart = Number(options?.sourceStart) || 0;
   let current = null;
   const flush = () => {
-    if (!current || current.end <= current.start) {
+    if (!current || !current.parts.length || current.duration <= 0) {
       current = null;
       return;
     }
-    const duration = roundSeconds(current.end - current.start);
-    const part = {
-      relativeStart: roundSeconds(current.start),
-      relativeEnd: roundSeconds(current.end),
-      sourceStart: roundSeconds(sourceStart + current.start),
-      sourceEnd: roundSeconds(sourceStart + current.end),
-      outputStart: 0,
-      outputEnd: duration,
-      duration
-    };
+    const duration = roundSeconds(current.duration);
     specs.push({
       index: specs.length,
       name: segmentNameFromPattern(pattern, specs.length),
-      sourceStart: part.sourceStart,
-      sourceEnd: part.sourceEnd,
+      sourceStart: current.parts[0].sourceStart,
+      sourceEnd: current.parts.at(-1).sourceEnd,
       duration,
-      parts: [part]
+      parts: current.parts
     });
     current = null;
   };
-  for (const interval of intervals) {
-    if (current && interval.relativeEnd - current.start > maxDuration && current.end > current.start) {
-      flush();
+  const addIntervalToCurrent = interval => {
+    const duration = roundSeconds(interval.relativeEnd - interval.relativeStart);
+    if (duration <= 0) {
+      return;
     }
     if (!current) {
-      current = { start: interval.relativeStart, end: interval.relativeEnd };
-    } else {
-      current.end = Math.max(current.end, interval.relativeEnd);
+      current = { duration: 0, parts: [] };
     }
+    const outputStart = roundSeconds(current.duration);
+    const outputEnd = roundSeconds(outputStart + duration);
+    current.parts.push({
+      relativeStart: interval.relativeStart,
+      relativeEnd: interval.relativeEnd,
+      sourceStart: interval.sourceStart,
+      sourceEnd: interval.sourceEnd,
+      outputStart,
+      outputEnd,
+      duration
+    });
+    current.duration = outputEnd;
+  };
+  for (const interval of intervals) {
+    const intervalDuration = roundSeconds(interval.relativeEnd - interval.relativeStart);
+    if (current && current.duration + intervalDuration > maxDuration + 0.001) {
+      flush();
+    }
+    addIntervalToCurrent(interval);
   }
   flush();
   return specs.filter(spec => spec.duration > 0 && spec.parts.length);

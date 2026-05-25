@@ -14,18 +14,18 @@ export const FuguangBrowserAsrProvider = (() => {
     ["log_prob_threshold", "-1"]
   ];
   const BROWSER_ASR_COMPAT_VAD_FIELDS = [
-    ["threshold", "0.5"],
+    ["threshold", "0.15"],
     ["min_speech_duration_ms", "0"],
     ["max_speech_duration_s", "30"],
     ["min_silence_duration_ms", "160"],
-    ["speech_pad_ms", "400"]
+    ["speech_pad_ms", "800"]
   ];
   const BROWSER_ASR_COMPAT_VAD_PARAMETERS = {
-    threshold: 0.5,
+    threshold: 0.15,
     min_speech_duration_ms: 0,
     max_speech_duration_s: 30,
     min_silence_duration_ms: 160,
-    speech_pad_ms: 400
+    speech_pad_ms: 800
   };
   const BROWSER_ASR_CLIP_TIMESTAMP_MAX_SECONDS = BROWSER_ASR_COMPAT_VAD_PARAMETERS.max_speech_duration_s;
   const browserAsrVadCapabilityCache = new Map();

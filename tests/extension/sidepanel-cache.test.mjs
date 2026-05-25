@@ -21,6 +21,18 @@ import vm from "node:vm";
   }
   assert.equal(manifest.description.includes("实时"), false);
   assert.equal(manifest.permissions.includes("tabCapture"), false);
+  assert.ok(!html.includes('id="exportDiagnostics"'), "diagnostics export must not be exposed in the sidepanel UI");
+  assert.ok(!js.includes('document.querySelector("#exportDiagnostics")'), "sidepanel must not bind a diagnostics export button");
+  assert.ok(!js.includes("GET_PRELOAD_DIAGNOSTICS"), "diagnostics message should stay out of the user-facing sidepanel");
+  assert.ok(html.includes('role="tablist"'));
+  assert.ok(html.includes('role="tab"'));
+  assert.ok(html.includes('aria-selected="true"'));
+  assert.ok(html.includes('role="status"'));
+  assert.ok(html.includes('href="https://blog.liu-qi.cn/tools"'));
+  assert.ok(html.includes('target="_blank"'));
+  assert.ok(html.includes('rel="noopener noreferrer"'));
+  assert.ok(css.includes("focus-visible"), "keyboard focus state missing");
+  assert.ok(css.includes("appearance: none"), "button/input rendering should not depend on OS defaults");
   assert.ok(html.includes('id="sourceLanguage"'), "source language selector missing");
   assert.ok(
     html.indexOf('id="sourceLanguage"') < html.indexOf('id="startPreload"'),
@@ -72,6 +84,105 @@ import vm from "node:vm";
   const cssClassSet = new Set(cssClasses);
   const unusedHtmlClasses = htmlClasses.filter(name => !cssClassSet.has(name) && !jsClasses.has(name));
   assert.deepEqual(unusedHtmlClasses, []);
+  const darkVars = cssVariableBlock(css, /@media \(prefers-color-scheme: dark\) \{\s*:root\s*\{([\s\S]*?)\n  \}/);
+  const lightVars = cssVariableBlock(css, /^:root\s*\{([\s\S]*?)\n\}/);
+  assert.ok(
+    colorContrast(lightVars["accent-ink"], lightVars.accent) >= 4.5,
+    "light primary button text contrast must stay readable"
+  );
+  assert.ok(
+    colorContrast(darkVars["accent-ink"], darkVars.accent) >= 4.5,
+    "dark primary button text contrast must not depend on browser-native rendering"
+  );
+  assert.ok(isBlueCyanHex(lightVars.accent), "light accent must stay blue/cyan, not purple");
+  assert.ok(isBlueCyanHex(darkVars.accent), "dark accent must stay blue/cyan, not purple");
+  assert.equal(css.includes("backdrop-filter"), false, "theme should stay flat, not glassy");
+  assert.equal(css.includes("radial-gradient"), false, "theme should not use neon orb/radial effects");
+  assert.equal(css.includes("repeating-linear-gradient"), false, "theme should not use decorative scanline gradients");
+  assert.equal(/0 0 20px|#ff6b5e|#d9a64a|#9a6614|#b3342d/i.test(css), false, "theme must not reintroduce strong red/brown glow colors");
+  assert.equal(isStrongWarmHex(lightVars.danger), false, "light danger token should stay muted, not red/orange");
+  assert.equal(isStrongWarmHex(darkVars.danger), false, "dark danger token should stay muted, not red/orange");
+  assert.equal(isStrongWarmHex(lightVars.warning), false, "light warning token should stay neutral, not brown");
+  assert.equal(isStrongWarmHex(darkVars.warning), false, "dark warning token should stay neutral, not brown");
+  assert.match(css, /\.creator-link\s*\{[\s\S]*?color:\s*var\(--accent\);[\s\S]*?text-decoration:\s*none;/);
+  assert.match(css, /\.creator-link:hover\s*\{[\s\S]*?text-decoration:\s*underline;/);
+  assert.match(css, /\.tabs\s*\{[\s\S]*?border:\s*0;[\s\S]*?border-bottom:\s*1px solid var\(--border\);/);
+  assert.match(css, /\.tab\s*\{[\s\S]*?border:\s*0;[\s\S]*?border-bottom:\s*3px solid transparent;[\s\S]*?border-radius:\s*0;/);
+  assert.match(css, /\.tab\.active\s*\{[\s\S]*?background:\s*transparent;[\s\S]*?border-bottom-color:\s*var\(--accent\);/);
+  assert.match(css, /\.subtitle-section \.section-heading\.compact\s*\{[\s\S]*?grid-template-columns:\s*1fr;/);
+  assert.match(css, /\.subtitle-actions\s*\{[\s\S]*?display:\s*flex;/);
+}
+
+function cssVariableBlock(css, pattern) {
+  const body = css.match(pattern)?.[1] || "";
+  const variables = {};
+  for (const match of body.matchAll(/--([A-Za-z0-9_-]+):\s*([^;]+);/g)) {
+    variables[match[1]] = match[2].trim();
+  }
+  return variables;
+}
+
+function colorContrast(left, right) {
+  const [a, b] = [relativeLuminance(parseHexColor(left)), relativeLuminance(parseHexColor(right))]
+    .sort((first, second) => second - first);
+  return (a + 0.05) / (b + 0.05);
+}
+
+function parseHexColor(value) {
+  let hex = String(value || "").trim();
+  assert.match(hex, /^#[0-9a-f]{6}$/i);
+  return [0, 2, 4].map(offset => Number.parseInt(hex.slice(1 + offset, 3 + offset), 16));
+}
+
+function isBlueCyanHex(value) {
+  const [red, green, blue] = parseHexColor(value);
+  const max = Math.max(red, green, blue);
+  const min = Math.min(red, green, blue);
+  const delta = max - min;
+  if (!delta) {
+    return false;
+  }
+  let hue = 0;
+  if (max === red) {
+    hue = 60 * (((green - blue) / delta) % 6);
+  } else if (max === green) {
+    hue = 60 * ((blue - red) / delta + 2);
+  } else {
+    hue = 60 * ((red - green) / delta + 4);
+  }
+  hue = (hue + 360) % 360;
+  return hue >= 185 && hue <= 215 && blue >= green * 0.75 && red < blue;
+}
+
+function isStrongWarmHex(value) {
+  const [red, green, blue] = parseHexColor(value);
+  const max = Math.max(red, green, blue);
+  const min = Math.min(red, green, blue);
+  const delta = max - min;
+  if (!delta) {
+    return false;
+  }
+  let hue = 0;
+  if (max === red) {
+    hue = 60 * (((green - blue) / delta) % 6);
+  } else if (max === green) {
+    hue = 60 * ((blue - red) / delta + 2);
+  } else {
+    hue = 60 * ((red - green) / delta + 4);
+  }
+  hue = (hue + 360) % 360;
+  const saturation = delta / max;
+  return saturation >= 0.18 && (hue <= 55 || hue >= 345);
+}
+
+function relativeLuminance(rgb) {
+  const [r, g, b] = rgb.map(channel => {
+    const normalized = channel / 255;
+    return normalized <= 0.03928
+      ? normalized / 12.92
+      : ((normalized + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 }
 
 class FakeElement {
@@ -89,7 +200,15 @@ class FakeElement {
     this.classList = {
       add: (...names) => names.forEach(name => this._classes.add(name)),
       remove: (...names) => names.forEach(name => this._classes.delete(name)),
-      toggle: name => {
+      toggle: (name, force) => {
+        if (force === true) {
+          this._classes.add(name);
+          return true;
+        }
+        if (force === false) {
+          this._classes.delete(name);
+          return false;
+        }
         if (this._classes.has(name)) {
           this._classes.delete(name);
           return false;
@@ -343,7 +462,7 @@ assert.equal(clearCacheDetachesEvenWhenSuppressFailsState.detached, true);
 assert.equal(clearCacheDetachesEvenWhenSuppressFailsState.cuesLength, 0);
 assert.equal(clearCacheDetachesEvenWhenSuppressFailsState.currentTranscriptIsNull, true);
 assert.match(clearCacheDetachesEvenWhenSuppressFailsState.message, /已清除当前页面字幕缓存/);
-assert.match(clearCacheDetachesEvenWhenSuppressFailsState.message, /后台字幕状态清理失败/);
+assert.match(clearCacheDetachesEvenWhenSuppressFailsState.message, /页面状态同步失败/);
 
 const clearMissingDisplayedCacheState = await vm.runInContext(`
   (async () => {
@@ -485,7 +604,7 @@ const audioButtonState = await vm.runInContext(`
 
 assert.equal(audioButtonState.disabled, false);
 assert.equal(audioButtonState.text, "清音频缓存");
-assert.match(audioButtonState.title, /浏览器本地音频切片缓存/);
+assert.match(audioButtonState.title, /浏览器音频缓存/);
 assert.match(audioButtonState.title, /字幕缓存不受影响/);
 assert.doesNotMatch(audioButtonState.title, /本机音频切片/);
 
@@ -524,13 +643,66 @@ assert.deepEqual(JSON.parse(JSON.stringify(completedJobDisplayState)), {
   warningTopStatus: "完成，有警告",
   failedTopStatus: "任务失败",
   cancelledTopStatus: "任务已停止",
-  runningTopStatus: "预加载",
+  runningTopStatus: "处理中",
   idleTopStatus: "待机",
   warningJobTitle: "完成，有警告",
-  completedStep: "已完成",
-  completedPhaseStep: "已完成",
-  doneStep: "已完成",
+  completedStep: "完成",
+  completedPhaseStep: "完成",
+  doneStep: "完成",
   runningStep: "正在用 Web FFmpeg 提取音频"
+});
+
+const subtitleFocusButtonState = await vm.runInContext(`
+  (() => {
+    currentJob = null;
+    taskDetailsExpanded = false;
+    subtitleDisplayMode = "translated";
+    subtitleCues = [{ start: 1, end: 2, text: "缓存字幕" }];
+    elements.toggleTaskDetails.hidden = true;
+    elements.taskPanel.classList.remove("subtitles-focus");
+    updateTaskPanelFocus(currentJob);
+    const cacheSubtitleState = {
+      hidden: elements.toggleTaskDetails.hidden,
+      text: elements.toggleTaskDetails.textContent,
+      focus: elements.taskPanel.classList.contains("subtitles-focus")
+    };
+
+    subtitleCues = [];
+    elements.toggleTaskDetails.hidden = false;
+    updateTaskPanelFocus(currentJob);
+    const emptyState = {
+      hidden: elements.toggleTaskDetails.hidden,
+      focus: elements.taskPanel.classList.contains("subtitles-focus")
+    };
+
+    updateTaskPanelFocus({
+      status: "completed",
+      subtitleCleared: true,
+      translation: { segmentCount: 2, chunksFailed: 0 }
+    });
+    const clearedJobState = {
+      hidden: elements.toggleTaskDetails.hidden,
+      focus: elements.taskPanel.classList.contains("subtitles-focus")
+    };
+
+    return { cacheSubtitleState, emptyState, clearedJobState };
+  })()
+`, context);
+
+assert.deepEqual(JSON.parse(JSON.stringify(subtitleFocusButtonState)), {
+  cacheSubtitleState: {
+    hidden: false,
+    text: "任务详情",
+    focus: true
+  },
+  emptyState: {
+    hidden: true,
+    focus: false
+  },
+  clearedJobState: {
+    hidden: true,
+    focus: false
+  }
 });
 
 const refreshCompletedJobStatusState = await vm.runInContext(`
@@ -604,7 +776,7 @@ const refreshCompletedJobStatusState = await vm.runInContext(`
 
 assert.deepEqual(JSON.parse(JSON.stringify(refreshCompletedJobStatusState)), {
   topStatus: "字幕已完成",
-  currentStep: "已完成"
+  currentStep: "完成"
 });
 
 const renderCompletedJobStatusState = await vm.runInContext(`
@@ -695,62 +867,6 @@ assert.deepEqual(JSON.parse(JSON.stringify(exportSubtitleState)), {
   emptyMessage: "还没有可导出的字幕。"
 });
 
-const exportDiagnosticsState = await vm.runInContext(`
-  (async () => {
-    const originalDownloadBlob = downloadBlob;
-    const originalSendMessage = chrome.runtime.sendMessage;
-    const originalPageTitle = elements.pageTitle.textContent;
-    const downloads = [];
-    const messages = [];
-    downloadBlob = async (blob, filename) => {
-      downloads.push({ filename, text: await blob.text(), bytes: new Uint8Array(await blob.arrayBuffer()) });
-    };
-    chrome.runtime.sendMessage = async message => {
-      messages.push(message);
-      if (message.type === "FUGUANG_GET_PRELOAD_DIAGNOSTICS") {
-        return {
-          ok: true,
-          diagnostics: {
-            version: 1,
-            job: { id: message.jobId },
-            audioChunks: [{ index: 0, file: { cacheUrl: "https://fuguang.local/audio/chunk.mp3" } }],
-            asrChunks: [{ chunk: { index: 0 }, rawPayload: { text: "hello" } }]
-          },
-          audioFiles: [{
-            path: "audio/chunk-0000.mp3",
-            mime: "audio/mpeg",
-            bytes: 3,
-            base64: "AQID"
-          }]
-        };
-      }
-      return { ok: true };
-    };
-    try {
-      elements.pageTitle.textContent = "诊断/视频?";
-      currentJobId = "job-diag";
-      await exportCurrentDiagnostics();
-      return {
-        messages,
-        downloads,
-        messageText: elements.message.textContent
-      };
-    } finally {
-      downloadBlob = originalDownloadBlob;
-      chrome.runtime.sendMessage = originalSendMessage;
-      elements.pageTitle.textContent = originalPageTitle;
-    }
-  })()
-`, context);
-
-assert.equal(exportDiagnosticsState.messages[0].type, "FUGUANG_GET_PRELOAD_DIAGNOSTICS");
-assert.equal(exportDiagnosticsState.messages[0].jobId, "job-diag");
-assert.equal(exportDiagnosticsState.downloads[0].filename, "诊断 视频-asr-diagnostics.tar");
-assert.match(exportDiagnosticsState.downloads[0].text, /diagnostics\.json/);
-assert.match(exportDiagnosticsState.downloads[0].text, /audio\/chunk-0000\.mp3/);
-assert.deepEqual(Array.from(exportDiagnosticsState.downloads[0].bytes.slice(-1024)), new Array(1024).fill(0));
-assert.equal(exportDiagnosticsState.messageText, "ASR 诊断已导出（含 1 个音频分段）。");
-
 const retryStageButtonState = await vm.runInContext(`
   (() => {
     startRequestInFlight = false;
@@ -794,14 +910,14 @@ assert.deepEqual(JSON.parse(JSON.stringify(retryStageButtonState)), {
   audioResume: {
     retryDisabled: false,
     retryText: "继续 ASR",
-    retryTitle: "复用已抽取的音频缓存继续语音识别和翻译，不重新下载媒体切片。",
+    retryTitle: "继续识别已抽取的音频，不重新下载媒体。",
     translationDisabled: true
   },
   translationResume: {
     retryDisabled: false,
     retryText: "继续翻译",
-    retryTitle: "后台仍保留当前任务的 ASR 原文时，继续翻译不重新抽取音频，也不重新语音识别。",
-    translationTitle: "后台仍保留当前任务的 ASR 原文时，只重新翻译字幕；如果浏览器回收了后台任务状态，需要重新抽取。",
+    retryTitle: "继续翻译已有原文，不重新识别音频。",
+    translationTitle: "只重新翻译已有原文。",
     translationDisabled: false
   }
 });
@@ -833,7 +949,7 @@ const retryChunkTranslationOnlyTitleState = await vm.runInContext(`
 
 assert.deepEqual(JSON.parse(JSON.stringify(retryChunkTranslationOnlyTitleState)), {
   text: "重翻译",
-  title: "后台仍保留当前任务的 ASR 原文时，只重跑这个翻译分段；如果浏览器回收了后台任务状态，需要重新抽取。",
+  title: "只重跑这个翻译分段。",
   disabled: false
 });
 
@@ -955,6 +1071,84 @@ assert.equal(sourceLanguageState.auto, "auto");
 assert.equal(sourceLanguageState.japanese, "ja");
 assert.equal(sourceLanguageState.chinese, "zh");
 assert.equal(sourceLanguageState.fallback, "auto");
+
+const localeSwitchState = await vm.runInContext(`
+  (() => {
+    asrProfiles = normalizeStoredProfiles("asr", []);
+    llmProfiles = normalizeStoredProfiles("llm", []);
+    renderProfileOptions(elements.asrProfileId, asrProfiles, "openai_whisper");
+    renderProfileOptions(elements.llmProfileId, llmProfiles, "openai_default");
+    currentAsrProfileId = elements.asrProfileId.value;
+    currentLlmProfileId = elements.llmProfileId.value;
+    renderSelectedProfile("asr");
+    renderSelectedProfile("llm");
+    currentJob = null;
+    candidates = [];
+    renderedCandidateSignature = "";
+    subtitleOverlayEnabled = true;
+    subtitleDisplayMode = "translated";
+    setLocale("en");
+    updateActionButtons(null);
+    const english = {
+      locale: currentLocale,
+      englishActive: elements.localeEnglish.classList.contains("active"),
+      chineseActive: elements.localeChinese.classList.contains("active"),
+      startText: elements.startPreload.textContent,
+      retryText: elements.retryPreload.textContent,
+      overlayText: elements.subtitleOverlayToggle.textContent,
+      candidateSummary: elements.candidateSummary.textContent,
+      asrKeyHint: elements.asrApiKeyHint.textContent,
+      asrKeyPlaceholder: elements.asrApiKey.placeholder,
+      llmKeyHint: elements.llmApiKeyHint.textContent,
+      llmKeyPlaceholder: elements.llmApiKey.placeholder
+    };
+    setLocale("zh");
+    updateActionButtons(null);
+    const chinese = {
+      locale: currentLocale,
+      englishActive: elements.localeEnglish.classList.contains("active"),
+      chineseActive: elements.localeChinese.classList.contains("active"),
+      startText: elements.startPreload.textContent,
+      retryText: elements.retryPreload.textContent,
+      overlayText: elements.subtitleOverlayToggle.textContent,
+      candidateSummary: elements.candidateSummary.textContent,
+      asrKeyHint: elements.asrApiKeyHint.textContent,
+      asrKeyPlaceholder: elements.asrApiKey.placeholder,
+      llmKeyHint: elements.llmApiKeyHint.textContent,
+      llmKeyPlaceholder: elements.llmApiKey.placeholder
+    };
+    return { english, chinese };
+  })()
+`, context);
+
+assert.deepEqual(JSON.parse(JSON.stringify(localeSwitchState)), {
+  english: {
+    locale: "en",
+    englishActive: true,
+    chineseActive: false,
+    startText: "Start",
+    retryText: "Retry Failed",
+    overlayText: "Overlay On",
+    candidateSummary: "Reading media sources from this page.",
+    asrKeyHint: "The API key stays in this browser. Auto VAD is enabled only for compatible self-hosted endpoints.",
+    asrKeyPlaceholder: "Stored in this browser only",
+    llmKeyHint: "The API key stays in this browser.",
+    llmKeyPlaceholder: "Stored in this browser only"
+  },
+  chinese: {
+    locale: "zh",
+    englishActive: false,
+    chineseActive: true,
+    startText: "开始抽取",
+    retryText: "重试失败",
+    overlayText: "浮层开",
+    candidateSummary: "正在读取当前页面媒体源。",
+    asrKeyHint: "API 密钥只保存在本机浏览器。自动 VAD 只对兼容的自建接口启用。",
+    asrKeyPlaceholder: "只保存在本机浏览器",
+    llmKeyHint: "API 密钥只保存在本机浏览器。",
+    llmKeyPlaceholder: "只保存在本机浏览器"
+  }
+});
 
 const syncedSubtitleSettingsState = await vm.runInContext(`
   (async () => {
@@ -1255,6 +1449,30 @@ const subtitleCacheIndexedDbStorageState = await vm.runInContext(`
       const deleted = await deleteSubtitleCacheEntries([entry.id, entry.id, "", "missing"]);
       const storedAfterDelete = await getSubtitleCacheEntry(entry.id);
       const allAfterDelete = await getAllSubtitleCacheEntries();
+      const now = Date.now();
+      const largeBytes = 3 * 1024 * 1024;
+      for (const sizedEntry of [
+        { id: "subtitle:vtest:space-new", updatedAt: new Date(now).toISOString(), approxBytes: largeBytes },
+        { id: "subtitle:vtest:space-old", updatedAt: new Date(now - 1000).toISOString(), approxBytes: largeBytes },
+        { id: "subtitle:vtest:space-protected", updatedAt: new Date(now - 2000).toISOString(), approxBytes: largeBytes }
+      ]) {
+        await putSubtitleCacheEntry({
+          pageUrl: "https://example.test/watch/space",
+          sourceUrl: "https://media.example.test/" + sizedEntry.id + ".mp4",
+          title: sizedEntry.id,
+          createdAt: sizedEntry.updatedAt,
+          updatedAt: sizedEntry.updatedAt,
+          approxBytes: sizedEntry.approxBytes,
+          transcript: {
+            source: [{ start: 0, end: 1, text: sizedEntry.id }],
+            translated: [{ start: 0, end: 1, text: sizedEntry.id }]
+          },
+          id: sizedEntry.id
+        });
+      }
+      const spacePruneIds = (await getAllSubtitleCacheEntries())
+        .map(item => item.id)
+        .sort();
       const dbRecord = fakeIndexedDB.databases.get(SUBTITLE_CACHE_DB_NAME);
 
       return {
@@ -1263,6 +1481,7 @@ const subtitleCacheIndexedDbStorageState = await vm.runInContext(`
         deleted,
         storedAfterDelete,
         allAfterDeleteLength: allAfterDelete.length,
+        spacePruneIds,
         storeExists: dbRecord?.stores?.has(SUBTITLE_CACHE_STORE) || false,
         closeCount: dbRecord?.closeCount || 0
       };
@@ -1282,8 +1501,9 @@ assert.deepEqual(JSON.parse(JSON.stringify(subtitleCacheIndexedDbStorageState)),
   deleted: 1,
   storedAfterDelete: null,
   allAfterDeleteLength: 0,
+  spacePruneIds: ["subtitle:vtest:space-new", "subtitle:vtest:space-protected"],
   storeExists: true,
-  closeCount: 7
+  closeCount: 14
 });
 
 const bilibiliReloadCacheKeyState = await vm.runInContext(`
@@ -2557,7 +2777,7 @@ const xaiProfileUiState = await vm.runInContext(`
 
 assert.equal(xaiProfileUiState.disabled, true);
 assert.match(xaiProfileUiState.placeholder, /不会发送|可选/);
-assert.match(xaiProfileUiState.hint, /不会发送 model 字段/);
+assert.match(xaiProfileUiState.hint, /配置备注/);
 assert.equal(xaiProfileUiState.vadFilter, "auto");
 
 const syntheticHighlightState = await vm.runInContext(`
@@ -2599,6 +2819,35 @@ const pausedHighlightState = await vm.runInContext(`
 `, context);
 
 assert.equal(pausedHighlightState.activeCueIndex, 0);
+
+const gapHighlightState = await vm.runInContext(`
+  (async () => {
+    subtitleCues = [
+      { start: 0, end: 2, time: "00:00:00.000 --> 00:00:02.000", text: "first cue" },
+      { start: 3, end: 5, time: "00:00:03.000 --> 00:00:05.000", text: "second cue" }
+    ];
+    activeTab = { id: 1 };
+    activeCueIndex = -1;
+    chrome.runtime.sendMessage = async () => ({
+      ok: true,
+      state: { currentTime: 2.5, paused: false, synthetic: false }
+    });
+    await syncSubtitleHighlight();
+    const gapIndex = activeCueIndex;
+    activeCueIndex = -1;
+    chrome.runtime.sendMessage = async () => ({
+      ok: true,
+      state: { currentTime: 6, paused: false, synthetic: false }
+    });
+    await syncSubtitleHighlight();
+    return { gapIndex, afterLastIndex: activeCueIndex };
+  })()
+`, context);
+
+assert.deepEqual(JSON.parse(JSON.stringify(gapHighlightState)), {
+  gapIndex: 0,
+  afterLastIndex: 1
+});
 
 const boundarySeekState = await vm.runInContext(`
   (async () => {
@@ -2961,10 +3210,9 @@ const sourcePreviewNoticeText = await vm.runInContext(`
   })()
 `, context);
 
-assert.match(sourcePreviewNoticeText, /ASR 原文/);
-assert.match(sourcePreviewNoticeText, /补位/);
-assert.match(sourcePreviewNoticeText, /自动替换/);
-assert.match(sourcePreviewNoticeText, /列表.*浮层.*导出/);
+assert.match(sourcePreviewNoticeText, /先显示原文/);
+assert.match(sourcePreviewNoticeText, /译文完成后自动更新/);
+assert.doesNotMatch(sourcePreviewNoticeText, /拒绝|补位|ASR 原文|列表.*浮层.*导出/);
 
 const partialSourcePreviewNoticeText = await vm.runInContext(`
   (() => {
@@ -2988,9 +3236,9 @@ const partialSourcePreviewNoticeText = await vm.runInContext(`
   })()
 `, context);
 
-assert.match(partialSourcePreviewNoticeText, /缺译句/);
-assert.match(partialSourcePreviewNoticeText, /ASR 原文补位/);
-assert.match(partialSourcePreviewNoticeText, /列表.*浮层.*导出/);
+assert.match(partialSourcePreviewNoticeText, /部分译文已完成/);
+assert.match(partialSourcePreviewNoticeText, /剩余句子/);
+assert.doesNotMatch(partialSourcePreviewNoticeText, /拒绝|补位|ASR 原文|列表.*浮层.*导出/);
 
 const attachRefreshState = await vm.runInContext(`
   (async () => {

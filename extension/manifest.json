@@ -1,10 +1,10 @@
 {
   "manifest_version": 3,
-  "name": "浮光译影",
-  "description": "为网页视频生成、导入和显示预加载字幕。",
+  "name": "LLM 生肉翻译",
+  "description": "用 LLM 为网页视频生成、翻译和显示字幕。",
   "version": "0.1.0",
   "action": {
-    "default_title": "浮光译影"
+    "default_title": "LLM 生肉翻译"
   },
   "icons": {
     "16": "assets/icon-16.png",
@@ -21,6 +21,7 @@
   },
   "permissions": [
     "activeTab",
+    "alarms",
     "offscreen",
     "declarativeNetRequestWithHostAccess",
     "sidePanel",

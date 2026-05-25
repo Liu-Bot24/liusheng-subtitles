@@ -957,7 +957,9 @@ async function persistWebFfmpegAudioFile(cache, file, namespace, fallbackName) {
   await cache.put(cacheUrl, new Response(buffer, {
     headers: {
       "Content-Type": mime,
-      "Cache-Control": "no-store"
+      "Cache-Control": "no-store",
+      "X-Fuguang-Cached-At": String(Date.now()),
+      "X-Fuguang-Bytes": String(buffer.byteLength)
     }
   }));
   return {

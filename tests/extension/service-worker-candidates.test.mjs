@@ -7,6 +7,10 @@ const webNavigationHistoryListeners = [];
 const addListener = () => {};
 const chrome = {
   action: { onClicked: { addListener } },
+  alarms: {
+    onAlarm: { addListener },
+    create: async () => {}
+  },
   offscreen: { hasDocument: async () => false, createDocument: async () => {} },
   runtime: { getURL: value => `chrome-extension://test-extension/${value}`, getContexts: async () => [], onMessage: { addListener }, sendMessage: async () => ({}) },
   sidePanel: { setPanelBehavior: async () => {}, open: async () => {} },
@@ -174,6 +178,124 @@ vm.runInContext(pipelineSource, context, { filename: "browser-translation-pipeli
 Object.assign(context, context.FuguangBrowserTranslationPipeline);
 vm.runInContext(mediaHeaderRulesSource, context, { filename: "media-header-rules.js" });
 vm.runInContext(source, context, { filename: "service-worker.js" });
+
+{
+  const recovered = context.filterAsrStrictVadRecoverySegments([
+    {
+      start: 1721.06,
+      end: 1723.06,
+      text: "何の一つぐらい言う練習しとけよ",
+      words: [
+        { start: 1721.06, end: 1721.3, text: "何", probability: 0.32275390625 },
+        { start: 1721.3, end: 1721.48, text: "の", probability: 0.96337890625 },
+        { start: 1721.48, end: 1721.6, text: "一", probability: 0.794921875 },
+        { start: 1721.6, end: 1721.8, text: "つ", probability: 0.99658203125 },
+        { start: 1721.8, end: 1721.88, text: "ぐ", probability: 0.39990234375 },
+        { start: 1721.88, end: 1722, text: "らい", probability: 0.95361328125 },
+        { start: 1722, end: 1722.1, text: "言", probability: 0.95263671875 },
+        { start: 1722.1, end: 1722.16, text: "う", probability: 0.98583984375 },
+        { start: 1722.16, end: 1722.28, text: "練", probability: 0.9443359375 },
+        { start: 1722.28, end: 1722.58, text: "習", probability: 1 },
+        { start: 1722.58, end: 1722.64, text: "し", probability: 0.919921875 },
+        { start: 1722.64, end: 1722.8, text: "と", probability: 0.9853515625 },
+        { start: 1722.8, end: 1722.92, text: "け", probability: 0.99560546875 },
+        { start: 1722.92, end: 1723.06, text: "よ", probability: 0.93701171875 }
+      ],
+      asrQuality: {
+        compressionRatio: 0.8035714285714286,
+        noSpeechProbability: 0.52490234375,
+        avgLogProbability: -0.36534926470588236
+      }
+    },
+    {
+      start: 402.16,
+      end: 403.12,
+      text: "一つも言えないのが",
+      words: [
+        { start: 402.16, end: 402.26, text: "一", probability: 0.13916015625 },
+        { start: 402.26, end: 402.48, text: "つ", probability: 0.98681640625 },
+        { start: 402.48, end: 402.54, text: "も", probability: 0.88037109375 },
+        { start: 402.54, end: 402.68, text: "言", probability: 0.96044921875 },
+        { start: 402.68, end: 402.78, text: "え", probability: 0.99560546875 },
+        { start: 402.78, end: 402.92, text: "ない", probability: 0.90625 },
+        { start: 402.92, end: 403.04, text: "の", probability: 0.8837890625 },
+        { start: 403.04, end: 403.12, text: "が", probability: 0.323486328125 }
+      ],
+      asrQuality: {
+        compressionRatio: 0.8727272727272727,
+        noSpeechProbability: 0.71240234375,
+        avgLogProbability: -0.36075367647058826
+      }
+    },
+    {
+      start: 405.68,
+      end: 406.84,
+      text: "売り物なんだよ",
+      words: [
+        { start: 405.68, end: 406.2, text: "売", probability: 0.7354736328125 },
+        { start: 406.2, end: 406.28, text: "り", probability: 0.8212890625 },
+        { start: 406.28, end: 406.4, text: "物", probability: 0.94091796875 },
+        { start: 406.4, end: 406.64, text: "なんだ", probability: 0.5703125 },
+        { start: 406.64, end: 406.84, text: "よ", probability: 0.94873046875 }
+      ],
+      asrQuality: {
+        compressionRatio: 0.8727272727272727,
+        noSpeechProbability: 0.71240234375,
+        avgLogProbability: -0.36075367647058826
+      }
+    },
+    {
+      start: 218.8,
+      end: 219.66,
+      text: "お聞きいただこう",
+      words: [
+        { start: 218.8, end: 218.94, text: "お", probability: 0.240234375 },
+        { start: 218.94, end: 219.14, text: "聞き", probability: 0.65234375 },
+        { start: 219.14, end: 219.32, text: "いただ", probability: 0.818359375 },
+        { start: 219.32, end: 219.48, text: "こ", probability: 0.59765625 },
+        { start: 219.48, end: 219.66, text: "う", probability: 0.9140625 }
+      ],
+      asrQuality: {
+        compressionRatio: 0.7272727272727273,
+        noSpeechProbability: 0.541015625,
+        avgLogProbability: -0.5449218824505806
+      }
+    },
+    {
+      start: 1978.04,
+      end: 1981.06,
+      text: "や す み な さい",
+      words: [
+        { start: 1978.04, end: 1978.7, text: "や", probability: 0.2005615234375 },
+        { start: 1978.7, end: 1978.76, text: "す", probability: 0.9345703125 },
+        { start: 1978.76, end: 1980.58, text: "み", probability: 0.9990234375 },
+        { start: 1980.58, end: 1980.86, text: "な", probability: 0.974609375 },
+        { start: 1980.86, end: 1981.06, text: "さい", probability: 0.99658203125 }
+      ],
+      asrQuality: {
+        compressionRatio: 0.7,
+        noSpeechProbability: 0.6259765625,
+        avgLogProbability: -0.5959201388888888
+      }
+    },
+    {
+      start: 1679.4,
+      end: 1679.66,
+      text: "さい",
+      words: [{ start: 1679.4, end: 1679.66, text: "さい", probability: 0.998046875 }],
+      asrQuality: {
+        compressionRatio: 0.7,
+        noSpeechProbability: 0.54150390625,
+        avgLogProbability: -0.4791666666666667
+      }
+    }
+  ]);
+  assert.deepEqual(
+    recovered.map(segment => segment.text),
+    ["何の一つぐらい言う練習しとけよ", "一つも言えないのが", "売り物なんだよ"],
+    "严格 VAD 补洞应保留有密集词级证据的边缘语音和短拆分片段，并过滤高 no-speech 的碎片化字串"
+  );
+}
 
 {
   assert.equal(
@@ -481,11 +603,11 @@ vm.runInContext(source, context, { filename: "service-worker.js" });
     ["timestamp_granularities[]", "segment"],
     ["timestamp_granularities[]", "word"],
     ["vad_filter", "true"],
-    ["threshold", "0.5"],
+    ["threshold", "0.15"],
     ["min_speech_duration_ms", "0"],
     ["max_speech_duration_s", "30"],
     ["min_silence_duration_ms", "160"],
-    ["speech_pad_ms", "400"],
+    ["speech_pad_ms", "800"],
     ["word_timestamps", "true"],
     ["condition_on_previous_text", "false"],
     ["without_timestamps", "false"],
@@ -514,7 +636,7 @@ vm.runInContext(source, context, { filename: "service-worker.js" });
     ["timestamp_granularities[]", "segment"],
     ["timestamp_granularities[]", "word"],
     ["vad_filter", "true"],
-    ["vad_parameters", "{\"threshold\":0.5,\"min_speech_duration_ms\":0,\"max_speech_duration_s\":30,\"min_silence_duration_ms\":160,\"speech_pad_ms\":400}"],
+    ["vad_parameters", "{\"threshold\":0.15,\"min_speech_duration_ms\":0,\"max_speech_duration_s\":30,\"min_silence_duration_ms\":160,\"speech_pad_ms\":800}"],
     ["language", "ja"]
   ]));
   assert.equal(
@@ -536,7 +658,7 @@ vm.runInContext(source, context, { filename: "service-worker.js" });
       { start: 0, end: 29.8 },
       { start: 29.7, end: 40 }
     ], { start: 0, end: 60 }),
-    "0,29.4,29.7,40"
+    "0,29,29.7,40"
   );
   assert.equal(
     context.browserAsrClipTimestampsValue([
@@ -939,6 +1061,27 @@ vm.runInContext(source, context, { filename: "service-worker.js" });
   assert.equal(mediumWordGapSegments.length, 1);
   assert.equal(mediumWordGapSegments[0].text, "少し待って");
 
+  const shortSegmentWithLargeWordGapSegments = context.normalizeAsrSegments({
+    segments: [{
+      start: 6.77,
+      end: 26.15,
+      text: "これしかないです。いません。",
+      words: [
+        { word: "これ", start: 6.77, end: 7.15 },
+        { word: "しか", start: 7.15, end: 7.33 },
+        { word: "ない", start: 7.33, end: 7.57 },
+        { word: "です。", start: 7.57, end: 7.87 },
+        { word: "い", start: 8.01, end: 8.35 },
+        { word: "ません。", start: 25.84, end: 26.15 }
+      ]
+    }]
+  }, 0, 30);
+  assert.equal(JSON.stringify(shortSegmentWithLargeWordGapSegments.map(segment => segment.text)), JSON.stringify(["これ しか ない です。 い", "ません。"]));
+  assert.equal(shortSegmentWithLargeWordGapSegments[0].start, 6.77);
+  assert.equal(shortSegmentWithLargeWordGapSegments[0].end, 8.35);
+  assert.equal(shortSegmentWithLargeWordGapSegments[1].start, 25.84);
+  assert.equal(shortSegmentWithLargeWordGapSegments[1].end, 26.15);
+
   const matureShortWordGapSegments = context.normalizeAsrSegments({
     segments: [{
       start: 0,
@@ -956,51 +1099,31 @@ vm.runInContext(source, context, { filename: "service-worker.js" });
   assert.equal(matureShortWordGapSegments[1].start, 12.00);
   assert.equal(matureShortWordGapSegments[2].start, 34.00);
 
-  assert.equal(JSON.stringify(
-    context.normalizeAsrSegments({
-      segments: [{
-        start: 11.76,
-        end: 12.2,
-        text: "ご視聴ありがとうございました",
-        no_speech_prob: 0.66,
-        avg_logprob: -0.98
-      }]
-    }, 334, 362, { disableCustomQualityFilters: true })
-  ),
-    JSON.stringify([])
-  );
-  assert.equal(JSON.stringify(
-    context.normalizeAsrSegments({
-      segments: [{
-        start: 0,
-        end: 5.64,
-        text: "おやすみなさい",
-        no_speech_prob: 0.26,
-        words: [
-          { word: "お", start: 0, end: 0.08, probability: 0.06 },
-          { word: "や", start: 0.08, end: 1.34, probability: 0.17 },
-          { word: "す", start: 1.34, end: 2.58, probability: 0.84 },
-          { word: "み", start: 2.58, end: 5.16, probability: 0.99 }
-        ]
-      }]
-    }, 1594, 1622, { disableCustomQualityFilters: true })
-  ),
-    JSON.stringify([])
-  );
+  const noSpeechProbabilityAloneSegments = context.normalizeAsrSegments({
+    segments: [{
+      start: 11.76,
+      end: 12.2,
+      text: "measured boundary utterance",
+      no_speech_prob: 0.66,
+      avg_logprob: -0.98
+    }]
+  }, 334, 362, { disableCustomQualityFilters: true });
+  assert.equal(noSpeechProbabilityAloneSegments.length, 1);
+  assert.equal(noSpeechProbabilityAloneSegments[0].text, "measured boundary utterance");
   assert.equal(
     context.normalizeAsrSegments({
       segments: [{
         start: 0,
         end: 1.2,
-        text: "おやすみなさい",
+        text: "short real phrase",
         no_speech_prob: 0.2,
         words: [
-          { word: "おやすみ", start: 0, end: 0.7, probability: 0.9 },
-          { word: "なさい", start: 0.7, end: 1.2, probability: 0.9 }
+          { word: "short", start: 0, end: 0.7, probability: 0.9 },
+          { word: "phrase", start: 0.7, end: 1.2, probability: 0.9 }
         ]
       }]
     }, 0, 30, { disableCustomQualityFilters: true })[0].text,
-    "おやすみなさい"
+    "short real phrase"
   );
 
   assert.throws(() => context.normalizeAsrSegments({
@@ -1061,7 +1184,7 @@ vm.runInContext(source, context, { filename: "service-worker.js" });
   ]);
 
   assert.equal(context.filterAsrSegmentsBySpeechActivity([
-    { start: 0, end: 29.98, text: "由 Amara.org 社群提供的字幕" }
+    { start: 0, end: 29.98, text: "generic nonspeech caption" }
   ], { speechIntervals: [] }).length, 0);
   assert.deepEqual(
     context.filterAsrSegmentsBySpeechActivity([
@@ -1085,19 +1208,13 @@ vm.runInContext(source, context, { filename: "service-worker.js" });
   );
   assert.equal(JSON.stringify(
     context.filterAsrSegmentsByHallucinationGuard(
-      [{ start: 20, end: 30, text: "ご視聴ありがとうございました" }],
-      { speechIntervals: [{ start: 20.1, end: 20.25 }] }
-    )
-  ), JSON.stringify([]));
-  assert.equal(JSON.stringify(
-    context.filterAsrSegmentsByHallucinationGuard(
       [{
         start: 20,
         end: 27,
-        text: "赤い青い赤い青い",
+        text: "alpha beta alpha beta",
         words: [
-          { text: "赤い", start: 20, end: 22.8, probability: 0.08 },
-          { text: "青い", start: 22.8, end: 25.4, probability: 0.09 }
+          { text: "alpha", start: 20, end: 22.8, probability: 0.08 },
+          { text: "beta", start: 22.8, end: 25.4, probability: 0.09 }
         ]
       }],
       { speechIntervals: [{ start: 0, end: 1 }, { start: 50, end: 51 }] }
@@ -1105,32 +1222,42 @@ vm.runInContext(source, context, { filename: "service-worker.js" });
   ), JSON.stringify([]));
   assert.equal(JSON.stringify(
     context.filterAsrSegmentsByHallucinationGuard(
-      [{ start: 0, end: 1.2, text: "おやすみなさい" }],
+      [{ start: 0, end: 1.2, text: "short real phrase" }],
       { speechIntervals: [{ start: 0.05, end: 1.15 }] }
     ).map(segment => segment.text)
-  ), JSON.stringify(["おやすみなさい"]));
+  ), JSON.stringify(["short real phrase"]));
   assert.equal(JSON.stringify(
     context.filterAsrSuspiciousRepeatedRuns([
-      { start: 0, end: 1.3, text: "ご視聴ありがとうございました" },
-      { start: 1.6, end: 2.9, text: "ご視聴ありがとうございました" }
+      { start: 0, end: 1.3, text: "repeated ordinary phrase" },
+      { start: 1.6, end: 2.9, text: "repeated ordinary phrase" }
     ]).map(segment => segment.text)
-  ), JSON.stringify([]));
+  ), JSON.stringify(["repeated ordinary phrase", "repeated ordinary phrase"]));
   assert.equal(JSON.stringify(
     context.filterAsrSuspiciousRepeatedRuns([
-      { start: 0, end: 1.1, text: "正常な発話" },
-      { start: 1.3, end: 2.4, text: "正常な発話" }
+      { start: 0, end: 1.1, text: "normal utterance" },
+      { start: 1.3, end: 2.4, text: "normal utterance" }
     ]).map(segment => segment.text)
-  ), JSON.stringify(["正常な発話", "正常な発話"]));
+  ), JSON.stringify(["normal utterance", "normal utterance"]));
   assert.equal(JSON.stringify(
     context.filterAsrSegmentsByHallucinationGuard([
-      { start: 0, end: 0.6, text: "あー" },
-      { start: 1.1, end: 1.7, text: "あー" },
-      { start: 2.2, end: 2.8, text: "あー" },
-      { start: 4.0, end: 5.2, text: "あー、 あー" },
-      { start: 7.0, end: 8.8, text: "あー" },
-      { start: 12.0, end: 14.5, text: "あー" }
+      { start: 0, end: 0.6, text: "hm" },
+      { start: 1.1, end: 1.7, text: "hm" },
+      { start: 2.2, end: 2.8, text: "hm" },
+      { start: 4.0, end: 5.2, text: "hm hm" },
+      { start: 7.0, end: 8.8, text: "hm" },
+      { start: 12.0, end: 14.5, text: "hm" }
     ], { speechIntervals: [{ start: 0, end: 15 }] }).map(segment => segment.text)
   ), JSON.stringify([]));
+  assert.equal(JSON.stringify(
+    context.filterAsrSegmentsByHallucinationGuard([
+      { start: 0, end: 0.6, text: "no" },
+      { start: 1.1, end: 1.7, text: "no" },
+      { start: 2.2, end: 2.8, text: "no" },
+      { start: 4.0, end: 5.2, text: "no" },
+      { start: 7.0, end: 8.8, text: "no" },
+      { start: 12.0, end: 14.5, text: "no" }
+    ], { speechIntervals: [{ start: 0, end: 15 }] }).map(segment => segment.text)
+  ), JSON.stringify(["no", "no", "no", "no", "no", "no"]));
   assert.equal(JSON.stringify(
     context.filterAsrSegmentsByHallucinationGuard([
       { start: 0, end: 1, text: "、" },
@@ -1146,6 +1273,259 @@ vm.runInContext(source, context, { filename: "service-worker.js" });
       { start: 1.8, end: 2.8, text: "行くよ" }
     ], { speechIntervals: [{ start: 0, end: 3 }] }).map(segment => segment.text)
   ), JSON.stringify(["待って", "うん", "行くよ"]));
+  assert.equal(JSON.stringify(
+    context.filterAsrSegmentsByHallucinationGuard([
+      { start: 100, end: 101.6, text: "早送り" },
+      { start: 102, end: 103.6, text: "早送り" },
+      { start: 104, end: 105.6, text: "早送り" },
+      { start: 106, end: 107.6, text: "早送り" }
+    ], {}).map(segment => segment.text)
+  ), JSON.stringify([]));
+  assert.equal(JSON.stringify(
+    context.filterAsrSegmentsByHallucinationGuard([
+      {
+        start: 400,
+        end: 429.8,
+        text: "stretched repeated phrase",
+        words: [
+          { text: "stretched", start: 400, end: 400.4, probability: 0.05 },
+          { text: "repeated", start: 400.4, end: 423.2, probability: 0.14 },
+          { text: "phrase", start: 423.2, end: 429.8, probability: 0.92 }
+        ],
+        rawSegment: { no_speech_prob: 0.72, avg_logprob: -0.45 }
+      }
+    ], { speechIntervals: [], speechIntervalsReliable: false }).map(segment => segment.text)
+  ), JSON.stringify([]));
+  assert.equal(JSON.stringify(
+    context.filterAsrSegmentsByHallucinationGuard([
+      {
+        start: 400,
+        end: 402.2,
+        text: "quiet but real phrase",
+        words: [
+          { text: "quiet", start: 400, end: 400.6, probability: 0.82 },
+          { text: "but", start: 400.7, end: 401.0, probability: 0.76 },
+          { text: "real", start: 401.1, end: 401.6, probability: 0.85 },
+          { text: "phrase", start: 401.65, end: 402.2, probability: 0.8 }
+        ],
+        rawSegment: { no_speech_prob: 0.64, avg_logprob: -0.45 }
+      }
+    ], { speechIntervals: [], speechIntervalsReliable: false }).map(segment => segment.text)
+  ), JSON.stringify(["quiet but real phrase"]));
+  assert.equal(JSON.stringify(
+    context.filterAsrSegmentsByHallucinationGuard([
+      {
+        start: 700,
+        end: 701.2,
+        text: "generic closing sentence",
+        words: [
+          { text: "generic", start: 700, end: 700.7, probability: 0.02 },
+          { text: "closing", start: 700.7, end: 701.2, probability: 0.74 }
+        ]
+      },
+      {
+        start: 710,
+        end: 711.2,
+        text: "plausible short reply",
+        words: [
+          { text: "plausible", start: 710, end: 710.45, probability: 0.72 },
+          { text: "short", start: 710.5, end: 710.8, probability: 0.82 },
+          { text: "reply", start: 710.82, end: 711.2, probability: 0.79 }
+        ]
+      }
+    ], { speechIntervals: [] }).map(segment => segment.text)
+  ), JSON.stringify(["plausible short reply"]));
+  assert.equal(JSON.stringify(
+    context.filterAsrSegmentsByHallucinationGuard([
+      {
+        start: 900,
+        end: 904.2,
+        text: "outside weak evidence",
+        words: [
+          { text: "outside", start: 900, end: 901.4, probability: 0.06 },
+          { text: "weak", start: 901.4, end: 902.8, probability: 0.16 },
+          { text: "evidence", start: 902.8, end: 904.2, probability: 0.88 }
+        ]
+      },
+      {
+        start: 920,
+        end: 921.2,
+        text: "inside strong evidence",
+        words: [
+          { text: "inside", start: 920, end: 920.4, probability: 0.72 },
+          { text: "strong", start: 920.45, end: 920.82, probability: 0.84 },
+          { text: "evidence", start: 920.84, end: 921.2, probability: 0.8 }
+        ]
+      }
+    ], { speechIntervals: [{ start: 919.8, end: 921.4 }] }).map(segment => segment.text)
+  ), JSON.stringify(["inside strong evidence"]));
+  assert.equal(JSON.stringify(
+    context.filterAsrDistributedRepeatedRuns([
+      { start: 0, end: 1.4, text: "ordinary phrase" },
+      { start: 10, end: 11.4, text: "ordinary phrase" },
+      {
+        start: 100,
+        end: 129,
+        text: "distributed hallucination",
+        words: [
+          { text: "distributed", start: 100, end: 100.4, probability: 0.05 },
+          { text: "hallucination", start: 100.4, end: 129, probability: 0.9 }
+        ],
+        rawSegment: { no_speech_prob: 0.7 }
+      },
+      {
+        start: 200,
+        end: 229,
+        text: "distributed hallucination",
+        words: [
+          { text: "distributed", start: 200, end: 200.4, probability: 0.05 },
+          { text: "hallucination", start: 200.4, end: 229, probability: 0.9 }
+        ],
+        rawSegment: { no_speech_prob: 0.7 }
+      },
+      { start: 300, end: 301, text: "distributed hallucination", rawSegment: { no_speech_prob: 0.7 } },
+      {
+        start: 400,
+        end: 429,
+        text: "distributed hallucination",
+        words: [
+          { text: "distributed", start: 400, end: 400.4, probability: 0.05 },
+          { text: "hallucination", start: 400.4, end: 429, probability: 0.9 }
+        ],
+        rawSegment: { no_speech_prob: 0.7 }
+      }
+    ]).map(segment => segment.text)
+  ), JSON.stringify(["ordinary phrase", "ordinary phrase"]));
+  assert.equal(JSON.stringify(
+    context.filterAsrDistributedRepeatedRuns([
+      {
+        start: 0,
+        end: 2,
+        text: "weak repeated phrase",
+        words: [
+          { text: "weak", start: 0, end: 0.5, probability: 0.05 },
+          { text: "repeated", start: 0.5, end: 1, probability: 0.92 }
+        ]
+      },
+      {
+        start: 180,
+        end: 182,
+        text: "weak repeated phrase",
+        words: [
+          { text: "weak", start: 180, end: 180.5, probability: 0.04 },
+          { text: "repeated", start: 180.5, end: 181, probability: 0.91 }
+        ]
+      },
+      {
+        start: 0,
+        end: 1.1,
+        text: "strong repeated phrase",
+        words: [
+          { text: "strong", start: 0, end: 0.4, probability: 0.82 },
+          { text: "repeated", start: 0.45, end: 0.8, probability: 0.8 },
+          { text: "phrase", start: 0.82, end: 1.1, probability: 0.78 }
+        ]
+      },
+      {
+        start: 180,
+        end: 181.1,
+        text: "strong repeated phrase",
+        words: [
+          { text: "strong", start: 180, end: 180.4, probability: 0.84 },
+          { text: "repeated", start: 180.45, end: 180.8, probability: 0.81 },
+          { text: "phrase", start: 180.82, end: 181.1, probability: 0.79 }
+        ]
+      }
+    ]).map(segment => segment.text)
+  ), JSON.stringify(["strong repeated phrase", "strong repeated phrase"]));
+  assert.equal(
+    context.filterAsrDistributedRepeatedRuns([
+      {
+        start: 0,
+        end: 2,
+        text: "medium repeated phrase",
+        words: [
+          { text: "medium", start: 0, end: 0.4, probability: 0.04 },
+          { text: "repeated", start: 0.4, end: 1.2, probability: 0.82 },
+          { text: "phrase", start: 1.2, end: 2, probability: 0.85 }
+        ]
+      },
+      {
+        start: 130,
+        end: 131.2,
+        text: "medium repeated phrase",
+        words: [
+          { text: "medium", start: 130, end: 130.3, probability: 0.82 },
+          { text: "repeated", start: 130.35, end: 130.8, probability: 0.76 },
+          { text: "phrase", start: 130.82, end: 131.2, probability: 0.8 }
+        ]
+      },
+      {
+        start: 260,
+        end: 261.2,
+        text: "medium repeated phrase",
+        words: [
+          { text: "medium", start: 260, end: 260.3, probability: 0.84 },
+          { text: "repeated", start: 260.35, end: 260.8, probability: 0.78 },
+          { text: "phrase", start: 260.82, end: 261.2, probability: 0.82 }
+        ]
+      },
+      {
+        start: 390,
+        end: 391.2,
+        text: "medium repeated phrase",
+        words: [
+          { text: "medium", start: 390, end: 390.3, probability: 0.8 },
+          { text: "repeated", start: 390.35, end: 390.8, probability: 0.78 },
+          { text: "phrase", start: 390.82, end: 391.2, probability: 0.82 }
+        ]
+      },
+      {
+        start: 650,
+        end: 652,
+        text: "medium repeated phrase",
+        words: [
+          { text: "medium", start: 650, end: 650.35, probability: 0.03 },
+          { text: "repeated", start: 650.35, end: 651.1, probability: 0.84 },
+          { text: "phrase", start: 651.1, end: 652, probability: 0.86 }
+        ]
+      },
+      {
+        start: 960,
+        end: 961.2,
+        text: "medium repeated phrase",
+        words: [
+          { text: "medium", start: 960, end: 960.3, probability: 0.82 },
+          { text: "repeated", start: 960.35, end: 960.8, probability: 0.79 },
+          { text: "phrase", start: 960.82, end: 961.2, probability: 0.8 }
+        ]
+      }
+    ]).length,
+    0
+  );
+  assert.equal(
+    context.filterAsrDistributedRepeatedRuns(Array.from({ length: 8 }, (_, index) => ({
+      start: index * 70,
+      end: index * 70 + 1,
+      text: "high count repeated phrase"
+    }))).length,
+    0
+  );
+  assert.equal(
+    context.filterAsrDistributedRepeatedRuns(Array.from({ length: 8 }, (_, index) => ({
+      start: index * 2,
+      end: index * 2 + 1,
+      text: "local repeated phrase"
+    }))).length,
+    8
+  );
+  assert.equal(JSON.stringify(
+    context.filterAsrSegmentsByHallucinationGuard([
+      { start: 100, end: 101.2, text: "早送り" },
+      { start: 102, end: 103.2, text: "早送り" },
+      { start: 104, end: 105.2, text: "次へ" }
+    ], {}).map(segment => segment.text)
+  ), JSON.stringify(["早送り", "早送り", "次へ"]));
   assert.equal(context.shouldSkipBrowserAsrChunk({ speechIntervals: [] }), true);
   assert.equal(context.shouldSkipBrowserAsrChunk({ speechIntervals: [], speechIntervalsReliable: false }), false);
   assert.equal(context.shouldSkipBrowserAsrChunk({ speechIntervals: [{ start: 10, end: 16.7 }] }), false);
@@ -1182,6 +1562,32 @@ vm.runInContext(source, context, { filename: "service-worker.js" });
   ], { speechIntervals: [{ start: 285.856, end: 287.2 }] });
   assert.equal(shortJapaneseWordPreserved.length, 1);
   assert.equal(shortJapaneseWordPreserved[0].text, "面白いよ");
+
+  const restoredVadIslandSegments = context.filterAsrSegmentsBySpeechActivity([
+    {
+      start: 6.77,
+      end: 26.15,
+      text: "これしかないです。いません。",
+      words: [
+        { text: "これ", start: 6.77, end: 7.15, probability: 0.55 },
+        { text: "しか", start: 7.15, end: 7.33, probability: 0.97 },
+        { text: "ない", start: 7.33, end: 7.57, probability: 0.94 },
+        { text: "です。", start: 7.57, end: 7.87, probability: 0.76 },
+        { text: "い", start: 8.01, end: 8.35, probability: 0.35 },
+        { text: "ません。", start: 25.84, end: 26.15, probability: 0.89 }
+      ]
+    }
+  ], {
+    speechIntervals: [
+      { start: 6.768, end: 8.4 },
+      { start: 25.84, end: 26.704 }
+    ]
+  });
+  assert.equal(JSON.stringify(restoredVadIslandSegments.map(segment => segment.text)), JSON.stringify(["これ しか ない です。 い", "ません。"]));
+  assert.equal(restoredVadIslandSegments[0].start, 6.77);
+  assert.equal(restoredVadIslandSegments[0].end, 8.35);
+  assert.equal(restoredVadIslandSegments[1].start, 25.84);
+  assert.equal(restoredVadIslandSegments[1].end, 26.15);
 }
 
 {
@@ -2202,7 +2608,7 @@ vm.runInContext(source, context, { filename: "service-worker.js" });
       ...Array.from({ length: 5 }, (_, index) => ({
         start: 2 + index * 2,
         end: 4 + index * 2,
-        text: "何か漏れてきちゃってますよ"
+        text: "repeated drift phrase"
       })),
       { start: 14, end: 16, text: "正常第二句" }
     ]
@@ -2213,7 +2619,7 @@ vm.runInContext(source, context, { filename: "service-worker.js" });
     segments: Array.from({ length: 15 }, (_, index) => ({
       start: 874.83 + index * 0.8,
       end: 875.43 + index * 0.8,
-      text: "笑い声",
+      text: "compressed nonspeech label",
       compression_ratio: 9.85,
       no_speech_prob: 0.2
     }))
@@ -2224,7 +2630,7 @@ vm.runInContext(source, context, { filename: "service-worker.js" });
     segments: [{
       start: 2108,
       end: 2124.25,
-      text: "うううううううううううううううううううううううううううう"
+      text: "hmhmhmhmhmhmhmhmhmhmhmhmhmhm"
     }]
   }, 2108, 2138);
   assert.equal(longSingleVocalization.length, 0);
@@ -2233,7 +2639,7 @@ vm.runInContext(source, context, { filename: "service-worker.js" });
     segments: [{
       start: 1490,
       end: 1518.58,
-      text: "お腹が空いたら、お腹が空いたら、お腹が空いたら、お腹が空いたら、お腹が空いたら、"
+      text: "drift phrase, drift phrase, drift phrase, drift phrase, drift phrase"
     }]
   }, 1490, 1520);
   assert.equal(longSingleRepeatedPhrase.length, 0);
@@ -2247,6 +2653,94 @@ vm.runInContext(source, context, { filename: "service-worker.js" });
   }, 270, 300);
   assert.equal(shortSpokenJapanese.length, 1);
   assert.equal(shortSpokenJapanese[0].text, "面白いよ");
+}
+
+{
+  const emptyVadCompressedDrift = context.filterAsrSegmentsByHallucinationGuard([
+    {
+      start: 893,
+      end: 895.98,
+      text: "generic compressed drift line",
+      words: [
+        { start: 893.0, end: 893.4, text: "generic", probability: 0.9 },
+        { start: 893.4, end: 893.8, text: "compressed", probability: 0.9 },
+        { start: 893.8, end: 894.4, text: "drift", probability: 0.9 },
+        { start: 894.4, end: 895.98, text: "line", probability: 0.9 }
+      ],
+      rawSegment: {
+        compression_ratio: 6.24,
+        no_speech_prob: 0.42,
+        avg_logprob: -0.29
+      }
+    }
+  ], { speechIntervals: [], speechIntervalsReliable: true });
+  assert.equal(emptyVadCompressedDrift.length, 0);
+
+  const emptyVadOrdinarySpeech = context.filterAsrSegmentsByHallucinationGuard([
+    {
+      start: 120,
+      end: 122.4,
+      text: "ordinary sentence kept despite missed vad",
+      words: [
+        { start: 120.0, end: 120.5, text: "ordinary", probability: 0.9 },
+        { start: 120.5, end: 121.0, text: "sentence", probability: 0.9 },
+        { start: 121.0, end: 121.6, text: "kept", probability: 0.9 },
+        { start: 121.6, end: 122.0, text: "despite", probability: 0.9 },
+        { start: 122.0, end: 122.2, text: "missed", probability: 0.9 },
+        { start: 122.2, end: 122.4, text: "vad", probability: 0.9 }
+      ],
+      rawSegment: {
+        compression_ratio: 1.4,
+        no_speech_prob: 0.08,
+        avg_logprob: -0.2
+      }
+    }
+  ], { speechIntervals: [], speechIntervalsReliable: true });
+  assert.equal(emptyVadOrdinarySpeech.length, 1);
+
+  const overlappedSpeechKeepsQualityOutlier = context.filterAsrSegmentsByHallucinationGuard([
+    {
+      start: 240,
+      end: 242.5,
+      text: "quality outlier with speech evidence",
+      words: [
+        { start: 240.0, end: 240.5, text: "quality", probability: 0.9 },
+        { start: 240.5, end: 241.2, text: "outlier", probability: 0.9 },
+        { start: 241.2, end: 241.8, text: "with", probability: 0.9 },
+        { start: 241.8, end: 242.2, text: "speech", probability: 0.9 },
+        { start: 242.2, end: 242.5, text: "evidence", probability: 0.9 }
+      ],
+      rawSegment: {
+        compression_ratio: 6.24,
+        no_speech_prob: 0.42,
+        avg_logprob: -0.29
+      }
+    }
+  ], { speechIntervals: [{ start: 239.9, end: 242.6 }], speechIntervalsReliable: true });
+  assert.equal(overlappedSpeechKeepsQualityOutlier.length, 1);
+
+  const normalizedEmptyVadCompressedDrift = context.normalizeAsrSegments({
+    segments: [{
+      start: 19,
+      end: 21.98,
+      text: "normalized compressed drift line",
+      compression_ratio: 6.24,
+      no_speech_prob: 0.42,
+      avg_logprob: -0.29,
+      words: [
+        { start: 19.0, end: 19.4, word: "normalized", probability: 0.9 },
+        { start: 19.4, end: 19.8, word: "compressed", probability: 0.9 },
+        { start: 19.8, end: 20.4, word: "drift", probability: 0.9 },
+        { start: 20.4, end: 21.98, word: "line", probability: 0.9 }
+      ]
+    }]
+  }, 874, 902);
+  assert.equal(normalizedEmptyVadCompressedDrift.length, 1);
+  const normalizedEmptyVadFiltered = context.filterAsrSegmentsByHallucinationGuard(
+    normalizedEmptyVadCompressedDrift,
+    { speechIntervals: [], speechIntervalsReliable: true }
+  );
+  assert.equal(normalizedEmptyVadFiltered.length, 0);
 }
 
 function seedPage(tabId, { title = "Video", url = "https://example.test/watch/1", duration = 600 } = {}) {
@@ -2779,6 +3273,9 @@ function add(tabId, candidate) {
 
 {
   const cache = await caches.open("fuguang-web-ffmpeg-audio");
+  for (const key of await cache.keys()) {
+    await cache.delete(key.url);
+  }
   const jobId = "browser-cache-clear-test";
   const knownUrl = "https://fuguang.local/__fuguang_audio_cache/browser-cache-clear-test/logical-001.mp3";
   const leftoverInternalUrl = "https://fuguang.local/__fuguang_audio_cache/browser-cache-clear-test-0/internal-001.mp3";
@@ -2803,6 +3300,51 @@ function add(tabId, candidate) {
   assert.equal(await cache.match(leftoverInternalUrl), undefined);
   assert.equal(await cache.match(leftoverConcatUrl), undefined);
   assert.notEqual(await cache.match(unrelatedUrl), undefined);
+}
+
+{
+  const cache = await caches.open("fuguang-web-ffmpeg-audio");
+  for (const key of await cache.keys()) {
+    await cache.delete(key.url);
+  }
+  const now = Date.now();
+  const oldUrl = "https://fuguang.local/__fuguang_audio_cache/old-job/1000000000000-old.mp3";
+  const oldestUrl = "https://fuguang.local/__fuguang_audio_cache/space-job/1000000001000-oldest.mp3";
+  const middleUrl = "https://fuguang.local/__fuguang_audio_cache/space-job/1000000002000-middle.mp3";
+  const newestUrl = "https://fuguang.local/__fuguang_audio_cache/space-job/1000000003000-newest.mp3";
+  const protectedUrl = "https://fuguang.local/__fuguang_audio_cache/running-job/1000000004000-running.mp3";
+  await cache.put(oldUrl, new FakeResponse(new Uint8Array([1]).buffer, {
+    headers: { "X-Fuguang-Cached-At": String(now - 120_000), "X-Fuguang-Bytes": "1" }
+  }));
+  await cache.put(oldestUrl, new FakeResponse(new Uint8Array([2]).buffer, {
+    headers: { "X-Fuguang-Cached-At": String(now - 3_000), "X-Fuguang-Bytes": "15" }
+  }));
+  await cache.put(middleUrl, new FakeResponse(new Uint8Array([3]).buffer, {
+    headers: { "X-Fuguang-Cached-At": String(now - 2_000), "X-Fuguang-Bytes": "15" }
+  }));
+  await cache.put(newestUrl, new FakeResponse(new Uint8Array([4]).buffer, {
+    headers: { "X-Fuguang-Cached-At": String(now - 1_000), "X-Fuguang-Bytes": "15" }
+  }));
+  await cache.put(protectedUrl, new FakeResponse(new Uint8Array([5]).buffer, {
+    headers: { "X-Fuguang-Cached-At": String(now - 120_000), "X-Fuguang-Bytes": "999" }
+  }));
+  vm.runInContext(`
+    browserPreloadJobs.set("running-job", {
+      job: { id: "running-job", status: "running", stage: "asr" },
+      cancelled: false
+    });
+  `, context);
+  try {
+    const result = await context.pruneBrowserAudioCache({ maxAgeMs: 60_000, maxBytes: 30 });
+    assert.equal(result.removed, 2);
+    assert.equal(await cache.match(oldUrl), undefined);
+    assert.equal(await cache.match(oldestUrl), undefined);
+    assert.notEqual(await cache.match(middleUrl), undefined);
+    assert.notEqual(await cache.match(newestUrl), undefined);
+    assert.notEqual(await cache.match(protectedUrl), undefined);
+  } finally {
+    vm.runInContext("browserPreloadJobs.delete('running-job')", context);
+  }
 }
 
 {
@@ -4331,12 +4873,12 @@ function add(tabId, candidate) {
     }
   );
   assert.equal(clientVadSegments.length, 1);
-  assert.equal(postedFields.some(([name, value]) => name === "vad_filter" && value === "true"), true);
+  assert.equal(postedFields.some(([name]) => name === "vad_filter"), false);
   assert.equal(postedFields.some(([name, value]) => name === "word_timestamps" && value === "true"), true);
   assert.equal(postedFields.some(([name, value]) => name === "condition_on_previous_text" && value === "false"), true);
   assert.equal(postedFields.some(([name, value]) => name === "without_timestamps" && value === "false"), true);
   assert.equal(postedFields.some(([name, value]) => name === "temperature" && value === "0"), true);
-  assert.equal(postedFields.some(([name, value]) => name === "vad_parameters" && value === "{\"threshold\":0.5,\"min_speech_duration_ms\":0,\"max_speech_duration_s\":30,\"min_silence_duration_ms\":160,\"speech_pad_ms\":400}"), true);
+  assert.equal(postedFields.some(([name]) => name === "vad_parameters"), false);
   assert.equal(postedFields.some(([name]) => name === "threshold"), false);
   assert.equal(postedFields.some(([name]) => name === "min_speech_duration_ms"), false);
   assert.equal(postedFields.some(([name]) => name === "max_speech_duration_s"), false);
@@ -4429,7 +4971,7 @@ function add(tabId, candidate) {
   assert.equal(Array.isArray(emptyVadSegments), true);
   assert.equal(emptyVadSegments.length, 1);
   assert.equal(emptyVadSegments[0].text, "speech missed by precheck");
-  assert.equal(postedFields.some(([name, value]) => name === "vad_filter" && value === "true"), true);
+  assert.equal(postedFields.some(([name]) => name === "vad_filter"), false);
   assert.deepEqual(requested.map(([url, method]) => [new URL(url).pathname, method]), [
     ["/openapi.json", "GET"],
     ["/v1/audio/speech/timestamps", "POST"],
@@ -4472,7 +5014,12 @@ function add(tabId, candidate) {
                 requestBody: {
                   content: {
                     "multipart/form-data": {
-                      schema: { properties: { file: { type: "string", format: "binary" } } }
+                      schema: {
+                        properties: {
+                          file: { type: "string", format: "binary" },
+                          threshold: { type: "number" }
+                        }
+                      }
                     }
                   }
                 }
@@ -4494,9 +5041,9 @@ function add(tabId, candidate) {
       ok: true,
       json: async () => ({
         segments: [
-          { start: 9.94, end: 29.98, text: "ご視聴ありがとうございました" },
-          { start: 8.12, end: 8.96, text: "早く" },
-          { start: 13.44, end: 15.06, text: "そうしても見れば分かる" }
+          { start: 9.94, end: 29.98, text: "this retry segment spans a long uncertain region and needs reliable evidence" },
+          { start: 8.12, end: 8.96, text: "quick reply" },
+          { start: 13.44, end: 15.06, text: "clear recovered phrase" }
         ]
       })
     };
@@ -4516,7 +5063,7 @@ function add(tabId, candidate) {
       baseUrl: "https://speaches-empty-vad-recovery.example/v1",
       model: "Systran/faster-whisper-large-v3",
       apiKey: "test",
-      vadFilter: "auto"
+      vadFilter: "on"
     },
     { onDiagnostics: diagnostics => { recoveryDiagnostics = diagnostics; } }
   );
@@ -4525,8 +5072,8 @@ function add(tabId, candidate) {
   assert.equal(transcriptionRequests[1].some(([name]) => name === "vad_filter"), false);
   assert.equal(recoveredEmptyVadSegments.length, 2);
   assert.equal(JSON.stringify(recoveredEmptyVadSegments.map(segment => segment.text)), JSON.stringify([
-    "早く",
-    "そうしても見れば分かる"
+    "quick reply",
+    "clear recovered phrase"
   ]));
   assert.equal(recoveryDiagnostics.retry.postprocess.strictVadRecoveryFilterApplied, true);
   assert.equal(recoveryDiagnostics.retry.postprocess.strictVadRecoveryInputFinalCount, 3);
@@ -4565,7 +5112,12 @@ function add(tabId, candidate) {
                 requestBody: {
                   content: {
                     "multipart/form-data": {
-                      schema: { properties: { file: { type: "string", format: "binary" } } }
+                      schema: {
+                        properties: {
+                          file: { type: "string", format: "binary" },
+                          threshold: { type: "number" }
+                        }
+                      }
                     }
                   }
                 }
@@ -4611,6 +5163,26 @@ function add(tabId, candidate) {
 
 {
   const originalFetch = context.fetch;
+  const originalSendMessage = chrome.runtime.sendMessage;
+  chrome.runtime.sendMessage = async () => ({
+    ok: true,
+    result: {
+      chunks: [
+        {
+          index: 0,
+          start: 30,
+          end: 32.4,
+          duration: 2.4,
+          sourceStart: 30,
+          sourceEnd: 32.4,
+          speechIntervals: [{ start: 30, end: 32.4 }],
+          timeMap: [{ outputStart: 0, outputEnd: 2.4, sourceStart: 30, sourceEnd: 32.4 }],
+          file: { name: "speech-only-vad-filter.mp3", buffer: new ArrayBuffer(4), mime: "audio/mpeg" },
+          bytes: 4
+        }
+      ]
+    }
+  });
   context.fetch = async (url, init = {}) => {
     if (!init.method) {
       return {
@@ -4640,7 +5212,12 @@ function add(tabId, candidate) {
                 requestBody: {
                   content: {
                     "multipart/form-data": {
-                      schema: { properties: { file: { type: "string", format: "binary" } } }
+                      schema: {
+                        properties: {
+                          file: { type: "string", format: "binary" },
+                          threshold: { type: "number" }
+                        }
+                      }
                     }
                   }
                 }
@@ -4683,6 +5260,7 @@ function add(tabId, candidate) {
   assert.equal(vadFilteredSegments[0].text, "real speech");
   assert.equal(vadFilteredSegments[0].start, 30.2);
   assert.equal(vadFilteredSegments[0].end, 31.4);
+  chrome.runtime.sendMessage = originalSendMessage;
   context.fetch = originalFetch;
 }
 
@@ -5046,7 +5624,7 @@ function add(tabId, candidate) {
   assert.equal(clippedSegments.length, 2);
   assert.equal(clippedSegments[0].text, "clip speech");
   assert.equal(clippedSegments[1].text, "clip speech tail");
-  assert.equal(vadPostedFields.some(([name, value]) => name === "threshold" && value === "0.5"), true);
+  assert.equal(vadPostedFields.some(([name, value]) => name === "threshold" && value === "0.15"), true);
   assert.equal(vadPostedFields.some(([name, value]) => name === "min_speech_duration_ms" && value === "0"), true);
   assert.equal(postedFields.some(([name, value]) => name === "clip_timestamps" && value === "1,9"), true);
   assert.equal(postedFields.some(([name, value]) => name === "vad_filter" && value === "false"), true);
@@ -5056,7 +5634,7 @@ function add(tabId, candidate) {
   assert.equal(capturedDiagnostics.matureAsrPlan.vad.precheckState, "reliable");
   assert.equal(capturedDiagnostics.matureAsrPlan.clipTimestamps, "1,9");
   assert.equal(capturedDiagnostics.matureAsrPlan.postprocessPolicy.matureVadRequest, true);
-  assert.equal(capturedDiagnostics.vad.requestFields.some(([name, value]) => name === "threshold" && value === "0.5"), true);
+  assert.equal(capturedDiagnostics.vad.requestFields.some(([name, value]) => name === "threshold" && value === "0.15"), true);
   assert.equal(capturedDiagnostics.vad.requestFields.some(([name, value]) => name === "min_speech_duration_ms" && value === "0"), true);
   assert.equal(capturedDiagnostics.request.fields.some(([name, value]) => name === "clip_timestamps" && value === "1,9"), true);
   assert.equal(capturedDiagnostics.request.fields.some(([name, value]) => name === "vad_filter" && value === "false"), true);
@@ -5414,6 +5992,212 @@ function add(tabId, candidate) {
 {
   const originalFetch = context.fetch;
   const transcriptionRequests = [];
+  let retryDiagnostics = null;
+  context.fetch = async (url, init = {}) => {
+    if (!init.method) {
+      return {
+        ok: true,
+        json: async () => ({
+          paths: {
+            "/v1/audio/transcriptions": {
+              post: {
+                requestBody: {
+                  content: {
+                    "multipart/form-data": {
+                      schema: {
+                        properties: {
+                          clip_timestamps: { type: "string" },
+                          vad_filter: { type: "boolean" },
+                          vad_parameters: { type: "string" },
+                          without_timestamps: { type: "boolean" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "/v1/audio/speech/timestamps": {
+              post: {
+                requestBody: {
+                  content: {
+                    "multipart/form-data": {
+                      schema: { properties: { file: { type: "string", format: "binary" } } }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        })
+      };
+    }
+    if (String(url).endsWith("/v1/audio/speech/timestamps")) {
+      return {
+        ok: true,
+        json: async () => [
+          { start: 1000, end: 2000 },
+          { start: 7000, end: 9000 }
+        ]
+      };
+    }
+    const fields = Array.from(init.body.entries()).map(([name, value]) => [name, value instanceof Blob ? "[blob]" : String(value)]);
+    transcriptionRequests.push(fields);
+    if (fields.some(([name]) => name === "clip_timestamps")) {
+      return {
+        ok: true,
+        json: async () => ({
+          segments: [{ start: 1.1, end: 1.8, text: "initial covered interval" }]
+        })
+      };
+    }
+    return {
+      ok: true,
+      json: async () => ({
+        segments: [
+          { start: 1.2, end: 1.7, text: "retry extra in covered interval" },
+          { start: 7.05, end: 7.35, text: "low quality retry drift", compression_ratio: 9.1, no_speech_prob: 0.1 },
+          { start: 7.2, end: 8.4, text: "retry covers missing interval" }
+        ]
+      })
+    };
+  };
+  const recoveredSegments = await context.transcribeBrowserAudioChunk(
+    {
+      index: 22,
+      start: 30,
+      end: 60,
+      duration: 30,
+      file: { name: "clip-retry-gap-only.wav", buffer: new ArrayBuffer(4), mime: "audio/wav" }
+    },
+    {
+      providerType: "openai",
+      baseUrl: "https://speaches-clip-retry-gap-only.example/v1",
+      model: "Systran/faster-whisper-large-v3",
+      apiKey: "test",
+      vadFilter: "auto"
+    },
+    { onDiagnostics: diagnostics => { retryDiagnostics = diagnostics; } }
+  );
+  assert.equal(transcriptionRequests.length, 2);
+  assert.equal(JSON.stringify(recoveredSegments.map(segment => [
+    Math.round(segment.start * 10) / 10,
+    Math.round(segment.end * 10) / 10
+  ])), JSON.stringify([
+    [31.1, 31.8],
+    [37.2, 38.4]
+  ]));
+  assert.equal(retryDiagnostics.retry.postprocess.coverageRetryFilterApplied, true);
+  assert.equal(retryDiagnostics.retry.postprocess.coverageRetryInputFinalCount, 2);
+  assert.equal(retryDiagnostics.retry.postprocess.coverageRetryFinalCount, 1);
+  context.fetch = originalFetch;
+}
+
+{
+  const originalFetch = context.fetch;
+  const transcriptionRequests = [];
+  let retryDiagnostics = null;
+  context.fetch = async (url, init = {}) => {
+    if (!init.method) {
+      return {
+        ok: true,
+        json: async () => ({
+          paths: {
+            "/v1/audio/transcriptions": {
+              post: {
+                requestBody: {
+                  content: {
+                    "multipart/form-data": {
+                      schema: {
+                        properties: {
+                          vad_filter: { type: "boolean" },
+                          word_timestamps: { type: "boolean" },
+                          no_speech_threshold: { type: "number" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "/v1/audio/speech/timestamps": {
+              post: {
+                requestBody: {
+                  content: {
+                    "multipart/form-data": {
+                      schema: { properties: { file: { type: "string", format: "binary" } } }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        })
+      };
+    }
+    if (String(url).endsWith("/v1/audio/speech/timestamps")) {
+      return {
+        ok: true,
+        json: async () => [{ start: 7000, end: 9000 }]
+      };
+    }
+    const fields = Array.from(init.body.entries()).map(([name, value]) => [name, value instanceof Blob ? "[blob]" : String(value)]);
+    transcriptionRequests.push(fields);
+    if (!fields.some(([name, value]) => name === "vad_filter" && value === "true")) {
+      return { ok: true, json: async () => ({ segments: [] }) };
+    }
+    return {
+      ok: true,
+      json: async () => ({
+        segments: [
+          { start: 1, end: 13, text: "long uncertain drift" },
+          {
+            start: 7.2,
+            end: 8.4,
+            text: "recovered sentence",
+            words: [
+              { start: 7.2, end: 7.8, word: "recovered", probability: 0.9 },
+              { start: 7.8, end: 8.4, word: "sentence", probability: 0.9 }
+            ]
+          },
+          { start: 15, end: 16, text: "outside retry gap" }
+        ]
+      })
+    };
+  };
+  const directVadRecovery = await context.transcribeBrowserAudioChunk(
+    {
+      index: 23,
+      start: 30,
+      end: 60,
+      duration: 30,
+      file: { name: "direct-vad-retry-gap.wav", buffer: new ArrayBuffer(4), mime: "audio/wav" }
+    },
+    {
+      providerType: "openai",
+      baseUrl: "https://speaches-direct-vad-retry.example/v1",
+      model: "Systran/faster-whisper-large-v3",
+      apiKey: "test",
+      vadFilter: "auto"
+    },
+    { onDiagnostics: diagnostics => { retryDiagnostics = diagnostics; } }
+  );
+  assert.equal(transcriptionRequests.length, 2);
+  assert.equal(transcriptionRequests[0].some(([name, value]) => name === "vad_filter" && value === "true"), false);
+  assert.equal(transcriptionRequests[1].some(([name, value]) => name === "vad_filter" && value === "true"), true);
+  assert.equal(JSON.stringify(directVadRecovery.map(segment => segment.text)), JSON.stringify(["recovered sentence"]));
+  assert.equal(Math.round(directVadRecovery[0].start * 10) / 10, 37.2);
+  assert.equal(retryDiagnostics.directAttempt.finalSegments.length, 0);
+  assert.equal(retryDiagnostics.retry.reason, "可靠 VAD 语音区间未被直连识别结果覆盖，已开启服务端 VAD 重试。");
+  assert.equal(retryDiagnostics.retry.postprocess.coverageRetryFilterApplied, true);
+  assert.equal(retryDiagnostics.retry.postprocess.coverageRetryInputFinalCount, 2);
+  assert.equal(retryDiagnostics.retry.postprocess.coverageRetryFinalCount, 1);
+  context.fetch = originalFetch;
+}
+
+{
+  const originalFetch = context.fetch;
+  const transcriptionRequests = [];
   context.fetch = async (url, init = {}) => {
     if (!init.method) {
       return {
@@ -5590,8 +6374,44 @@ function add(tabId, candidate) {
 
 {
   const originalFetch = context.fetch;
+  const originalSendMessage = chrome.runtime.sendMessage;
   const transcriptionRequests = [];
+  const offscreenMessages = [];
   let matureDiagnostics = null;
+  chrome.runtime.sendMessage = async message => {
+    offscreenMessages.push(message);
+    return {
+      ok: true,
+      result: {
+        chunks: [
+          {
+            index: 0,
+            start: 31,
+            end: 61,
+            duration: 30,
+            sourceStart: 31,
+            sourceEnd: 61,
+            speechIntervals: [{ start: 31, end: 61 }],
+            timeMap: [{ outputStart: 0, outputEnd: 30, sourceStart: 31, sourceEnd: 61 }],
+            file: { name: "speech-only-long-000.mp3", buffer: new ArrayBuffer(4), mime: "audio/mpeg" },
+            bytes: 4
+          },
+          {
+            index: 1,
+            start: 61,
+            end: 89,
+            duration: 28,
+            sourceStart: 61,
+            sourceEnd: 89,
+            speechIntervals: [{ start: 61, end: 89 }],
+            timeMap: [{ outputStart: 0, outputEnd: 28, sourceStart: 61, sourceEnd: 89 }],
+            file: { name: "speech-only-long-001.mp3", buffer: new ArrayBuffer(4), mime: "audio/mpeg" },
+            bytes: 4
+          }
+        ]
+      }
+    };
+  };
   context.fetch = async (url, init = {}) => {
     if (!init.method) {
       return {
@@ -5639,13 +6459,13 @@ function add(tabId, candidate) {
     }
     const fields = Array.from(init.body.entries()).map(([name, value]) => [name, value instanceof Blob ? "[blob]" : String(value)]);
     transcriptionRequests.push(fields);
+    const requestIndex = transcriptionRequests.length;
     return {
       ok: true,
       json: async () => ({
-        segments: [
-          { start: 1.2, end: 2.4, text: "first continuous sentence" },
-          { start: 35.2, end: 36.5, text: "server vad later sentence" }
-        ]
+        segments: requestIndex === 1
+          ? [{ start: 1.2, end: 2.4, text: "first continuous sentence" }]
+          : [{ start: 5.2, end: 6.5, text: "collected later sentence" }]
       })
     };
   };
@@ -5662,21 +6482,114 @@ function add(tabId, candidate) {
       baseUrl: "https://speaches-long-window-server-vad.example/v1",
       model: "Systran/faster-whisper-large-v3",
       apiKey: "test",
-      vadFilter: "auto"
+      vadFilter: "auto",
+      collectedSpeechAudio: "on"
     },
     { onDiagnostics: diagnostics => { matureDiagnostics = diagnostics; } }
   );
-  assert.equal(transcriptionRequests.length, 1);
-  assert.equal(transcriptionRequests[0].some(([name]) => name === "clip_timestamps"), false);
-  assert.equal(transcriptionRequests[0].some(([name, value]) => name === "vad_filter" && value === "true"), true);
+  assert.equal(offscreenMessages.length, 1);
+  assert.equal(offscreenMessages[0].type, "FUGUANG_OFFSCREEN_WEB_FFMPEG_COLLECT_SPEECH_AUDIO");
+  assert.equal(transcriptionRequests.length, 2);
+  assert.equal(transcriptionRequests.every(fields => fields.some(([name]) => name === "clip_timestamps") === false), true);
+  assert.equal(transcriptionRequests.every(fields => fields.some(([name]) => name === "vad_filter") === false), true);
   assert.equal(JSON.stringify(serverVadSegments.map(segment => segment.text)), JSON.stringify([
     "first continuous sentence",
-    "server vad later sentence"
+    "collected later sentence"
   ]));
   assert.equal(Boolean(matureDiagnostics.vadFilterAttempt), false);
   assert.equal(Boolean(matureDiagnostics.retry), false);
-  assert.equal(matureDiagnostics.matureAsrPlan.request.mode, "compatible_vad_filter");
-  assert.equal(matureDiagnostics.matureAsrPlan.vad.clipTimestampsSkippedReason, "long_speech_interval_requires_server_vad");
+  assert.equal(matureDiagnostics.matureAsrPlan.request.mode, "collected_external_vad");
+  assert.equal(matureDiagnostics.collectedSpeech.strategy, "external_vad_collect_chunks");
+  chrome.runtime.sendMessage = originalSendMessage;
+  context.fetch = originalFetch;
+}
+
+{
+  const originalFetch = context.fetch;
+  const originalSendMessage = chrome.runtime.sendMessage;
+  const transcriptionRequests = [];
+  const offscreenMessages = [];
+  let recallDiagnostics = null;
+  chrome.runtime.sendMessage = async message => {
+    offscreenMessages.push(message);
+    return { ok: true, result: { chunks: [] } };
+  };
+  context.fetch = async (url, init = {}) => {
+    if (!init.method) {
+      return {
+        ok: true,
+        json: async () => ({
+          paths: {
+            "/v1/audio/transcriptions": {
+              post: {
+                requestBody: {
+                  content: {
+                    "multipart/form-data": {
+                      schema: {
+                        properties: {
+                          vad_filter: { type: "boolean" },
+                          word_timestamps: { type: "boolean" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "/v1/audio/speech/timestamps": {
+              post: {
+                requestBody: {
+                  content: {
+                    "multipart/form-data": {
+                      schema: { properties: { file: { type: "string", format: "binary" } } }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        })
+      };
+    }
+    if (String(url).endsWith("/v1/audio/speech/timestamps")) {
+      return { ok: true, json: async () => [{ start: 1000, end: 2000 }] };
+    }
+    const fields = Array.from(init.body.entries()).map(([name, value]) => [name, value instanceof Blob ? "[blob]" : String(value)]);
+    transcriptionRequests.push(fields);
+    return {
+      ok: true,
+      json: async () => ({
+        segments: [
+          { start: 1.1, end: 1.8, text: "clear speech", words: [{ start: 1.1, end: 1.8, word: "clear", probability: 0.9 }] },
+          { start: 9.1, end: 10.2, text: "quiet low voice", words: [{ start: 9.1, end: 10.2, word: "quiet", probability: 0.9 }] }
+        ]
+      })
+    };
+  };
+  const recallSegments = await context.transcribeBrowserAudioChunk(
+    {
+      index: 33,
+      start: 30,
+      end: 60,
+      duration: 30,
+      file: { name: "auto-vad-recall.wav", buffer: new ArrayBuffer(4), mime: "audio/wav" }
+    },
+    {
+      providerType: "openai",
+      baseUrl: "https://speaches-auto-vad-recall.example/v1",
+      model: "Systran/faster-whisper-large-v3",
+      apiKey: "test",
+      vadFilter: "auto"
+    },
+    { onDiagnostics: diagnostics => { recallDiagnostics = diagnostics; } }
+  );
+  assert.equal(offscreenMessages.length, 0);
+  assert.equal(transcriptionRequests.length, 1);
+  assert.equal(transcriptionRequests[0].some(([name, value]) => name === "vad_filter" && value === "true"), false);
+  assert.equal(JSON.stringify(recallSegments.map(segment => segment.text)), JSON.stringify(["clear speech", "quiet low voice"]));
+  assert.equal(recallDiagnostics.postprocess.speechActivityFilterApplied, false);
+  assert.equal(recallDiagnostics.postprocess.qualityFiltersDisabled, false);
+  chrome.runtime.sendMessage = originalSendMessage;
   context.fetch = originalFetch;
 }
 
@@ -5806,7 +6719,8 @@ function add(tabId, candidate) {
       baseUrl: "https://speaches-form-urlencoded-vad.example/v1",
       model: "Systran/faster-whisper-large-v3",
       apiKey: "test",
-      vadFilter: "auto"
+      vadFilter: "auto",
+      collectedSpeechAudio: "on"
     },
     { onDiagnostics: diagnostics => { speachesDiagnostics = diagnostics; } }
   );
@@ -5815,19 +6729,21 @@ function add(tabId, candidate) {
     ["/v1/audio/speech/timestamps", "POST"],
     ["/v1/audio/transcriptions", "POST"]
   ]);
-  assert.equal(offscreenMessages.length, 0);
+  assert.equal(offscreenMessages.length, 1);
+  assert.equal(offscreenMessages[0].type, "FUGUANG_OFFSCREEN_WEB_FFMPEG_COLLECT_SPEECH_AUDIO");
   assert.equal(transcriptionRequests.length, 1);
   assert.equal(transcriptionRequests[0].some(([name]) => name === "clip_timestamps"), false);
-  assert.equal(transcriptionRequests[0].some(([name, value]) => name === "vad_filter" && value === "true"), true);
+  assert.equal(transcriptionRequests[0].some(([name]) => name === "vad_filter"), false);
   assert.equal(JSON.stringify(recoveredSpeachesSegments.map(segment => segment.text)), JSON.stringify([
-    "server vad first sentence"
+    "speech-only second sentence"
   ]));
-  assert.equal(Math.round(recoveredSpeachesSegments[0].start * 10) / 10, 31.2);
-  assert.equal(Math.round(recoveredSpeachesSegments[0].end * 10) / 10, 32.4);
+  assert.equal(Math.round(recoveredSpeachesSegments[0].start * 10) / 10, 58.1);
+  assert.equal(Math.round(recoveredSpeachesSegments[0].end * 10) / 10, 58.6);
   assert.equal(speachesDiagnostics.vad.speechIntervals.length, 2);
+  assert.equal(speachesDiagnostics.vad.requestFields.some(([name, value]) => name === "threshold" && value === "0.15"), true);
   assert.equal(speachesDiagnostics.vad.requestFields.some(([name, value]) => name === "min_silence_duration_ms" && value === "160"), true);
-  assert.equal(speachesDiagnostics.matureAsrPlan.request.mode, "compatible_vad_filter");
-  assert.equal(speachesDiagnostics.collectedSpeech, null);
+  assert.equal(speachesDiagnostics.matureAsrPlan.request.mode, "collected_external_vad");
+  assert.equal(speachesDiagnostics.collectedSpeech.strategy, "external_vad_collect_chunks");
   assert.equal(Boolean(speachesDiagnostics.vadFilterAttempt), false);
   assert.equal(Boolean(speachesDiagnostics.retry), false);
   chrome.runtime.sendMessage = originalSendMessage;
@@ -5953,11 +6869,11 @@ function add(tabId, candidate) {
       ok: true,
       json: async () => ({
         segments: [
-          { start: 2.5, end: 4, text: "お腹いっぱいになったら、" },
-          { start: 4.1, end: 8, text: "お腹いっぱいになったら、" },
-          { start: 8.1, end: 14, text: "お腹いっぱいになったら、" },
-          { start: 14.1, end: 20, text: "お腹いっぱいになったら、" },
-          { start: 50, end: 55, text: "お腹いっぱいになったら、" }
+          { start: 2.5, end: 4, text: "looped phrase" },
+          { start: 4.1, end: 8, text: "looped phrase" },
+          { start: 8.1, end: 14, text: "looped phrase" },
+          { start: 14.1, end: 20, text: "looped phrase" },
+          { start: 50, end: 55, text: "looped phrase" }
         ]
       })
     };
@@ -5976,7 +6892,7 @@ function add(tabId, candidate) {
       model: "Systran/faster-whisper-large-v3",
       apiKey: "test",
       vadFilter: "auto",
-      experimentalCollectedSpeechAudio: true
+      collectedSpeechAudio: "on"
     },
     { onDiagnostics: diagnostics => { speachesDiagnostics = diagnostics; } }
   );
@@ -5985,6 +6901,114 @@ function add(tabId, candidate) {
   assert.equal(JSON.stringify(recoveredSpeachesSegments.map(segment => segment.text)), JSON.stringify([]));
   assert.equal(speachesDiagnostics.matureAsrPlan.request.mode, "collected_external_vad");
   assert.equal(Boolean(speachesDiagnostics.retry), false);
+  chrome.runtime.sendMessage = originalSendMessage;
+  context.fetch = originalFetch;
+}
+
+{
+  const originalFetch = context.fetch;
+  const originalSendMessage = chrome.runtime.sendMessage;
+  let speachesDiagnostics = null;
+  chrome.runtime.sendMessage = async () => ({
+    ok: true,
+    result: {
+      chunks: [
+        {
+          index: 0,
+          start: 31,
+          end: 32,
+          duration: 1,
+          sourceStart: 31,
+          sourceEnd: 32,
+          speechIntervals: [{ start: 31, end: 32 }],
+          timeMap: [{ outputStart: 0, outputEnd: 1, sourceStart: 31, sourceEnd: 32 }],
+          file: { name: "speech-only-quality.mp3", buffer: new ArrayBuffer(4), mime: "audio/mpeg" },
+          bytes: 4
+        }
+      ]
+    }
+  });
+  context.fetch = async (url, init = {}) => {
+    if (!init.method) {
+      return {
+        ok: true,
+        json: async () => ({
+          paths: {
+            "/v1/audio/transcriptions": {
+              post: {
+                requestBody: {
+                  content: {
+                    "application/x-www-form-urlencoded": {
+                      schema: {
+                        properties: {
+                          model: { type: "string" },
+                          response_format: { type: "string" },
+                          timestamp_granularities: { type: "array" },
+                          vad_filter: { type: "boolean" },
+                          file: { type: "string", format: "binary" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "/v1/audio/speech/timestamps": {
+              post: {
+                requestBody: {
+                  content: {
+                    "application/x-www-form-urlencoded": {
+                      schema: { properties: { file: { type: "string", format: "binary" } } }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        })
+      };
+    }
+    if (String(url).endsWith("/v1/audio/speech/timestamps")) {
+      return {
+        ok: true,
+        json: async () => [{ start: 1000, end: 2000 }]
+      };
+    }
+    return {
+      ok: true,
+      json: async () => ({
+        segments: [{
+          start: 0.1,
+          end: 0.9,
+          text: "overcompressed model drift",
+          compression_ratio: 9.2,
+          no_speech_prob: 0.1
+        }]
+      })
+    };
+  };
+  const qualityFilteredSegments = await context.transcribeBrowserAudioChunk(
+    {
+      index: 17,
+      start: 30,
+      end: 60,
+      duration: 30,
+      file: { name: "speaches-collected-quality.wav", buffer: new ArrayBuffer(4), mime: "audio/wav" }
+    },
+    {
+      providerType: "openai",
+      baseUrl: "https://speaches-collected-quality.example/v1",
+      model: "Systran/faster-whisper-large-v3",
+      apiKey: "test",
+      vadFilter: "auto",
+      collectedSpeechAudio: "on"
+    },
+    { onDiagnostics: diagnostics => { speachesDiagnostics = diagnostics; } }
+  );
+  assert.equal(JSON.stringify(qualityFilteredSegments.map(segment => segment.text)), JSON.stringify([]));
+  assert.equal(speachesDiagnostics.matureAsrPlan.request.mode, "collected_external_vad");
+  assert.equal(speachesDiagnostics.collectedSpeech.attempts[0].postprocess.qualityFiltersDisabled, false);
+  assert.equal(speachesDiagnostics.collectedSpeech.attempts[0].normalizedSegments.length, 0);
   chrome.runtime.sendMessage = originalSendMessage;
   context.fetch = originalFetch;
 }
@@ -6074,7 +7098,7 @@ function add(tabId, candidate) {
   assert.equal(transcriptionRequests.length, 2);
   assert.equal(transcriptionRequests[0].some(([name, value]) => name === "clip_timestamps" && value === "1,1.8"), true);
   assert.equal(transcriptionRequests[1].some(([name]) => name === "clip_timestamps"), false);
-  assert.equal(transcriptionRequests[1].some(([name, value]) => name === "vad_filter" && value === "true"), true);
+  assert.equal(transcriptionRequests[1].some(([name]) => name === "vad_filter"), false);
   assert.equal(Boolean(failedDiagnostics), true);
   assert.equal(failedDiagnostics.vad.speechIntervals.length, 1);
   assert.equal(failedDiagnostics.clipTimestampsAttempt.error.stage, "asr_request");
@@ -6082,10 +7106,10 @@ function add(tabId, candidate) {
   assert.equal(failedDiagnostics.clipTimestampsAttempt.error.message, "clip timestamp parse failed");
   assert.equal(failedDiagnostics.clipTimestampsAttempt.rawPayload.error.message, "clip timestamp parse failed");
   assert.equal(failedDiagnostics.clipTimestampsAttempt.matureAsrPlan.request.mode, "external_vad_clip");
-  assert.equal(failedDiagnostics.matureAsrPlan.request.mode, "compatible_vad_filter");
+  assert.equal(failedDiagnostics.matureAsrPlan.request.mode, "direct");
   assert.equal(failedDiagnostics.request.fields.some(([name]) => name === "clip_timestamps"), false);
-  assert.equal(failedDiagnostics.retry.request.fields.some(([name, value]) => name === "vad_filter" && value === "true"), true);
-  assert.equal(failedDiagnostics.retry.matureAsrPlan.request.mode, "compatible_vad_filter");
+  assert.equal(failedDiagnostics.retry.request.fields.some(([name]) => name === "vad_filter"), false);
+  assert.equal(failedDiagnostics.retry.matureAsrPlan.request.mode, "direct");
   context.fetch = originalFetch;
 }
 
