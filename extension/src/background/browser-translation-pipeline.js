@@ -8,6 +8,7 @@ export const FuguangBrowserTranslationPipeline = (() => {
   const {
     requestBrowserTranslationItems,
     browserTranslationErrorIsPermanent,
+    browserTranslationErrorIsRateLimited,
     browserTranslationErrorIsContentPolicy
   } = FuguangBrowserTranslationProvider;
 
@@ -41,6 +42,11 @@ export const FuguangBrowserTranslationPipeline = (() => {
           translationContext
         );
       } catch (error) {
+        if (browserTranslationErrorIsRateLimited(error) && batches.length > 1) {
+          batchErrors[batchIndex] = error;
+          failuresByBatch[batchIndex] = createBrowserTranslationFailuresForSources(batches[batchIndex], error);
+          return;
+        }
         if (browserTranslationErrorIsPermanent(error) || batches.length <= 1) {
           fatalError = error;
           throw error;
@@ -132,6 +138,9 @@ export const FuguangBrowserTranslationPipeline = (() => {
     try {
       return await requestAndAlignBrowserTranslationBatch(state);
     } catch (error) {
+      if (browserTranslationErrorIsRateLimited(error)) {
+        throw error;
+      }
       return await retrySplitBrowserTranslationBatch({
         ...state,
         error
@@ -156,7 +165,7 @@ export const FuguangBrowserTranslationPipeline = (() => {
         throw new Error("翻译模型没有返回可用字幕条目。");
       } catch (error) {
         lastError = error;
-        if (browserTranslationErrorIsPermanent(error) || attempt === attempts - 1) {
+        if (browserTranslationErrorIsRateLimited(error) || browserTranslationErrorIsPermanent(error) || attempt === attempts - 1) {
           break;
         }
       }

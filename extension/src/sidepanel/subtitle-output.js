@@ -57,6 +57,7 @@
           time: formatCueTime(start, end),
           text,
           sourceText: sourceText && (sourceOnly || sourceText !== text) ? sourceText : "",
+          speakerLabel: cleanSubtitleText(sourceSegment.speakerLabel || translatedSegment.speakerLabel || ""),
           sourceOnly
         });
       }
@@ -149,8 +150,8 @@
 
   function transcriptFromCues(cues) {
     return {
-      source: cues.map(cue => ({ start: cue.start, end: cue.end, text: cue.sourceText || "" })),
-      translated: cues.map(cue => ({ start: cue.start, end: cue.end, text: cue.text || "" })),
+      source: cues.map(cue => ({ start: cue.start, end: cue.end, text: cue.sourceText || "", speakerLabel: cue.speakerLabel || "" })),
+      translated: cues.map(cue => ({ start: cue.start, end: cue.end, text: cue.text || "", speakerLabel: cue.speakerLabel || "" })),
       chunkStatuses: []
     };
   }
@@ -177,7 +178,7 @@
   }
 
   function cuesToSrt(cues, mode = subtitleOutputRuntimeState().mode, options = {}) {
-    return cues
+    const body = cues
       .filter(cue => shouldIncludeCueInSubtitleOutput(cue, mode, cues, options))
       .filter(cue => Number.isFinite(cue.start) && Number.isFinite(cue.end) && cue.text)
       .map((cue, index) => {
@@ -192,12 +193,48 @@
           textLines.join("\n")
         ].join("\n");
       })
+      .join("\n\n");
+    if (!body) {
+      return "";
+    }
+    return [formatSrtNoteBlock(options.srtMetadata), body]
+      .filter(Boolean)
       .join("\n\n")
       .concat("\n");
   }
 
-  function shouldIncludeCueInSubtitleOutput(cue, mode, _cues, options = {}) {
-    return Boolean(cue);
+  function formatSrtNoteBlock(metadata = null) {
+    const lines = [];
+    const sourcePage = cleanSrtNoteValue(metadata?.sourcePage);
+    const exportedBy = cleanSrtNoteValue(metadata?.exportedBy);
+    if (sourcePage) {
+      lines.push(`Source page: ${sourcePage}`);
+    }
+    if (exportedBy) {
+      lines.push(`Exported by: ${exportedBy}`);
+    }
+    return lines.length ? ["NOTE", ...lines].join("\n") : "";
+  }
+
+  function cleanSrtNoteValue(value) {
+    return String(value || "").replace(/\s+/g, " ").trim();
+  }
+
+  function shouldIncludeCueInSubtitleOutput(cue, mode, cues, options = {}) {
+    if (!cue) {
+      return false;
+    }
+    if (mode !== "translated" || !cue.sourceOnly) {
+      return true;
+    }
+    const hasRealTranslatedCue = Array.isArray(cues) && cues.some(item => item && !item.sourceOnly && cleanSubtitleText(item.text));
+    if (hasRealTranslatedCue) {
+      return false;
+    }
+    if (subtitleOutputRuntimeState().isRunning) {
+      return options.allowRunningSourcePreview !== false;
+    }
+    return options.allowCompletedSourceFallback !== false;
   }
 
   function firstFiniteNumber(...values) {
@@ -254,6 +291,7 @@
     transcriptFromCues,
     cuesToVtt,
     cuesToSrt,
+    formatSrtNoteBlock,
     shouldIncludeCueInSubtitleOutput,
     firstFiniteNumber,
     cleanSubtitleText,

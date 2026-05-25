@@ -693,6 +693,7 @@ button:disabled {
 
 .cue.active .subtitle-text,
 .cue.active .subtitle-source,
+.cue.active .subtitle-speaker,
 .cue.active .time {
   color: var(--accent);
 }
@@ -706,6 +707,14 @@ button:disabled {
 .subtitle-source {
   color: var(--muted);
   font-size: 12px;
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
+.subtitle-speaker {
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 650;
   overflow-wrap: break-word;
   word-break: break-word;
 }

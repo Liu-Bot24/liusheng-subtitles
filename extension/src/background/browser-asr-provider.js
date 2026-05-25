@@ -54,6 +54,9 @@ export const FuguangBrowserAsrProvider = (() => {
   function browserAsrRequestFields(asrConfig, rawLanguage = "", options = {}) {
     const provider = normalizeProviderType(asrConfig?.providerType);
     const language = normalizeAsrLanguage(rawLanguage);
+    if (provider === "dashscope_funasr") {
+      return [];
+    }
     if (provider === "xai") {
       const xaiLanguage = xaiAsrLanguage(language);
       return xaiLanguage ? [["format", "true"], ["language", xaiLanguage]] : [];
@@ -524,7 +527,7 @@ export const FuguangBrowserAsrProvider = (() => {
 
   function normalizeProviderType(providerType) {
     const value = String(providerType || "").trim();
-    return ["openai", "groq", "xai", "anthropic"].includes(value) ? value : "openai";
+    return ["openai", "groq", "xai", "anthropic", "dashscope_funasr"].includes(value) ? value : "openai";
   }
 
   function normalizeApiBaseUrl(value) {

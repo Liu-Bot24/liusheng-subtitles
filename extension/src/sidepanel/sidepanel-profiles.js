@@ -31,6 +31,15 @@ const FuguangSidepanelProfiles = (() => {
       apiKey: ""
     },
     {
+      id: "dashscope_funasr",
+      name: "阿里云 Fun-ASR",
+      providerType: "dashscope_funasr",
+      baseUrl: "https://dashscope.aliyuncs.com/api/v1",
+      model: "fun-asr",
+      vadFilter: "off",
+      apiKey: ""
+    },
+    {
       id: "custom_asr",
       name: "自定义 ASR",
       providerType: "openai",
@@ -94,7 +103,7 @@ const FuguangSidepanelProfiles = (() => {
 
   function normalizeProviderType(providerType) {
     const value = String(providerType || "").trim();
-    return ["openai", "groq", "xai", "anthropic"].includes(value) ? value : "openai";
+    return ["openai", "groq", "xai", "anthropic", "dashscope_funasr"].includes(value) ? value : "openai";
   }
 
   function mergeProfileDefaults(defaultProfile, storedProfile) {
@@ -185,6 +194,9 @@ const FuguangSidepanelProfiles = (() => {
     }
     if (providerType === "xai") {
       return "https://api.x.ai/v1";
+    }
+    if (providerType === "dashscope_funasr") {
+      return "https://dashscope.aliyuncs.com/api/v1";
     }
     return "https://api.openai.com/v1";
   }

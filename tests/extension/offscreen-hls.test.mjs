@@ -71,6 +71,11 @@ const source = fs.readFileSync(new URL("../../extension/src/offscreen/offscreen.
 vm.runInContext(source, context, { filename: "offscreen.js" });
 
 {
+  assert.equal(context.normalizeHlsLogicalChunkSeconds(7200), 1800);
+  assert.equal(context.normalizeHlsLogicalChunkSeconds(7200, { longFile: true }), 7200);
+}
+
+{
   const originalEnsureWebFfmpegFrame = context.ensureWebFfmpegFrame;
   const originalWarmWebFfmpegFrame = context.warmWebFfmpegFrame;
   const originalRequestWebFfmpeg = context.requestWebFfmpeg;

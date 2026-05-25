@@ -34,11 +34,14 @@ import vm from "node:vm";
   assert.ok(css.includes("focus-visible"), "keyboard focus state missing");
   assert.ok(css.includes("appearance: none"), "button/input rendering should not depend on OS defaults");
   assert.ok(html.includes('id="sourceLanguage"'), "source language selector missing");
+  assert.equal(html.includes('id="asrVocabularyId"'), false, "Fun-ASR hotword vocabulary id should not be exposed to users");
+  assert.ok(html.includes('data-i18n="funAsrLongFileHint"'), "Fun-ASR long-file concurrency hint missing");
   assert.ok(
     html.indexOf('id="sourceLanguage"') < html.indexOf('id="startPreload"'),
     "source language selector should sit near the task start controls"
   );
   assert.ok(js.includes('sourceLanguage: document.querySelector("#sourceLanguage")'));
+  assert.equal(js.includes('asrVocabularyId: document.querySelector("#asrVocabularyId")'), false);
   assert.ok(js.includes("sourceLanguage: getSourceLanguageValue()"));
   assert.equal(
     js.match(/const MODEL_SETTINGS_VERSION = (\d+);/)?.[1],
@@ -533,6 +536,7 @@ const clearMissingNonCacheDisplayState = await vm.runInContext(`
   (async () => {
     activeTab = { id: 1, title: "Video", url: "https://example.test/watch/1" };
     currentJobId = "running-job";
+    currentJob = { id: "running-job", status: "running", stage: "translation", translation: { segmentCount: 1 } };
     renderedSubtitleJobId = "running-job";
     subtitleCues = [{ start: 1, end: 2, time: "00:00:01.000 --> 00:00:02.000", text: "运行中字幕" }];
     currentTranscript = { source: [], translated: [{ start: 1, end: 2, text: "运行中字幕" }] };
@@ -583,6 +587,75 @@ assert.equal(clearMissingNonCacheDisplayState.cuesLength, 1);
 assert.equal(clearMissingNonCacheDisplayState.renderedSubtitleJobId, "running-job");
 assert.equal(clearMissingNonCacheDisplayState.currentTranscriptIsNull, false);
 
+const clearCompletedNonCacheDisplayState = await vm.runInContext(`
+  (async () => {
+    activeTab = { id: 1, title: "Video", url: "https://example.test/watch/1" };
+    currentJobId = "completed-job";
+    currentJob = { id: "completed-job", status: "completed", stage: "completed", translation: { segmentCount: 1 } };
+    renderedSubtitleJobId = "completed-job";
+    subtitleCues = [{ start: 1, end: 2, time: "00:00:01.000 --> 00:00:02.000", text: "已完成字幕" }];
+    currentTranscript = {
+      source: [{ start: 1, end: 2, text: "こんにちは" }],
+      translated: [{ start: 1, end: 2, text: "已完成字幕" }]
+    };
+    currentSubtitleCacheEntry = null;
+    cachedSubtitleLoadedKey = "";
+    elements.subtitleList.textContent = "已完成字幕";
+    const originalBuildSubtitleCacheKeyForCurrentPage = buildSubtitleCacheKeyForCurrentPage;
+    const originalBuildMatchingSubtitleCacheKeysForCurrentPage = buildMatchingSubtitleCacheKeysForCurrentPage;
+    const originalDeleteSubtitleCacheEntries = deleteSubtitleCacheEntries;
+    const originalDetachCurrentSubtitlesFromPage = detachCurrentSubtitlesFromPage;
+    const originalSendMessage = chrome.runtime.sendMessage;
+    const originalSetMessage = setMessage;
+    const sent = [];
+    buildSubtitleCacheKeyForCurrentPage = async () => "";
+    buildMatchingSubtitleCacheKeysForCurrentPage = async () => [];
+    deleteSubtitleCacheEntries = async () => 0;
+    detachCurrentSubtitlesFromPage = async () => {
+      globalThis.completedNonCacheDetached = true;
+    };
+    chrome.runtime.sendMessage = async message => {
+      sent.push(message);
+      return { ok: true };
+    };
+    setMessage = text => {
+      globalThis.lastCompletedNonCacheMessage = text;
+    };
+
+    try {
+      await clearCurrentSubtitleCache();
+      return {
+        sentTypes: sent.map(message => message.type),
+        sentJobIds: sent.map(message => message.jobId || ""),
+        detached: Boolean(globalThis.completedNonCacheDetached),
+        message: globalThis.lastCompletedNonCacheMessage,
+        listText: elements.subtitleList.textContent,
+        cuesLength: subtitleCues.length,
+        renderedSubtitleJobId,
+        currentTranscriptIsNull: currentTranscript === null
+      };
+    } finally {
+      buildSubtitleCacheKeyForCurrentPage = originalBuildSubtitleCacheKeyForCurrentPage;
+      buildMatchingSubtitleCacheKeysForCurrentPage = originalBuildMatchingSubtitleCacheKeysForCurrentPage;
+      deleteSubtitleCacheEntries = originalDeleteSubtitleCacheEntries;
+      detachCurrentSubtitlesFromPage = originalDetachCurrentSubtitlesFromPage;
+      chrome.runtime.sendMessage = originalSendMessage;
+      setMessage = originalSetMessage;
+      delete globalThis.completedNonCacheDetached;
+      delete globalThis.lastCompletedNonCacheMessage;
+    }
+  })()
+`, context);
+
+assert.deepEqual(JSON.parse(JSON.stringify(clearCompletedNonCacheDisplayState.sentTypes)), ["FUGUANG_CLEAR_PRELOAD_SUBTITLE_STATE"]);
+assert.deepEqual(JSON.parse(JSON.stringify(clearCompletedNonCacheDisplayState.sentJobIds)), ["completed-job"]);
+assert.equal(clearCompletedNonCacheDisplayState.detached, true);
+assert.match(clearCompletedNonCacheDisplayState.message, /已清除当前显示/);
+assert.equal(clearCompletedNonCacheDisplayState.listText, "已清除当前页面字幕缓存。");
+assert.equal(clearCompletedNonCacheDisplayState.cuesLength, 0);
+assert.equal(clearCompletedNonCacheDisplayState.renderedSubtitleJobId, "");
+assert.equal(clearCompletedNonCacheDisplayState.currentTranscriptIsNull, true);
+
 const audioButtonState = await vm.runInContext(`
   (() => {
     startRequestInFlight = false;
@@ -631,6 +704,11 @@ const completedJobDisplayState = await vm.runInContext(`
     runningTopStatus: statusLabel({ preload: "running", preloadJob: { status: "running" } }),
     idleTopStatus: statusLabel({ preload: "idle" }),
     warningJobTitle: jobTitle({ status: "completed", stage: "completed_with_warnings" }),
+    retryTranslationJobTitle: jobTitle({ status: "running", stage: "retry_translation" }),
+    retryTranslationStage: stageLabel("retry_translation"),
+    translationStage: stageLabel("translation"),
+    unknownStage: stageLabel("retry_translation_unmapped"),
+    unknownChunkStage: chunkStageLabel("retry_translation_unmapped"),
     completedStep: extractionActivityText({ status: "completed", message: "正在用 Web FFmpeg 提取音频" }),
     completedPhaseStep: extractionActivityText({ phase: "completed", message: "正在用 Web FFmpeg 提取音频" }),
     doneStep: extractionActivityText({ status: "done", message: "较旧的抽取进度" }),
@@ -646,6 +724,11 @@ assert.deepEqual(JSON.parse(JSON.stringify(completedJobDisplayState)), {
   runningTopStatus: "处理中",
   idleTopStatus: "待机",
   warningJobTitle: "完成，有警告",
+  retryTranslationJobTitle: "正在重新翻译字幕，不会重新识别音频...",
+  retryTranslationStage: "重翻译",
+  translationStage: "识别翻译",
+  unknownStage: "处理中",
+  unknownChunkStage: "排队",
   completedStep: "完成",
   completedPhaseStep: "完成",
   doneStep: "完成",
@@ -703,6 +786,34 @@ assert.deepEqual(JSON.parse(JSON.stringify(subtitleFocusButtonState)), {
     hidden: true,
     focus: false
   }
+});
+
+const speakerLabelListState = await vm.runInContext(`
+  (() => {
+    subtitleDisplayMode = "translated";
+    subtitleCues = [{
+      start: 1,
+      end: 2,
+      time: "00:00:01.000 --> 00:00:02.000",
+      text: "你好",
+      sourceText: "こんにちは",
+      speakerLabel: "分段 1 · 说话人 1"
+    }];
+    renderSubtitleCueList();
+    const cue = elements.subtitleList.children[0];
+    const textWrap = cue.children[1];
+    return {
+      speakerClass: textWrap.children[0].className,
+      speakerText: textWrap.children[0].textContent,
+      subtitleText: textWrap.children[1].textContent
+    };
+  })()
+`, context);
+
+assert.deepEqual(JSON.parse(JSON.stringify(speakerLabelListState)), {
+  speakerClass: "subtitle-speaker",
+  speakerText: "分段 1 · 说话人 1",
+  subtitleText: "你好"
 });
 
 const refreshCompletedJobStatusState = await vm.runInContext(`
@@ -814,16 +925,62 @@ assert.deepEqual(JSON.parse(JSON.stringify(renderCompletedJobStatusState)), {
   stopDisabled: true
 });
 
+const funAsrJobStatusMetricsState = await vm.runInContext(`
+  (() => {
+    renderJob({
+      id: "job-funasr-status",
+      pipeline: "funasr",
+      status: "running",
+      stage: "extracting",
+      sourceUrl: "https://media.example.test/audio.m4s",
+      extract: {
+        status: "running",
+        progress: 32.8,
+        message: "",
+        chunkSeconds: 1200,
+        asrChunkSeconds: 7200
+      },
+      translation: {
+        chunksDone: 0,
+        chunksTotal: 0,
+        chunksAsr: 0,
+        chunksTranslating: 0,
+        asrWorkers: 1,
+        translationWorkers: 4,
+        chunkStatuses: []
+      }
+    });
+    const metrics = elements.jobStatus.children.find(child => child.className === "metrics");
+    const values = Object.fromEntries(metrics.children.map(item => [item.children[0].textContent, item.children[1].textContent]));
+    const progressRows = elements.jobStatus.children.filter(child => child.className === "progress-row");
+    return {
+      chunkLabel: Object.keys(values).find(label => label.includes("长文件")),
+      chunkValue: values["长文件分段"],
+      doneValue: values["长文件完成"],
+      asrTranslationText: progressRows[1].children[0].children[1].textContent
+    };
+  })()
+`, context);
+
+assert.deepEqual(JSON.parse(JSON.stringify(funAsrJobStatusMetricsState)), {
+  chunkLabel: "长文件分段",
+  chunkValue: "最长 2 小时",
+  doneValue: "0/?",
+  asrTranslationText: "等待长文件音频"
+});
+
 const exportSubtitleState = await vm.runInContext(`
   (async () => {
     const originalDownloadBlob = downloadBlob;
     const originalSubtitleCues = subtitleCues;
     const originalPageTitle = elements.pageTitle.textContent;
+    const originalActiveTab = activeTab;
     const downloads = [];
     downloadBlob = async (blob, filename) => {
       downloads.push({ filename, text: await blob.text() });
     };
     try {
+      activeTab = { id: 1, title: "A/B: 视频标题?", url: "https://example.test/watch?v=source-page" };
       elements.pageTitle.textContent = "A/B: 视频标题?";
       subtitleCues = [
         { start: 0, end: 1.5, time: "00:00:00.000 --> 00:00:01.500", sourceText: "hello", text: "你好" },
@@ -842,6 +999,7 @@ const exportSubtitleState = await vm.runInContext(`
     } finally {
       downloadBlob = originalDownloadBlob;
       subtitleCues = originalSubtitleCues;
+      activeTab = originalActiveTab;
       elements.pageTitle.textContent = originalPageTitle;
     }
   })()
@@ -851,6 +1009,10 @@ assert.deepEqual(JSON.parse(JSON.stringify(exportSubtitleState)), {
   downloads: [{
     filename: "A B 视频标题.srt",
     text: [
+      "NOTE",
+      "Source page: https://example.test/watch?v=source-page",
+      "Exported by: LLM 生肉翻译工具 https://blog.liu-qi.cn/tools",
+      "",
       "1",
       "00:00:00,000 --> 00:00:01,500",
       "hello",
@@ -884,6 +1046,9 @@ const retryStageButtonState = await vm.runInContext(`
       retryDisabled: elements.retryPreload.disabled,
       retryText: elements.retryPreload.textContent,
       retryTitle: elements.retryPreload.title,
+      rerunAsrDisabled: elements.rerunAsr.disabled,
+      rerunAsrText: elements.rerunAsr.textContent,
+      rerunAsrTitle: elements.rerunAsr.title,
       translationDisabled: elements.retryTranslation.disabled
     };
 
@@ -892,12 +1057,18 @@ const retryStageButtonState = await vm.runInContext(`
       status: "completed",
       reusableAudioChunks: 2,
       reusableSourceChunks: 2,
-      translation: { chunksFailed: 0, chunkStatuses: [] }
+      translation: {
+        chunksFailed: 1,
+        chunkStatuses: [{ index: 0, stage: "failed", sourceCount: 2, translatedCount: 0, error: "翻译失败" }]
+      }
     });
     const translationResume = {
       retryDisabled: elements.retryPreload.disabled,
       retryText: elements.retryPreload.textContent,
       retryTitle: elements.retryPreload.title,
+      rerunAsrDisabled: elements.rerunAsr.disabled,
+      rerunAsrText: elements.rerunAsr.textContent,
+      rerunAsrTitle: elements.rerunAsr.title,
       translationTitle: elements.retryTranslation.title,
       translationDisabled: elements.retryTranslation.disabled
     };
@@ -909,18 +1080,189 @@ const retryStageButtonState = await vm.runInContext(`
 assert.deepEqual(JSON.parse(JSON.stringify(retryStageButtonState)), {
   audioResume: {
     retryDisabled: false,
-    retryText: "继续 ASR",
-    retryTitle: "继续识别已抽取的音频，不重新下载媒体。",
+    retryText: "继续",
+    retryTitle: "从当前卡住的位置继续，不改变抽取、ASR、翻译的边界。",
+    rerunAsrDisabled: false,
+    rerunAsrText: "重新 ASR",
+    rerunAsrTitle: "复用已抽取音频重新识别；会清除旧 ASR 原文和旧译文。",
     translationDisabled: true
   },
   translationResume: {
     retryDisabled: false,
-    retryText: "继续翻译",
-    retryTitle: "继续翻译已有原文，不重新识别音频。",
+    retryText: "继续",
+    retryTitle: "从当前卡住的位置继续，不改变抽取、ASR、翻译的边界。",
+    rerunAsrDisabled: false,
+    rerunAsrText: "重新 ASR",
+    rerunAsrTitle: "复用已抽取音频重新识别；会清除旧 ASR 原文和旧译文。",
     translationTitle: "只重新翻译已有原文。",
     translationDisabled: false
   }
 });
+
+const continueTaskButtonRouteState = await vm.runInContext(`
+  (async () => {
+    const sent = [];
+    const originalTabsQuery = chrome.tabs.query;
+    const originalSendMessage = chrome.runtime.sendMessage;
+    activeTab = { id: 1, title: "Video", url: "https://example.test/watch" };
+    setTargetLanguageValue("zh-CN");
+    currentJobId = "job-continue-translation";
+    currentJob = {
+      id: "job-continue-translation",
+      status: "completed",
+      stage: "completed_with_warnings",
+      reusableSourceChunks: 1,
+      reusableAudioChunks: 1,
+      translation: {
+        chunksFailed: 1,
+        chunkStatuses: [
+          { index: 0, stage: "failed", sourceCount: 12, translatedCount: 0, error: "翻译失败" }
+        ]
+      }
+    };
+    retryRequestInFlight = false;
+    chrome.tabs.query = async () => [{ id: 1, title: "Video", url: "https://example.test/watch" }];
+    chrome.runtime.sendMessage = async message => {
+      sent.push({ type: message.type, tabId: message.tabId, targetLanguage: message.targetLanguage });
+      return {
+        ok: true,
+        message: "继续翻译已提交",
+        job: {
+          id: "job-continue-translation",
+          status: "running",
+          stage: "retrying",
+          translation: { chunkStatuses: [] }
+        }
+      };
+    };
+    try {
+      await retryPreloadFromSidePanel();
+      return { sent, message: elements.message.textContent };
+    } finally {
+      chrome.tabs.query = originalTabsQuery;
+      chrome.runtime.sendMessage = originalSendMessage;
+    }
+  })()
+`, context);
+
+assert.deepEqual(JSON.parse(JSON.stringify(continueTaskButtonRouteState.sent)), [
+  { type: "FUGUANG_RETRY_PRELOAD", tabId: 1 }
+]);
+assert.equal(continueTaskButtonRouteState.message, "继续翻译已提交");
+
+const rerunAsrButtonRouteState = await vm.runInContext(`
+  (async () => {
+    const sent = [];
+    const originalTabsQuery = chrome.tabs.query;
+    const originalSendMessage = chrome.runtime.sendMessage;
+    activeTab = { id: 1, title: "Video", url: "https://example.test/watch" };
+    setTargetLanguageValue("zh-CN");
+    currentJobId = "job-rerun-asr";
+    currentJob = {
+      id: "job-rerun-asr",
+      status: "completed",
+      reusableSourceChunks: 1,
+      reusableAudioChunks: 1,
+      translation: { chunkStatuses: [{ index: 0, stage: "completed", sourceCount: 1, translatedCount: 1 }] }
+    };
+    asrRetryRequestInFlight = false;
+    chrome.tabs.query = async () => [{ id: 1, title: "Video", url: "https://example.test/watch" }];
+    chrome.runtime.sendMessage = async message => {
+      sent.push({
+        type: message.type,
+        tabId: message.tabId,
+        targetLanguage: message.targetLanguage,
+        chunkIndexes: message.chunkIndexes
+      });
+      return {
+        ok: true,
+        message: "重新 ASR 已提交",
+        job: {
+          id: "job-rerun-asr",
+          status: "running",
+          stage: "retrying",
+          translation: { chunkStatuses: [] }
+        }
+      };
+    };
+    try {
+      await rerunAsrFromSidePanel([0]);
+      return { sent, message: elements.message.textContent };
+    } finally {
+      chrome.tabs.query = originalTabsQuery;
+      chrome.runtime.sendMessage = originalSendMessage;
+    }
+  })()
+`, context);
+
+assert.deepEqual(JSON.parse(JSON.stringify(rerunAsrButtonRouteState.sent)), [
+  {
+    type: "FUGUANG_RERUN_ASR_PRELOAD",
+    tabId: 1,
+    targetLanguage: "zh-CN",
+    chunkIndexes: [0]
+  }
+]);
+assert.equal(rerunAsrButtonRouteState.message, "重新 ASR 已提交");
+
+const retranslateButtonTargetLanguageState = await vm.runInContext(`
+  (async () => {
+    const sent = [];
+    const originalTabsQuery = chrome.tabs.query;
+    const originalSendMessage = chrome.runtime.sendMessage;
+    activeTab = { id: 1, title: "Video", url: "https://example.test/watch" };
+    setTargetLanguageValue("zh-CN");
+    currentJobId = "job-retranslate-target";
+    currentJob = {
+      id: "job-retranslate-target",
+      status: "completed",
+      stage: "completed_with_warnings",
+      translation: {
+        chunksFailed: 1,
+        chunkStatuses: [
+          { index: 0, stage: "failed", sourceCount: 8, translatedCount: 0, error: "翻译失败" }
+        ]
+      }
+    };
+    translationRetryRequestInFlight = false;
+    chrome.tabs.query = async () => [{ id: 1, title: "Video", url: "https://example.test/watch" }];
+    chrome.runtime.sendMessage = async message => {
+      sent.push({
+        type: message.type,
+        tabId: message.tabId,
+        targetLanguage: message.targetLanguage,
+        chunkIndexes: message.chunkIndexes
+      });
+      return {
+        ok: true,
+        message: "重翻译已提交",
+        job: {
+          id: "job-retranslate-target",
+          status: "running",
+          stage: "retry_translation",
+          translation: { chunkStatuses: [] }
+        }
+      };
+    };
+    try {
+      await retryTranslationFromSidePanel([0]);
+      return { sent, message: elements.message.textContent };
+    } finally {
+      chrome.tabs.query = originalTabsQuery;
+      chrome.runtime.sendMessage = originalSendMessage;
+    }
+  })()
+`, context);
+
+assert.deepEqual(JSON.parse(JSON.stringify(retranslateButtonTargetLanguageState.sent)), [
+  {
+    type: "FUGUANG_RETRANSLATE_PRELOAD",
+    tabId: 1,
+    targetLanguage: "zh-CN",
+    chunkIndexes: [0]
+  }
+]);
+assert.equal(retranslateButtonTargetLanguageState.message, "重翻译已提交");
 
 const retryChunkTranslationOnlyTitleState = await vm.runInContext(`
   (() => {
@@ -1127,7 +1469,7 @@ assert.deepEqual(JSON.parse(JSON.stringify(localeSwitchState)), {
     englishActive: true,
     chineseActive: false,
     startText: "Start",
-    retryText: "Retry Failed",
+    retryText: "Continue",
     overlayText: "Overlay On",
     candidateSummary: "Reading media sources from this page.",
     asrKeyHint: "The API key stays in this browser. Auto VAD is enabled only for compatible self-hosted endpoints.",
@@ -1140,7 +1482,7 @@ assert.deepEqual(JSON.parse(JSON.stringify(localeSwitchState)), {
     englishActive: false,
     chineseActive: true,
     startText: "开始抽取",
-    retryText: "重试失败",
+    retryText: "继续",
     overlayText: "浮层开",
     candidateSummary: "正在读取当前页面媒体源。",
     asrKeyHint: "API 密钥只保存在本机浏览器。自动 VAD 只对兼容的自建接口启用。",
@@ -2752,6 +3094,46 @@ assert.deepEqual(JSON.parse(JSON.stringify(legacySubtitleCacheMismatchState)), {
   attached: false
 });
 
+const funAsrProfileUiState = await vm.runInContext(`
+  (() => {
+    elements.asrVadFilter.children = [
+      { value: "auto", hidden: false, textContent: "自动" },
+      { value: "on", hidden: false, textContent: "强制开启（自建）" },
+      { value: "off", hidden: false, textContent: "关闭" }
+    ];
+    asrProfiles = [
+      {
+        id: "dashscope_funasr",
+        name: "阿里云 Fun-ASR",
+        providerType: "dashscope_funasr",
+        baseUrl: "https://dashscope.aliyuncs.com/api/v1",
+        model: "fun-asr",
+        vadFilter: "auto",
+        apiKey: ""
+      }
+    ];
+    elements.asrProfileId.value = "dashscope_funasr";
+    renderSelectedProfile("asr");
+    return {
+      vadDisabled: elements.asrVadFilter.disabled,
+      vadValue: elements.asrVadFilter.value,
+      autoHidden: elements.asrVadFilter.children[0].hidden,
+      forceHidden: elements.asrVadFilter.children[1].hidden,
+      offText: elements.asrVadFilter.children[2].textContent,
+      hint: elements.asrApiKeyHint.textContent,
+      longFileHintHidden: elements.funAsrLongFileHint.hidden
+    };
+  })()
+`, context);
+
+assert.equal(funAsrProfileUiState.vadDisabled, true);
+assert.equal(funAsrProfileUiState.vadValue, "off");
+assert.equal(funAsrProfileUiState.autoHidden, true);
+assert.equal(funAsrProfileUiState.forceHidden, true);
+assert.match(funAsrProfileUiState.offText, /不支持|Not Supported/);
+assert.match(funAsrProfileUiState.hint, /不需要手动配置|no vocabulary ID/);
+assert.equal(funAsrProfileUiState.longFileHintHidden, false);
+
 const xaiProfileUiState = await vm.runInContext(`
   (() => {
     asrProfiles = [
@@ -2770,7 +3152,10 @@ const xaiProfileUiState = await vm.runInContext(`
       disabled: elements.asrModel.disabled,
       placeholder: elements.asrModel.placeholder,
       hint: elements.asrApiKeyHint.textContent,
-      vadFilter: elements.asrVadFilter.value
+      vadFilter: elements.asrVadFilter.value,
+      autoHidden: elements.asrVadFilter.children[0].hidden,
+      offText: elements.asrVadFilter.children[2].textContent,
+      longFileHintHidden: elements.funAsrLongFileHint.hidden
     };
   })()
 `, context);
@@ -2779,6 +3164,9 @@ assert.equal(xaiProfileUiState.disabled, true);
 assert.match(xaiProfileUiState.placeholder, /不会发送|可选/);
 assert.match(xaiProfileUiState.hint, /配置备注/);
 assert.equal(xaiProfileUiState.vadFilter, "auto");
+assert.equal(xaiProfileUiState.autoHidden, false);
+assert.match(xaiProfileUiState.offText, /关闭|Off/);
+assert.equal(xaiProfileUiState.longFileHintHidden, true);
 
 const syntheticHighlightState = await vm.runInContext(`
   (async () => {
@@ -2980,7 +3368,7 @@ const partialTranscriptAttachState = await vm.runInContext(`
   })()
 `, context);
 
-assert.match(partialTranscriptAttachState.attachedVtt, /source first/);
+assert.doesNotMatch(partialTranscriptAttachState.attachedVtt, /source first/);
 assert.match(partialTranscriptAttachState.attachedVtt, /translated second/);
 
 const sourceOnlyBilingualCueState = await vm.runInContext(`
@@ -3069,7 +3457,6 @@ const sourceOnlyCompletedTranslatedListState = await vm.runInContext(`
 `, context);
 
 assert.deepEqual(JSON.parse(JSON.stringify(sourceOnlyCompletedTranslatedListState.children)), [
-  ["source only"],
   ["translated second"]
 ]);
 
@@ -3155,9 +3542,9 @@ const sourceOnlyTranslatedExportState = await vm.runInContext(`
 `, context);
 
 assert.deepEqual(JSON.parse(JSON.stringify(sourceOnlyTranslatedExportState)), {
-  downloads: 1,
-  message: "SRT 字幕已导出。",
-  text: "1\n00:00:00,000 --> 00:00:02,000\nsource only while running\n"
+  downloads: 0,
+  message: "当前模式下还没有可导出的译文。",
+  text: ""
 });
 
 const sourceOnlyBilingualAttachState = await vm.runInContext(`

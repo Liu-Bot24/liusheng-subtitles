@@ -5,7 +5,9 @@ const MESSAGE = {
   START_PRELOAD_AUTO: "FUGUANG_START_PRELOAD_AUTO",
   RETRY_PRELOAD: "FUGUANG_RETRY_PRELOAD",
   RETRY_PRELOAD_CHUNKS: "FUGUANG_RETRY_PRELOAD_CHUNKS",
+  RERUN_ASR_PRELOAD: "FUGUANG_RERUN_ASR_PRELOAD",
   RETRANSLATE_PRELOAD: "FUGUANG_RETRANSLATE_PRELOAD",
+  RETRANSLATE_TRANSCRIPT: "FUGUANG_RETRANSLATE_TRANSCRIPT",
   CANCEL_PRELOAD: "FUGUANG_CANCEL_PRELOAD",
   CLEAR_PRELOAD_AUDIO_CACHE: "FUGUANG_CLEAR_PRELOAD_AUDIO_CACHE",
   CHECK_PRELOAD_JOB: "FUGUANG_CHECK_PRELOAD_JOB",
@@ -68,10 +70,10 @@ const I18N = {
     retryFailedCount: "重试失败 {count}",
     retryFailedSegmentsCount: "重试失败识别分段 {count}",
     retry: "重试",
+    continueTask: "继续",
     retranslate: "重翻译字幕",
     retranslateShort: "重翻译",
-    continueTranslate: "继续翻译",
-    continueAsr: "继续 ASR",
+    rerunAsr: "重新 ASR",
     stop: "停止",
     clearAudio: "清音频缓存",
     refresh: "刷新",
@@ -98,6 +100,7 @@ const I18N = {
     auto: "自动",
     forceOn: "强制开启（自建）",
     off: "关闭",
+    unsupported: "不支持",
     apiKey: "API 密钥",
     apiFormat: "接口格式",
     openaiFormat: "OpenAI 格式",
@@ -106,6 +109,7 @@ const I18N = {
     asrWorkers: "ASR 并发",
     translationWorkers: "翻译并发",
     chunkMinutes: "翻译分段时长（分钟）",
+    funAsrLongFileHint: "Fun-ASR 使用长文件链路：ASR 并发不适用于该模式，系统会按 2 小时以内粗切，通常串行或最多少量并行提交。",
     subtitleStyle: "字幕样式",
     fontSize: "文字大小（像素）",
     backgroundOpacity: "背景透明度 %",
@@ -143,6 +147,7 @@ const I18N = {
     stageAsr: "语音识别",
     stageAsrTranslation: "识别翻译",
     stageRetryFailed: "重试失败",
+    stageRetryTranslation: "重翻译",
     stageTranslating: "识别翻译",
     stageTranslated: "完成",
     stageCompleted: "完成",
@@ -161,8 +166,10 @@ const I18N = {
     metricAsrTranslation: "识别 / 翻译",
     metricCurrentStep: "当前步骤",
     metricChunkMinutes: "分段时长",
+    metricLongFileChunk: "长文件分段",
     metricReady: "已可用",
     metricDoneChunks: "分段完成",
+    metricDoneLongFileChunks: "长文件完成",
     metricAsrActive: "识别中",
     metricTranslating: "翻译中",
     metricAsrWorkers: "ASR 并发",
@@ -172,6 +179,8 @@ const I18N = {
     audioExtract: "音频抽取",
     asrTranslation: "识别 / 翻译",
     minutes: "{count} 分钟",
+    maxHours: "最长 {count} 小时",
+    maxMinutes: "最长 {count} 分钟",
     taskSubtitle: "任务 {id} · {source}",
     noSpeech: "无语音",
     sourceSegments: "原文 {count}",
@@ -180,6 +189,7 @@ const I18N = {
     attemptCount: "第 {count} 次尝试",
     waitingDuration: "已等待 {duration}",
     waitingFirstChunk: "等待首个音频切片生成",
+    waitingFirstLongFileChunk: "等待长文件音频生成",
     readyAudio: "已生成 {duration} 可处理音频",
     internalChunks: "内部媒体切片 {done}/{total}",
     downloadSegments: "下载媒体切片 {done}/{total}",
@@ -191,10 +201,13 @@ const I18N = {
     reuseSourceMessage: "正在继续翻译...",
     reuseAudioMessage: "正在继续识别...",
     continueTaskMessage: "正在继续处理任务...",
+    rerunAsrMessage: "正在重新识别音频，会复用音频缓存并清除旧 ASR 原文和旧译文。",
     retranslateOnlyMessage: "正在重新翻译字幕，不会重新识别音频...",
+    retranslateCacheMessage: "正在使用本地缓存原文重新翻译，不会重新识别音频...",
     retryChunkMessage: "正在重试第 {index} 个失败分段...",
     retranslateChunkMessage: "正在重翻译第 {index} 个分段...",
     retrySubmitted: "已提交失败分段重试。",
+    rerunAsrSubmitted: "已提交重新 ASR。",
     retranslateSubmitted: "已提交字幕重翻译。",
     retryChunkSubmitted: "已提交第 {index} 个失败分段重试。",
     retranslateChunkSubmitted: "已提交第 {index} 个分段重翻译。",
@@ -230,6 +243,7 @@ const I18N = {
     subtitleCacheClearedCount: "已清除当前页面字幕缓存（{count} 条）。",
     subtitleCacheClearedBackendFailed: "已清除当前页面字幕缓存（{count} 条），但页面状态同步失败：{error}",
     subtitleCacheDisplayCleared: "当前页面没有已保存的字幕缓存，已清除当前显示的缓存字幕。",
+    subtitleCacheDisplayClearedBackendFailed: "当前页面没有已保存的字幕缓存，已清除当前显示的缓存字幕，但页面状态同步失败：{error}",
     subtitleCacheClearFailed: "清除字幕缓存失败：{error}",
     backgroundClearFailed: "后台没有完成字幕状态清理。",
     noSavedCacheAndDisplayCleared: "当前页面没有已保存的字幕缓存，已清除当前显示。",
@@ -240,11 +254,15 @@ const I18N = {
     localOnlyPlaceholder: "只保存在本机浏览器",
     xaiModelPlaceholder: "可选备注",
     xaiHint: "xAI ASR 调用 /stt；模型名称只作为配置备注。API 密钥只保存在本机浏览器。",
+    funAsrKeyHint: "Fun-ASR 使用 DashScope 长文件转写；敏感词过滤使用系统默认，热词表不需要手动配置。",
     asrKeyHint: "API 密钥只保存在本机浏览器。自动 VAD 只对兼容的自建接口启用。",
     llmKeyHint: "API 密钥只保存在本机浏览器。",
     startTitle: "从当前媒体源抽取音频并生成字幕。",
     restartTitle: "从选中的媒体源重新抽取音频并创建新任务。",
     retryNeedsExtractTitle: "音频缓存已清除，需要重新抽取全部。",
+    continueTaskTitle: "从当前卡住的位置继续，不改变抽取、ASR、翻译的边界。",
+    rerunAsrTitle: "复用已抽取音频重新识别；会清除旧 ASR 原文和旧译文。",
+    rerunAsrNeedsAudioTitle: "没有可复用音频缓存，请重新抽取。",
     continueTranslateTitle: "继续翻译已有原文，不重新识别音频。",
     continueAsrTitle: "继续识别已抽取的音频，不重新下载媒体。",
     retryFailedTitle: "只重试当前任务里的失败分段。",
@@ -269,6 +287,7 @@ const I18N = {
     sourceDashParse: "DASH 列表",
     folded: "折叠 {count}",
     waitFirstSegment: "等待首段",
+    waitFirstLongFileSegment: "等待长文件音频",
     activeProcessing: "{count} 处理中",
     failedCount: "{count} 失败",
     contextInvalidated: "扩展上下文已失效，请重新加载扩展并刷新当前页面。",
@@ -311,10 +330,10 @@ const I18N = {
     retryFailedCount: "Retry Failed {count}",
     retryFailedSegmentsCount: "Retry Failed ASR {count}",
     retry: "Retry",
+    continueTask: "Continue",
     retranslate: "Retranslate",
     retranslateShort: "Retranslate",
-    continueTranslate: "Continue Translation",
-    continueAsr: "Continue ASR",
+    rerunAsr: "Rerun ASR",
     stop: "Stop",
     clearAudio: "Clear Audio",
     refresh: "Refresh",
@@ -341,6 +360,7 @@ const I18N = {
     auto: "Auto",
     forceOn: "Force On (self-hosted)",
     off: "Off",
+    unsupported: "Not Supported",
     apiKey: "API Key",
     apiFormat: "API Format",
     openaiFormat: "OpenAI Compatible",
@@ -349,6 +369,7 @@ const I18N = {
     asrWorkers: "ASR Workers",
     translationWorkers: "Translation Workers",
     chunkMinutes: "Segment Minutes",
+    funAsrLongFileHint: "Fun-ASR uses a long-file workflow: ASR worker concurrency does not apply to this mode; audio is coarsely split under two hours and usually submitted serially or with very limited parallelism.",
     subtitleStyle: "Subtitle Style",
     fontSize: "Font Size (px)",
     backgroundOpacity: "Background Opacity %",
@@ -386,6 +407,7 @@ const I18N = {
     stageAsr: "Speech recognition",
     stageAsrTranslation: "ASR + translation",
     stageRetryFailed: "Retrying failed",
+    stageRetryTranslation: "Retranslating",
     stageTranslating: "ASR + translation",
     stageTranslated: "Done",
     stageCompleted: "Done",
@@ -404,8 +426,10 @@ const I18N = {
     metricAsrTranslation: "ASR / Translation",
     metricCurrentStep: "Current Step",
     metricChunkMinutes: "Segment Length",
+    metricLongFileChunk: "Long-file Segment",
     metricReady: "Ready Audio",
     metricDoneChunks: "Segments Done",
+    metricDoneLongFileChunks: "Long-file Segments Done",
     metricAsrActive: "ASR Active",
     metricTranslating: "Translating",
     metricAsrWorkers: "ASR Workers",
@@ -415,6 +439,8 @@ const I18N = {
     audioExtract: "Audio Extraction",
     asrTranslation: "ASR / Translation",
     minutes: "{count} min",
+    maxHours: "Up to {count} hr",
+    maxMinutes: "Up to {count} min",
     taskSubtitle: "Task {id} · {source}",
     noSpeech: "No speech",
     sourceSegments: "Source {count}",
@@ -423,6 +449,7 @@ const I18N = {
     attemptCount: "Attempt {count}",
     waitingDuration: "Waited {duration}",
     waitingFirstChunk: "Waiting for the first audio segment",
+    waitingFirstLongFileChunk: "Waiting for long-file audio",
     readyAudio: "{duration} of audio ready",
     internalChunks: "Internal media segments {done}/{total}",
     downloadSegments: "Downloaded media segments {done}/{total}",
@@ -434,10 +461,13 @@ const I18N = {
     reuseSourceMessage: "Continuing translation...",
     reuseAudioMessage: "Continuing ASR...",
     continueTaskMessage: "Continuing the task...",
+    rerunAsrMessage: "Rerunning ASR from cached audio and clearing the old ASR text and translation.",
     retranslateOnlyMessage: "Retranslating subtitles without running ASR again...",
+    retranslateCacheMessage: "Retranslating from cached source without running ASR again...",
     retryChunkMessage: "Retrying failed segment #{index}...",
     retranslateChunkMessage: "Retranslating segment #{index}...",
     retrySubmitted: "Failed segment retry submitted.",
+    rerunAsrSubmitted: "ASR rerun submitted.",
     retranslateSubmitted: "Subtitle retranslation submitted.",
     retryChunkSubmitted: "Failed segment #{index} retry submitted.",
     retranslateChunkSubmitted: "Segment #{index} retranslation submitted.",
@@ -473,6 +503,7 @@ const I18N = {
     subtitleCacheClearedCount: "Cleared {count} subtitle cache item(s).",
     subtitleCacheClearedBackendFailed: "Cleared {count} subtitle cache item(s), but page state sync failed: {error}",
     subtitleCacheDisplayCleared: "No saved cache was found; the currently displayed cached subtitles were cleared.",
+    subtitleCacheDisplayClearedBackendFailed: "No saved cache was found; the displayed cached subtitles were cleared, but page state sync failed: {error}",
     subtitleCacheClearFailed: "Failed to clear subtitle cache: {error}",
     backgroundClearFailed: "The background service did not clear subtitle state.",
     noSavedCacheAndDisplayCleared: "No saved subtitle cache was found; current display was cleared.",
@@ -483,11 +514,15 @@ const I18N = {
     localOnlyPlaceholder: "Stored in this browser only",
     xaiModelPlaceholder: "Optional note",
     xaiHint: "xAI ASR uses /stt; the model field is only a profile note. The API key stays in this browser.",
+    funAsrKeyHint: "Fun-ASR uses DashScope long-file transcription. Built-in sensitive filtering stays enabled; no vocabulary ID is required.",
     asrKeyHint: "The API key stays in this browser. Auto VAD is enabled only for compatible self-hosted endpoints.",
     llmKeyHint: "The API key stays in this browser.",
     startTitle: "Extract audio from the selected source and generate subtitles.",
     restartTitle: "Extract audio again from the selected source and create a new task.",
     retryNeedsExtractTitle: "Audio cache was cleared. Start a full extraction again.",
+    continueTaskTitle: "Continue from the step where the task stopped without changing extraction, ASR, or translation boundaries.",
+    rerunAsrTitle: "Run ASR again from extracted audio; old ASR text and translations will be cleared.",
+    rerunAsrNeedsAudioTitle: "No reusable audio cache is available. Extract again first.",
     continueTranslateTitle: "Continue translating existing source text without running ASR again.",
     continueAsrTitle: "Continue ASR from extracted audio without downloading media again.",
     retryFailedTitle: "Retry only failed segments in this task.",
@@ -512,6 +547,7 @@ const I18N = {
     sourceDashParse: "DASH playlist",
     folded: "Folded {count}",
     waitFirstSegment: "Waiting for first segment",
+    waitFirstLongFileSegment: "Waiting for long-file audio",
     activeProcessing: "{count} active",
     failedCount: "{count} failed",
     contextInvalidated: "Extension context expired. Reload the extension and refresh this page.",
@@ -569,6 +605,7 @@ const elements = {
   taskPanel: document.querySelector("#taskPanel"),
   settingsPanel: document.querySelector("#settingsPanel"),
   startPreload: document.querySelector("#startPreload"),
+  rerunAsr: document.querySelector("#rerunAsr"),
   retryPreload: document.querySelector("#retryPreload"),
   retryTranslation: document.querySelector("#retryTranslation"),
   cancelPreload: document.querySelector("#cancelPreload"),
@@ -613,6 +650,7 @@ const elements = {
   asrWorkers: document.querySelector("#asrWorkers"),
   translationWorkers: document.querySelector("#translationWorkers"),
   chunkMinutes: document.querySelector("#chunkMinutes"),
+  funAsrLongFileHint: document.querySelector("#funAsrLongFileHint"),
   subtitleFontSize: document.querySelector("#subtitleFontSize"),
   subtitleBackgroundOpacity: document.querySelector("#subtitleBackgroundOpacity")
 };
@@ -632,6 +670,7 @@ let currentAsrProfileId = "";
 let currentLlmProfileId = "";
 let startRequestInFlight = false;
 let retryRequestInFlight = false;
+let asrRetryRequestInFlight = false;
 let translationRetryRequestInFlight = false;
 let subtitleCues = [];
 let currentTranscript = null;
@@ -671,6 +710,7 @@ elements.localeChinese.addEventListener("click", () => setLocale("zh"));
 elements.tabTask.addEventListener("click", () => showTab("task"));
 elements.tabSettings.addEventListener("click", () => showTab("settings"));
 elements.startPreload.addEventListener("click", () => startPreloadFromSidePanel());
+elements.rerunAsr.addEventListener("click", () => rerunAsrFromSidePanel());
 elements.retryPreload.addEventListener("click", () => retryPreloadFromSidePanel());
 elements.retryTranslation.addEventListener("click", () => retryTranslationFromSidePanel());
 elements.cancelPreload.addEventListener("click", () => cancelPreloadFromSidePanel());
@@ -980,10 +1020,31 @@ function selectedProfile(kind) {
   return profileById(profiles, selectedId);
 }
 
+function updateAsrVadFilterAvailability(usesFunAsr) {
+  const select = elements.asrVadFilter;
+  if (!select) {
+    return;
+  }
+  const options = Array.from(select.options || select.children || []);
+  for (const option of options) {
+    if (option.value === "off") {
+      option.textContent = usesFunAsr ? t("unsupported") : t("off");
+    }
+    if (option.value === "auto" || option.value === "on") {
+      option.hidden = usesFunAsr;
+    }
+  }
+  if (usesFunAsr) {
+    select.value = "off";
+  }
+  select.disabled = usesFunAsr;
+}
+
 function renderSelectedProfile(kind) {
   const profile = selectedProfile(kind);
   if (kind === "asr") {
     const usesXaiAsr = profile.providerType === "xai";
+    const usesFunAsr = profile.providerType === "dashscope_funasr";
     elements.asrProfileName.value = profile.name || "";
     elements.asrBaseUrl.value = profile.baseUrl || "";
     elements.asrModel.value = profile.model || "";
@@ -992,11 +1053,17 @@ function renderSelectedProfile(kind) {
     elements.asrBaseUrl.disabled = false;
     elements.asrApiKey.disabled = false;
     elements.asrModel.disabled = usesXaiAsr;
+    updateAsrVadFilterAvailability(usesFunAsr);
+    if (elements.funAsrLongFileHint) {
+      elements.funAsrLongFileHint.hidden = !usesFunAsr;
+    }
     elements.asrBaseUrl.placeholder = placeholderBaseUrl(profile.providerType);
     elements.asrModel.placeholder = usesXaiAsr ? t("xaiModelPlaceholder") : "";
     elements.asrApiKey.placeholder = t("localOnlyPlaceholder");
     elements.asrApiKeyHint.textContent = usesXaiAsr
         ? t("xaiHint")
+        : usesFunAsr
+          ? t("funAsrKeyHint")
         : t("asrKeyHint");
     return;
   }
@@ -1016,7 +1083,7 @@ function saveProfileFields(kind, profileId) {
     profile.name = elements.asrProfileName.value.trim() || profile.name || profile.model || t("unnamedProfile");
     profile.baseUrl = elements.asrBaseUrl.value.trim();
     profile.model = elements.asrModel.value.trim();
-    profile.vadFilter = normalizeAsrVadFilterMode(elements.asrVadFilter.value);
+    profile.vadFilter = profile.providerType === "dashscope_funasr" ? "off" : normalizeAsrVadFilterMode(elements.asrVadFilter.value);
     profile.apiKey = elements.asrApiKey.value.trim();
     return;
   }
@@ -1259,7 +1326,10 @@ async function retryPreloadFromSidePanel() {
   updateActionButtons(currentJob);
   setMessage(retryPreloadMessage(currentJob));
   try {
-    const response = await send({ type: MESSAGE.RETRY_PRELOAD, tabId: requestContext.tabId });
+    const response = await send({
+      type: MESSAGE.RETRY_PRELOAD,
+      tabId: requestContext.tabId
+    });
     if (!response.ok) {
       setMessage(response.error);
       return;
@@ -1281,9 +1351,8 @@ async function retryPreloadFromSidePanel() {
 }
 
 function retryPreloadMessage(job) {
-  const failed = Number(job?.translation?.chunksFailed || job?.progress?.chunksFailed || 0);
-  const asrPartialFailed = Number(job?.translation?.chunksAsrPartialFailed || job?.progress?.translation?.chunksAsrPartialFailed || 0);
-  if (failed + asrPartialFailed > 0) {
+  const retryableAsrFailures = countRetryableAsrFailureChunks(job);
+  if (retryableAsrFailures > 0) {
     return t("retryPreloadMessage");
   }
   if (countReusableSourceChunks(job) > 0) {
@@ -1295,11 +1364,51 @@ function retryPreloadMessage(job) {
   return t("continueTaskMessage");
 }
 
+async function rerunAsrFromSidePanel(chunkIndexes = []) {
+  if (asrRetryRequestInFlight) {
+    return;
+  }
+  await refreshActiveTab();
+  const requestContext = captureSidepanelRequestContext();
+  asrRetryRequestInFlight = true;
+  updateActionButtons(currentJob);
+  setMessage(t("rerunAsrMessage"));
+  try {
+    const response = await send({
+      type: MESSAGE.RERUN_ASR_PRELOAD,
+      tabId: requestContext.tabId,
+      chunkIndexes: Array.isArray(chunkIndexes) ? chunkIndexes : [],
+      targetLanguage: getTargetLanguageValue()
+    });
+    if (!response.ok) {
+      setMessage(response.error);
+      return;
+    }
+    if (!(await sidepanelRequestStillCurrent(requestContext))) {
+      setMessage(t("tabChangedIgnore"));
+      return;
+    }
+    currentJobId = response.job?.id || currentJobId;
+    if (currentJobId) {
+      clearedSubtitleJobIds.delete(currentJobId);
+    }
+    setMessage(response.message || t("rerunAsrSubmitted"));
+    renderJob(response.job);
+  } finally {
+    asrRetryRequestInFlight = false;
+    updateActionButtons(currentJob);
+  }
+}
+
 async function retryTranslationFromSidePanel(chunkIndexes = []) {
   if (translationRetryRequestInFlight) {
     return;
   }
   await refreshActiveTab();
+  if (!currentJobId && currentTranscriptHasReusableSource()) {
+    await retranslateCachedTranscriptFromSidePanel();
+    return;
+  }
   const requestContext = captureSidepanelRequestContext();
   translationRetryRequestInFlight = true;
   updateActionButtons(currentJob);
@@ -1308,7 +1417,8 @@ async function retryTranslationFromSidePanel(chunkIndexes = []) {
     const response = await send({
       type: MESSAGE.RETRANSLATE_PRELOAD,
       tabId: requestContext.tabId,
-      chunkIndexes: Array.isArray(chunkIndexes) ? chunkIndexes : []
+      chunkIndexes: Array.isArray(chunkIndexes) ? chunkIndexes : [],
+      targetLanguage: getTargetLanguageValue()
     });
     if (!response.ok) {
       setMessage(response.error);
@@ -1330,6 +1440,61 @@ async function retryTranslationFromSidePanel(chunkIndexes = []) {
   }
 }
 
+async function retranslateCachedTranscriptFromSidePanel() {
+  const requestContext = captureSidepanelRequestContext();
+  translationRetryRequestInFlight = true;
+  updateActionButtons(currentJob);
+  setMessage(t("retranslateCacheMessage"));
+  try {
+    const response = await send({
+      type: MESSAGE.RETRANSLATE_TRANSCRIPT,
+      tabId: requestContext.tabId,
+      transcript: currentTranscript,
+      metadata: cachedTranscriptRetranslateMetadata(),
+      targetLanguage: getTargetLanguageValue()
+    });
+    if (!response.ok) {
+      setMessage(response.error);
+      return;
+    }
+    if (!(await sidepanelRequestStillCurrent(requestContext))) {
+      setMessage(t("tabChangedIgnore"));
+      return;
+    }
+    currentJobId = response.job?.id || currentJobId;
+    if (currentJobId) {
+      clearedSubtitleJobIds.delete(currentJobId);
+    }
+    currentSubtitleCacheEntry = null;
+    cachedSubtitleLoadedKey = "";
+    setMessage(response.message || t("retranslateSubmitted"));
+    renderJob(response.job);
+  } finally {
+    translationRetryRequestInFlight = false;
+    updateActionButtons(currentJob);
+  }
+}
+
+function cachedTranscriptRetranslateMetadata() {
+  const metadata = currentTranscript?.metadata && typeof currentTranscript.metadata === "object" ? currentTranscript.metadata : {};
+  const selected = getSelectedCandidate();
+  return {
+    ...metadata,
+    title: currentSubtitleCacheEntry?.title || metadata.title || elements.pageTitle.textContent || selected?.title || activeTab?.title || "",
+    pageUrl: currentSubtitleCacheEntry?.pageUrl || metadata.pageUrl || activeTab?.url || selected?.pageUrl || "",
+    sourceUrl: currentSubtitleCacheEntry?.sourceUrl || metadata.sourceUrl || selected?.url || ""
+  };
+}
+
+function currentTranscriptHasReusableSource() {
+  return transcriptReusableSourceCount(currentTranscript) > 0;
+}
+
+function transcriptReusableSourceCount(transcript) {
+  const source = Array.isArray(transcript?.source) ? transcript.source : [];
+  return source.filter(segment => cleanSubtitleText(segment?.text || "")).length;
+}
+
 async function retryChunkFromSidePanel(index, options = {}) {
   await refreshActiveTab();
   if (!currentJobId || !Number.isFinite(index)) {
@@ -1347,7 +1512,8 @@ async function retryChunkFromSidePanel(index, options = {}) {
     const response = await send({
       type: options.translationOnly ? MESSAGE.RETRANSLATE_PRELOAD : MESSAGE.RETRY_PRELOAD_CHUNKS,
       tabId: requestContext.tabId,
-      chunkIndexes: [index]
+      chunkIndexes: [index],
+      ...(options.translationOnly ? { targetLanguage: getTargetLanguageValue() } : {})
     });
     if (!response.ok) {
       setMessage(response.error);
@@ -1454,6 +1620,7 @@ function renderJob(job) {
   const progress = job.progress || {};
   const extraction = progress.extraction || job.extract || progress;
   const translation = progress.translation || job.translation || {};
+  const funAsrJob = isFunAsrJob(job);
   elements.status.textContent = statusLabel({ preload: job.status, preloadJob: job });
   updateActionButtons(job);
   updateTaskPanelFocus(job);
@@ -1479,11 +1646,11 @@ function renderJob(job) {
   metrics.className = "metrics";
   metrics.append(
     metric(t("metricExtract"), extractionProgressText(extraction, job.status)),
-    metric(t("metricAsrTranslation"), translationProgressText(translation)),
+    metric(t("metricAsrTranslation"), translationProgressText(translation, job)),
     metric(t("metricCurrentStep"), extractionActivityText(extraction)),
-    metric(t("metricChunkMinutes"), extraction.chunkSeconds ? t("minutes", { count: Math.round(Number(extraction.chunkSeconds) / 60) }) : "-"),
+    metric(funAsrJob ? t("metricLongFileChunk") : t("metricChunkMinutes"), chunkDurationText(job, extraction)),
     metric(t("metricReady"), extraction.readySeconds ? formatDuration(extraction.readySeconds) : "-"),
-    metric(t("metricDoneChunks"), `${translation.chunksDone || 0}/${translation.chunksTotal || "?"}`),
+    metric(funAsrJob ? t("metricDoneLongFileChunks") : t("metricDoneChunks"), `${translation.chunksDone || 0}/${translation.chunksTotal || "?"}`),
     metric(t("metricAsrActive"), translation.chunksAsr || 0),
     metric(t("metricTranslating"), translation.chunksTranslating || 0),
     metric(t("metricAsrWorkers"), translation.asrWorkers || "-"),
@@ -1495,7 +1662,7 @@ function renderJob(job) {
   const children = [
     header,
     progressBar(t("audioExtract"), normalizedPercent(progress.extractPercent ?? extraction.percent, job.status), extractionProgressText(extraction, job.status)),
-    progressBar(t("asrTranslation"), normalizedPercent(progress.translationPercent ?? translation.percent, job.status), translationProgressText(translation)),
+    progressBar(t("asrTranslation"), normalizedPercent(progress.translationPercent ?? translation.percent, job.status), translationProgressText(translation, job)),
     metrics,
     chunkList(translation.chunkStatuses || progress.chunkStatuses || [])
   ];
@@ -1519,6 +1686,26 @@ function renderEmptyJob(text) {
   empty.className = "job-empty";
   empty.textContent = text;
   elements.jobStatus.appendChild(empty);
+}
+
+function isFunAsrJob(job) {
+  return job?.pipeline === "funasr" || job?.progress?.pipeline === "funasr";
+}
+
+function chunkDurationText(job, extraction = {}) {
+  const funAsrJob = isFunAsrJob(job);
+  const seconds = Number(funAsrJob ? extraction.asrChunkSeconds : extraction.chunkSeconds);
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    return "-";
+  }
+  const minutes = Math.round(seconds / 60);
+  if (!funAsrJob) {
+    return t("minutes", { count: minutes });
+  }
+  if (seconds >= 3600 && seconds % 3600 === 0) {
+    return t("maxHours", { count: Math.round(seconds / 3600) });
+  }
+  return t("maxMinutes", { count: minutes });
 }
 
 function renderCandidates(items) {
@@ -1752,6 +1939,12 @@ function renderSubtitleCueList() {
     time.textContent = cue.time;
     const textWrap = document.createElement("div");
     textWrap.className = "subtitle-lines";
+    if (cue.speakerLabel) {
+      const speaker = document.createElement("div");
+      speaker.className = "subtitle-speaker";
+      speaker.textContent = cue.speakerLabel;
+      textWrap.appendChild(speaker);
+    }
     if (subtitleDisplayMode === "bilingual" && cue.sourceText && cue.sourceText !== cue.text) {
       const source = document.createElement("div");
       source.className = "subtitle-source";
@@ -2332,7 +2525,10 @@ async function exportCurrentSubtitle() {
     setMessage(t("noExportSubtitle"));
     return;
   }
-  const srt = cuesToSrt(subtitleCues, subtitleDisplayMode, { allowRunningSourcePreview: false });
+  const srt = cuesToSrt(subtitleCues, subtitleDisplayMode, {
+    allowRunningSourcePreview: false,
+    srtMetadata: buildSrtExportMetadata()
+  });
   if (!/\d+\n\d{2}:\d{2}:\d{2},\d{3}\s+-->\s+\d{2}:\d{2}:\d{2},\d{3}/.test(srt)) {
     setMessage(t("noExportRealTranslation"));
     return;
@@ -2340,6 +2536,18 @@ async function exportCurrentSubtitle() {
   const blob = new Blob([srt], { type: "application/x-subrip;charset=utf-8" });
   await downloadBlob(blob, `${safeFilename(elements.pageTitle.textContent || "llm-raw-subtitle")}.srt`);
   setMessage(t("srtExported"));
+}
+
+function buildSrtExportMetadata() {
+  return {
+    sourcePage: currentSrtSourcePageUrl(),
+    exportedBy: "LLM 生肉翻译工具 https://blog.liu-qi.cn/tools"
+  };
+}
+
+function currentSrtSourcePageUrl() {
+  const metadata = currentTranscript?.metadata && typeof currentTranscript.metadata === "object" ? currentTranscript.metadata : {};
+  return String(metadata.pageUrl || currentSubtitleCacheEntry?.pageUrl || activeTab?.url || "").trim();
 }
 
 function downloadBlob(blob, filename) {
@@ -2415,8 +2623,16 @@ async function clearCurrentSubtitleCache() {
       ids.add(currentSubtitleCacheEntry.id);
     }
     const cacheIds = [...ids].filter(Boolean);
+    const shouldClearDisplay = shouldClearCurrentSubtitleDisplayForCacheAction();
     if (!cacheIds.length) {
-      setMessage(t("noCacheLocation"));
+      if (shouldClearDisplay) {
+        const suppressError = await clearDisplayedSubtitleStateForCacheAction();
+        setMessage(suppressError
+          ? t("subtitleCacheDisplayClearedBackendFailed", { error: suppressError })
+          : t("subtitleCacheDisplayCleared"));
+      } else {
+        setMessage(t("noCacheLocation"));
+      }
       return;
     }
 
@@ -2432,24 +2648,14 @@ async function clearCurrentSubtitleCache() {
       cachedSubtitleLoadedKey = "";
     }
 
-    if (!deleted && !wasShowingClearedCache) {
+    if (!deleted && !wasShowingClearedCache && !shouldClearDisplay) {
       renderSubtitleNotice();
       setMessage(t("noSavedSubtitleCache"));
       return;
     }
     let suppressError = "";
-    if (wasShowingClearedCache || subtitleCues.length) {
-      const jobIdToSuppress = currentJobId || renderedSubtitleJobId || currentSubtitleCacheEntry?.jobId || "";
-      if (jobIdToSuppress) {
-        clearedSubtitleJobIds.add(jobIdToSuppress);
-        try {
-          await suppressPreloadSubtitleState(jobIdToSuppress);
-        } catch (error) {
-          suppressError = formatRuntimeError(error.message);
-        }
-      }
-      await detachCurrentSubtitlesFromPage();
-      clearSubtitles(t("subtitleCacheCleared"));
+    if (wasShowingClearedCache || shouldClearDisplay) {
+      suppressError = await clearDisplayedSubtitleStateForCacheAction();
     } else {
       renderSubtitleNotice();
     }
@@ -2463,6 +2669,29 @@ async function clearCurrentSubtitleCache() {
   } catch (error) {
     setMessage(t("subtitleCacheClearFailed", { error: formatRuntimeError(error.message) }));
   }
+}
+
+function shouldClearCurrentSubtitleDisplayForCacheAction() {
+  if (!subtitleCues.length && !currentTranscript && !renderedSubtitleJobId) {
+    return false;
+  }
+  return !isRunningJob(currentJob);
+}
+
+async function clearDisplayedSubtitleStateForCacheAction() {
+  let suppressError = "";
+  const jobIdToSuppress = currentJobId || renderedSubtitleJobId || currentSubtitleCacheEntry?.jobId || "";
+  if (jobIdToSuppress) {
+    clearedSubtitleJobIds.add(jobIdToSuppress);
+    try {
+      await suppressPreloadSubtitleState(jobIdToSuppress);
+    } catch (error) {
+      suppressError = formatRuntimeError(error.message);
+    }
+  }
+  await detachCurrentSubtitlesFromPage();
+  clearSubtitles(t("subtitleCacheCleared"));
+  return suppressError;
 }
 
 function isSubtitleJobCleared(jobId) {
@@ -2816,6 +3045,9 @@ function jobTitle(job) {
   if (job.stage === "retry_failed") {
     return t("jobRetryFailed");
   }
+  if (job.stage === "retry_translation") {
+    return t("retranslateOnlyMessage");
+  }
   return t("jobPreloading");
 }
 
@@ -2827,7 +3059,9 @@ function stageLabel(stage) {
     asr: t("stageAsr"),
     asr_translation: t("stageAsrTranslation"),
     retry_failed: t("stageRetryFailed"),
+    retry_translation: t("stageRetryTranslation"),
     translating: t("stageTranslating"),
+    translation: t("stageTranslating"),
     translated: t("stageTranslated"),
     completed: t("stageCompleted"),
     completed_with_warnings: t("statusCompletedWarnings"),
@@ -2835,7 +3069,7 @@ function stageLabel(stage) {
     failed: t("stageFailed"),
     done: t("stageCompleted"),
     error: t("stageFailed")
-  }[stage] || stage || t("stageProcessing");
+  }[stage] || t("stageProcessing");
 }
 
 function stageClassName(stage) {
@@ -2853,7 +3087,7 @@ function chunkStageLabel(stage) {
     done: t("chunkCompleted"),
     failed: t("chunkFailed"),
     cancelled: t("chunkStopped")
-  }[stage] || stage || t("chunkQueued");
+  }[stage] || t("chunkQueued");
 }
 
 function chunkMetaText(status) {
@@ -2910,12 +3144,13 @@ function runningChunkWaitText(status) {
 function waitingFirstChunkText(job) {
   const progress = job?.progress || {};
   const extraction = progress.extraction || job?.extract || {};
+  const funAsrJob = isFunAsrJob(job);
   const parts = [];
   const activity = extractionActivityText(extraction);
   if (activity && activity !== "-") {
     parts.push(activity);
   } else {
-    parts.push(t("waitingFirstChunk"));
+    parts.push(t(funAsrJob ? "waitingFirstLongFileChunk" : "waitingFirstChunk"));
   }
   const elapsed = Number(progress.elapsedSeconds || extraction.elapsedSeconds || 0) || 0;
   if (elapsed > 0) {
@@ -2971,36 +3206,32 @@ function friendlyChunkError(error) {
 
 function updateActionButtons(job) {
   const running = isRunningJob(job);
-  const failed = Number(job?.translation?.chunksFailed || job?.progress?.chunksFailed || 0);
-  const asrPartialFailed = Number(job?.translation?.chunksAsrPartialFailed || job?.progress?.translation?.chunksAsrPartialFailed || 0);
-  const retryableAsrFailures = failed + asrPartialFailed;
+  const retryableAsrFailures = countRetryableAsrFailureChunks(job);
   const sourceChunks = countReusableSourceChunks(job);
+  const cachedSourceChunks = job ? 0 : transcriptReusableSourceCount(currentTranscript);
   const audioChunks = countReusableAudioChunks(job);
   const canResumeAudio = audioChunks > 0 && !sourceChunks;
-  const canResumeTranslation = sourceChunks > 0;
+  const canResumeTranslation = countContinuableTranslationChunks(job) > 0;
   const canRetryPreload = retryableAsrFailures > 0 || canResumeAudio || canResumeTranslation;
   const audioCacheRemoved = Boolean(job?.audioCacheRemoved);
+  const continueNeedsAudio = retryableAsrFailures > 0 || canResumeAudio;
+  const continueBlockedByAudio = audioCacheRemoved && continueNeedsAudio && !canResumeTranslation;
   elements.startPreload.disabled = startRequestInFlight || running;
   elements.startPreload.textContent = job ? t("restartExtract") : t("startExtract");
   elements.startPreload.title = job ? t("restartTitle") : t("startTitle");
-  elements.retryPreload.textContent = retryableAsrFailures
-    ? t("retryFailedSegmentsCount", { count: retryableAsrFailures })
-    : canResumeTranslation
-      ? t("continueTranslate")
-      : canResumeAudio
-        ? t("continueAsr")
-        : t("retryFailed");
-  elements.retryPreload.title = audioCacheRemoved
+  elements.rerunAsr.textContent = t("rerunAsr");
+  elements.rerunAsr.title = audioCacheRemoved || audioChunks <= 0
+    ? t("rerunAsrNeedsAudioTitle")
+    : t("rerunAsrTitle");
+  elements.rerunAsr.disabled = asrRetryRequestInFlight || !job || running || audioCacheRemoved || audioChunks <= 0;
+  elements.retryPreload.textContent = t("continueTask");
+  elements.retryPreload.title = continueBlockedByAudio
     ? t("retryNeedsExtractTitle")
-    : canResumeTranslation && !retryableAsrFailures
-      ? t("continueTranslateTitle")
-      : canResumeAudio && !retryableAsrFailures
-        ? t("continueAsrTitle")
-        : t("retryFailedTitle");
-  elements.retryPreload.disabled = retryRequestInFlight || !job || running || audioCacheRemoved || !canRetryPreload;
+    : t("continueTaskTitle");
+  elements.retryPreload.disabled = retryRequestInFlight || !job || running || continueBlockedByAudio || !canRetryPreload;
   elements.retryTranslation.textContent = t("retranslate");
-  elements.retryTranslation.title = t("retranslateTitle");
-  elements.retryTranslation.disabled = translationRetryRequestInFlight || !job || running || sourceChunks <= 0;
+  elements.retryTranslation.title = cachedSourceChunks > 0 ? t("continueTranslateTitle") : t("retranslateTitle");
+  elements.retryTranslation.disabled = translationRetryRequestInFlight || running || (sourceChunks + cachedSourceChunks) <= 0;
   elements.cancelPreload.disabled = !running;
   elements.clearAudioCache.disabled = !job || running;
   elements.clearAudioCache.textContent = t("clearAudio");
@@ -3037,6 +3268,40 @@ function countReusableAudioChunks(job) {
   return extractDone && total > 0 ? total : 0;
 }
 
+function countContinuableTranslationChunks(job) {
+  const statuses = job?.translation?.chunkStatuses || job?.progress?.chunkStatuses || job?.progress?.translation?.chunkStatuses || [];
+  if (!Array.isArray(statuses) || !statuses.length) {
+    return 0;
+  }
+  return statuses.filter(status => {
+    if (!chunkHasReusableSource(status) || chunkNeedsAsrRetry(status)) {
+      return false;
+    }
+    if (status?.stage === "failed") {
+      return true;
+    }
+    return status?.stage === "completed_with_warnings" && Number(status?.translationFailures || 0) > 0;
+  }).length;
+}
+
+function countRetryableAsrFailureChunks(job) {
+  const statuses = job?.translation?.chunkStatuses || job?.progress?.chunkStatuses || job?.progress?.translation?.chunkStatuses || [];
+  if (Array.isArray(statuses) && statuses.length) {
+    return statuses.filter(status => {
+      if (chunkNeedsAsrRetry(status)) {
+        return true;
+      }
+      return status?.stage === "failed" && !chunkHasReusableSource(status);
+    }).length;
+  }
+  const asrPartialFailed = Number(job?.translation?.chunksAsrPartialFailed || job?.progress?.translation?.chunksAsrPartialFailed || 0);
+  if (asrPartialFailed > 0) {
+    return asrPartialFailed;
+  }
+  const failed = Number(job?.translation?.chunksFailed || job?.progress?.chunksFailed || 0);
+  return failed > 0 && countReusableSourceChunks(job) <= 0 ? failed : 0;
+}
+
 function isRunningJob(job) {
   if (!job) {
     return false;
@@ -3060,13 +3325,13 @@ function extractionProgressText(progress, status) {
   return stageLabel(progress?.stage || status);
 }
 
-function translationProgressText(translation) {
+function translationProgressText(translation, job = null) {
   const total = translation?.chunksTotal || 0;
   const done = translation?.chunksDone || 0;
   const active = (translation?.chunksAsr || 0) + (translation?.chunksTranslating || 0);
   const failed = translation?.chunksFailed || 0;
   if (!total) {
-    return t("waitFirstSegment");
+    return t(isFunAsrJob(job) ? "waitFirstLongFileSegment" : "waitFirstSegment");
   }
   const parts = [`${done}/${total}`];
   if (active) {

@@ -224,10 +224,14 @@ export const FuguangBrowserTranslationProvider = (() => {
 
   function browserTranslationErrorIsPermanent(error) {
     const message = String(error?.message || error || "").toLowerCase();
-    if (browserTranslationErrorIsContentPolicy(message)) {
+    if (browserTranslationErrorIsContentPolicy(message) || browserTranslationErrorIsRateLimited(message)) {
       return false;
     }
-    return /(401|403|404|429|unauthorized|forbidden|invalid api key|api key|invalid key|authentication|quota|rate limit|too many requests|不存在的模型|模型不存在)/.test(message);
+    return /(401|403|404|unauthorized|forbidden|invalid api key|api key|invalid key|authentication|quota|不存在的模型|模型不存在)/.test(message);
+  }
+
+  function browserTranslationErrorIsRateLimited(message) {
+    return /(429|rate limit|too many requests|请求过多|限流|频率限制)/.test(String(message || "").toLowerCase());
   }
 
   function browserTranslationErrorIsContentPolicy(message) {
@@ -266,6 +270,7 @@ export const FuguangBrowserTranslationProvider = (() => {
     requestOpenAiCompatibleChat,
     requestAnthropicMessage,
     browserTranslationErrorIsPermanent,
+    browserTranslationErrorIsRateLimited,
     browserTranslationErrorIsContentPolicy,
     parseModelJson,
     targetLanguageName

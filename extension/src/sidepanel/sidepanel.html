@@ -62,8 +62,9 @@
               </select>
             </label>
             <button id="startPreload" type="button" data-i18n="start">开始</button>
-            <button id="retryPreload" type="button" class="secondary" data-i18n="retryFailed">重试失败</button>
+            <button id="rerunAsr" type="button" class="secondary" data-i18n="rerunAsr">重新 ASR</button>
             <button id="retryTranslation" type="button" class="secondary" data-i18n="retranslate">重翻译字幕</button>
+            <button id="retryPreload" type="button" class="secondary" data-i18n="continueTask">继续</button>
             <button id="cancelPreload" type="button" class="danger" data-i18n="stop">停止</button>
             <button id="clearAudioCache" type="button" class="secondary" data-i18n="clearAudio">清音频缓存</button>
             <button id="refresh" type="button" class="secondary" data-i18n="refresh">刷新</button>
@@ -187,6 +188,7 @@
             <input id="chunkMinutes" type="number" min="1" max="60" step="1">
           </label>
         </div>
+        <p id="funAsrLongFileHint" class="settings-hint" data-i18n="funAsrLongFileHint" hidden>Fun-ASR 使用长文件链路：ASR 并发不适用于该模式，系统会按 2 小时以内粗切，通常串行或最多少量并行提交。</p>
         <h2 data-i18n="subtitleStyle">字幕样式</h2>
         <div class="settings-grid">
           <label>

@@ -128,6 +128,8 @@ const mediaCandidatesSource = fs.readFileSync(new URL("../../extension/src/backg
 const modelProfilesSource = fs.readFileSync(new URL("../../extension/src/background/browser-model-profiles.js", import.meta.url), "utf8")
   .replace('import { FuguangBrowserAsrProvider } from "./browser-asr-provider.js";\n\n', "")
   .replace("export const FuguangBrowserModelProfiles =", "var FuguangBrowserModelProfiles =");
+const funasrProviderSource = fs.readFileSync(new URL("../../extension/src/background/browser-funasr-provider.js", import.meta.url), "utf8")
+  .replace("export const FuguangBrowserFunAsrProvider =", "var FuguangBrowserFunAsrProvider =");
 const providerSource = fs.readFileSync(new URL("../../extension/src/background/browser-translation-provider.js", import.meta.url), "utf8")
   .replace('import { FuguangBrowserLanguage } from "./browser-language.js";\n\n', "")
   .replace("export const FuguangBrowserTranslationProvider =", "var FuguangBrowserTranslationProvider =");
@@ -142,6 +144,7 @@ const source = fs.readFileSync(new URL("../../extension/src/background/service-w
   .replace('import { FuguangBrowserLanguage } from "./browser-language.js";\n', "")
   .replace('import { FuguangBrowserMediaCandidates } from "./browser-media-candidates.js";\n', "")
   .replace('import { FuguangBrowserModelProfiles } from "./browser-model-profiles.js";\n', "")
+  .replace('import { FuguangBrowserFunAsrProvider } from "./browser-funasr-provider.js";\n', "")
   .replace('import { FuguangBrowserTranslationPipeline } from "./browser-translation-pipeline.js";\n', "")
   .replace('import { FuguangMediaHeaderRules } from "./media-header-rules.js";\n\n', "");
 
@@ -172,12 +175,64 @@ vm.runInContext(mediaCandidatesSource, context, { filename: "browser-media-candi
 Object.assign(context, context.FuguangBrowserMediaCandidates);
 vm.runInContext(modelProfilesSource, context, { filename: "browser-model-profiles.js" });
 Object.assign(context, context.FuguangBrowserModelProfiles);
+vm.runInContext(funasrProviderSource, context, { filename: "browser-funasr-provider.js" });
+Object.assign(context, context.FuguangBrowserFunAsrProvider);
 vm.runInContext(providerSource, context, { filename: "browser-translation-provider.js" });
 Object.assign(context, context.FuguangBrowserTranslationProvider);
 vm.runInContext(pipelineSource, context, { filename: "browser-translation-pipeline.js" });
 Object.assign(context, context.FuguangBrowserTranslationPipeline);
 vm.runInContext(mediaHeaderRulesSource, context, { filename: "media-header-rules.js" });
 vm.runInContext(source, context, { filename: "service-worker.js" });
+
+{
+  const originalRunBrowserPreloadJob = context.runBrowserPreloadJob;
+  let queuedJobId = "";
+  context.runBrowserPreloadJob = async jobId => {
+    queuedJobId = jobId;
+  };
+  try {
+    const response = await context.startBrowserPreload(
+      1,
+      {
+        url: "https://media.example.test/video.mp4",
+        kind: "video",
+        ext: "mp4",
+        duration: 3600
+      },
+      {
+        title: "Fun-ASR workflow",
+        pageUrl: "https://example.test/watch",
+        sourceUrl: "https://media.example.test/video.mp4",
+        duration: 3600
+      },
+      {
+        asr: {
+          providerType: "dashscope_funasr",
+          baseUrl: "https://dashscope.aliyuncs.com/api/v1",
+          model: "fun-asr",
+          apiKey: "test"
+        },
+        translation: {
+          providerType: "openai",
+          baseUrl: "https://llm.example.test/v1",
+          model: "llm",
+          apiKey: "test"
+        },
+        targetLanguage: "zh-CN",
+        asrWorkers: 8,
+        workers: 3,
+        chunkSeconds: 900
+      }
+    );
+    assert.equal(response.job.pipeline, "funasr");
+    assert.equal(response.job.extract.asrChunkSeconds, 7200);
+    assert.equal(response.job.translation.asrWorkers, 1);
+    assert.equal(response.job.translation.chunkStatuses.length, 0);
+    assert.equal(queuedJobId, response.job.id);
+  } finally {
+    context.runBrowserPreloadJob = originalRunBrowserPreloadJob;
+  }
+}
 
 {
   const recovered = context.filterAsrStrictVadRecoverySegments([
@@ -1906,6 +1961,63 @@ vm.runInContext(source, context, { filename: "service-worker.js" });
 
 {
   const originalFetch = context.fetch;
+  let requests = 0;
+  context.fetch = async (_url, init = {}) => {
+    requests += 1;
+    const payload = JSON.parse(init.body);
+    const userMessage = payload.messages.find(message => message.role === "user");
+    const request = JSON.parse(userMessage.content);
+    const segments = request.segments || [];
+    if (requests === 2) {
+      return {
+        ok: false,
+        status: 429,
+        json: async () => ({ error: { message: "Too many requests" } })
+      };
+    }
+    return {
+      ok: true,
+      json: async () => ({
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              items: segments.map((segment, index) => ({ i: index, text: `译文-${segment.text}` }))
+            })
+          }
+        }]
+      })
+    };
+  };
+  const sourceSegments = Array.from({ length: 121 }, (_, index) => ({
+    start: index,
+    end: index + 0.5,
+    text: `rate-${index}`,
+    chunkIndex: 0,
+    segmentIndex: index
+  }));
+  const translated = await context.translateBrowserSegments(
+    sourceSegments,
+    {
+      providerType: "openai",
+      baseUrl: "https://llm.example/v1",
+      model: "test-model",
+      apiKey: "test-key"
+    },
+    "zh-CN",
+    {},
+    { batchWorkers: 1 }
+  );
+  assert.equal(translated.length, 61);
+  assert.equal(translated[0].text, "译文-rate-0");
+  assert.equal(translated.at(-1).text, "译文-rate-120");
+  assert.equal(context.browserTranslationFailures(translated).length, 60);
+  assert.equal(context.browserTranslationErrorIsPermanent(new Error("Too many requests")), false);
+  assert.equal(context.browserTranslationErrorIsPermanent(new Error("invalid api key")), true);
+  context.fetch = originalFetch;
+}
+
+{
+  const originalFetch = context.fetch;
   let calls = 0;
   context.fetch = async () => {
     calls += 1;
@@ -2759,6 +2871,7 @@ function add(tabId, candidate) {
 }
 
 {
+  const modelSettingsVersion = vm.runInContext("MODEL_SETTINGS_VERSION", context);
   const record = {
     job: {
       id: "browser-progress-test",
@@ -2810,6 +2923,7 @@ function add(tabId, candidate) {
 }
 
 {
+  const modelSettingsVersion = vm.runInContext("MODEL_SETTINGS_VERSION", context);
   const record = {
     job: {
       id: "browser-chunk-status-test",
@@ -3303,6 +3417,85 @@ function add(tabId, candidate) {
 }
 
 {
+  const record = {
+    tabId: 3040,
+    metadata: { title: "Clear subtitle state" },
+    modelConfig: {
+      targetLanguage: "zh-CN",
+      asr: { providerType: "dashscope_funasr", baseUrl: "https://dashscope.test/api/v1", model: "fun-asr", apiKey: "test" },
+      translation: { providerType: "openai", baseUrl: "https://llm.test/v1", model: "test", apiKey: "test" }
+    },
+    sourceSegmentsByChunk: new Map([[0, [{ start: 1, end: 2, text: "こんにちは", chunkIndex: 0, segmentIndex: 0 }]]]),
+    translatedSegmentsByChunk: new Map([[0, [{ start: 1, end: 2, text: "旧译文", chunkIndex: 0, segmentIndex: 0 }]]]),
+    audioChunks: [],
+    job: {
+      id: "browser-clear-subtitle-state",
+      status: "completed",
+      stage: "completed",
+      extract: { elapsedSeconds: 1 },
+      translation: {
+        vttText: "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\n旧译文\n",
+        vttPath: "browser-memory",
+        transcript: {
+          source: [{ start: 1, end: 2, text: "こんにちは", chunkIndex: 0, segmentIndex: 0 }],
+          translated: [{ start: 1, end: 2, text: "旧译文", chunkIndex: 0, segmentIndex: 0 }],
+          metadata: { title: "Clear subtitle state" }
+        },
+        segmentCount: 1,
+        sourceSegments: 1,
+        translatedSegments: 1,
+        chunkStatuses: [{ index: 0, stage: "completed", status: "完成", sourceCount: 1, translatedCount: 1 }]
+      }
+    }
+  };
+  const originalBroadcast = context.broadcastMessageToFrames;
+  const originalTranslate = context.translateBrowserSegments;
+  const originalFunAsr = context.transcribeDashScopeFunAsrFile;
+  context.broadcastMessageToFrames = async () => {};
+  let translationCalls = 0;
+  let funAsrCalls = 0;
+  context.translateBrowserSegments = async segments => {
+    translationCalls += 1;
+    return segments.map(segment => ({ ...segment, text: "中文译文" }));
+  };
+  context.transcribeDashScopeFunAsrFile = async () => {
+    funAsrCalls += 1;
+    return {};
+  };
+  context.recordForClearSubtitleStateTest = record;
+  vm.runInContext("browserPreloadJobs.set('browser-clear-subtitle-state', recordForClearSubtitleStateTest)", context);
+  context.setTabStatus(3040, { preload: "completed", preloadJob: record.job, page: { url: "" }, context: { href: "" } });
+  try {
+    const result = await context.clearPreloadSubtitleState(3040, "browser-clear-subtitle-state");
+    const transcript = await context.getPreloadTranscript("browser-clear-subtitle-state");
+    assert.equal(result.cleared, true);
+    assert.deepEqual(JSON.parse(JSON.stringify(transcript.transcript.source)), [
+      { start: 1, end: 2, text: "こんにちは", chunkIndex: 0, segmentIndex: 0 }
+    ]);
+    assert.deepEqual(JSON.parse(JSON.stringify(transcript.transcript.translated)), []);
+    assert.equal(record.job.translation.vttText, "");
+    assert.equal(record.job.translation.segmentCount, 0);
+    assert.equal(record.job.translation.sourceSegments, 1);
+    assert.equal(record.job.translation.translatedSegments, 0);
+    assert.equal(record.job.reusableSourceChunks, 1);
+    assert.equal(record.sourceSegmentsByChunk.size, 1);
+    assert.equal(record.translatedSegmentsByChunk.size, 0);
+    assert.equal(record.job.subtitleCleared, true);
+
+    await context.retryBrowserTranslationOnly(record, [0], { failedOnly: false });
+    assert.equal(funAsrCalls, 0);
+    assert.equal(translationCalls, 1);
+    assert.equal(record.job.translation.transcript.translated[0].text, "中文译文");
+  } finally {
+    vm.runInContext("browserPreloadJobs.delete('browser-clear-subtitle-state')", context);
+    delete context.recordForClearSubtitleStateTest;
+    context.broadcastMessageToFrames = originalBroadcast;
+    context.translateBrowserSegments = originalTranslate;
+    context.transcribeDashScopeFunAsrFile = originalFunAsr;
+  }
+}
+
+{
   const cache = await caches.open("fuguang-web-ffmpeg-audio");
   for (const key of await cache.keys()) {
     await cache.delete(key.url);
@@ -3344,6 +3537,198 @@ function add(tabId, candidate) {
     assert.notEqual(await cache.match(protectedUrl), undefined);
   } finally {
     vm.runInContext("browserPreloadJobs.delete('running-job')", context);
+  }
+}
+
+{
+  const modelSettingsVersion = vm.runInContext("MODEL_SETTINGS_VERSION", context);
+  const record = {
+    tabId: 3050,
+    metadata: { title: "Force ASR rerun" },
+    modelConfig: {
+      asrWorkers: 1,
+      workers: 1,
+      targetLanguage: "zh-CN",
+      chunkSeconds: 900,
+      asr: { providerType: "openai", baseUrl: "https://asr.test/v1", model: "whisper", apiKey: "test" },
+      translation: { providerType: "openai", baseUrl: "https://llm.test/v1", model: "test", apiKey: "test" }
+    },
+    audioChunks: [{ index: 0, start: 0, end: 120, duration: 120, file: { name: "chunk-001.mp3", buffer: new ArrayBuffer(1) } }],
+    sourceSegmentsByChunk: new Map([[0, [{ start: 1, end: 2, text: "old source", chunkIndex: 0, segmentIndex: 0 }]]]),
+    translatedSegmentsByChunk: new Map([[0, [{ start: 1, end: 2, text: "old translation", chunkIndex: 0, segmentIndex: 0 }]]]),
+    job: {
+      id: "browser-rerun-asr",
+      status: "completed",
+      stage: "completed",
+      extract: { status: "completed", elapsedSeconds: 1, duration: 120 },
+      translation: {
+        transcript: {
+          source: [{ start: 1, end: 2, text: "old source", chunkIndex: 0, segmentIndex: 0 }],
+          translated: [{ start: 1, end: 2, text: "old translation", chunkIndex: 0, segmentIndex: 0 }]
+        },
+        chunkStatuses: [{ index: 0, stage: "completed", status: "完成", attempts: 1, sourceCount: 1, translatedCount: 1 }],
+        chunksTotal: 1,
+        chunksDone: 1,
+        chunksFailed: 0,
+        sourceSegments: 1,
+        translatedSegments: 1,
+        segmentCount: 1
+      }
+    }
+  };
+  const originalTranscribe = context.transcribeBrowserAudioChunk;
+  const originalTranslate = context.translateBrowserSegments;
+  const originalEnsureSubtitleOverlay = context.ensureSubtitleOverlay;
+  const originalAttachBrowserJobVttIfReady = context.attachBrowserJobVttIfReady;
+  const originalLocalGet = chrome.storage.local.get;
+  const originalSyncRemove = chrome.storage.sync.remove;
+  let asrCalls = 0;
+  let translationCalls = 0;
+  const targets = [];
+  chrome.storage.local.get = async () => ({
+    modelSettingsVersion,
+    selectedAsrProfileId: "openai_whisper",
+    selectedLlmProfileId: "test_llm",
+    targetLanguage: "en",
+    asrWorkers: 1,
+    translationWorkers: 1,
+    chunkMinutes: 15,
+    asrProfiles: [
+      { id: "openai_whisper", name: "OpenAI Whisper", providerType: "openai", baseUrl: "https://asr.test/v1", model: "whisper", apiKey: "asr-key" }
+    ],
+    llmProfiles: [
+      { id: "test_llm", name: "Test LLM", providerType: "openai", baseUrl: "https://llm.test/v1", model: "test", apiKey: "llm-key" }
+    ]
+  });
+  chrome.storage.sync.remove = async () => {};
+  context.transcribeBrowserAudioChunk = async () => {
+    asrCalls += 1;
+    return [{ start: 3, end: 4, text: "fresh source" }];
+  };
+  context.translateBrowserSegments = async (_segments, _config, targetLanguage) => {
+    translationCalls += 1;
+    targets.push(targetLanguage);
+    return [{ start: 3, end: 4, text: "新译文", chunkIndex: 0, segmentIndex: 0 }];
+  };
+  context.ensureSubtitleOverlay = async () => {};
+  context.attachBrowserJobVttIfReady = async () => {};
+  context.recordForRerunAsrTest = record;
+  vm.runInContext("browserPreloadJobs.set('browser-rerun-asr', recordForRerunAsrTest)", context);
+  context.setTabStatus(3050, { preload: "completed", preloadJob: record.job, page: { url: "" }, context: { href: "" } });
+  try {
+    await context.rerunAsrPreload(3050, [0], { targetLanguage: "zh-CN" });
+
+    assert.equal(asrCalls, 1);
+    assert.equal(translationCalls, 1);
+    assert.deepEqual(targets, ["zh-CN"]);
+    assert.equal(record.sourceSegmentsByChunk.get(0)[0].text, "fresh source");
+    assert.equal(record.translatedSegmentsByChunk.get(0)[0].text, "新译文");
+    assert.doesNotMatch(JSON.stringify(record.job.translation.transcript), /old source|old translation/);
+    assert.equal(record.job.translation.chunkStatuses[0].stage, "completed");
+  } finally {
+    vm.runInContext("browserPreloadJobs.delete('browser-rerun-asr')", context);
+    delete context.recordForRerunAsrTest;
+    context.transcribeBrowserAudioChunk = originalTranscribe;
+    context.translateBrowserSegments = originalTranslate;
+    context.ensureSubtitleOverlay = originalEnsureSubtitleOverlay;
+    context.attachBrowserJobVttIfReady = originalAttachBrowserJobVttIfReady;
+    chrome.storage.local.get = originalLocalGet;
+    chrome.storage.sync.remove = originalSyncRemove;
+  }
+}
+
+{
+  const modelSettingsVersion = vm.runInContext("MODEL_SETTINGS_VERSION", context);
+  const record = {
+    tabId: 3051,
+    pipeline: "funasr",
+    metadata: { title: "Force Fun-ASR rerun" },
+    modelConfig: {
+      asrWorkers: 1,
+      workers: 1,
+      targetLanguage: "zh-CN",
+      asr: { providerType: "dashscope_funasr", baseUrl: "https://dashscope.test/api/v1", model: "fun-asr", apiKey: "test" },
+      translation: { providerType: "openai", baseUrl: "https://llm.test/v1", model: "test", apiKey: "test" }
+    },
+    audioChunks: [{ index: 0, start: 0, end: 7200, duration: 7200, file: { name: "funasr-001.mp3", mime: "audio/mpeg", buffer: new ArrayBuffer(1) } }],
+    sourceSegmentsByChunk: new Map([[0, [{ start: 1, end: 2, text: "old funasr source", chunkIndex: 0, segmentIndex: 0 }]]]),
+    translatedSegmentsByChunk: new Map([[0, [{ start: 1, end: 2, text: "old funasr translation", chunkIndex: 0, segmentIndex: 0 }]]]),
+    job: {
+      id: "browser-rerun-funasr",
+      pipeline: "funasr",
+      status: "completed",
+      stage: "completed",
+      extract: { status: "completed", elapsedSeconds: 1, duration: 7200 },
+      translation: {
+        transcript: {
+          source: [{ start: 1, end: 2, text: "old funasr source", chunkIndex: 0, segmentIndex: 0 }],
+          translated: [{ start: 1, end: 2, text: "old funasr translation", chunkIndex: 0, segmentIndex: 0 }]
+        },
+        chunkStatuses: [{ index: 0, stage: "completed", status: "完成", attempts: 1, sourceCount: 1, translatedCount: 1 }],
+        chunksTotal: 1,
+        chunksDone: 1,
+        chunksFailed: 0,
+        sourceSegments: 1,
+        translatedSegments: 1,
+        segmentCount: 1
+      }
+    }
+  };
+  const originalFunAsr = context.transcribeDashScopeFunAsrFile;
+  const originalTranslate = context.translateBrowserSegments;
+  const originalEnsureSubtitleOverlay = context.ensureSubtitleOverlay;
+  const originalAttachBrowserJobVttIfReady = context.attachBrowserJobVttIfReady;
+  const originalLocalGet = chrome.storage.local.get;
+  const originalSyncRemove = chrome.storage.sync.remove;
+  let funAsrCalls = 0;
+  let translationCalls = 0;
+  chrome.storage.local.get = async () => ({
+    modelSettingsVersion,
+    selectedAsrProfileId: "fun_asr",
+    selectedLlmProfileId: "test_llm",
+    targetLanguage: "en",
+    asrWorkers: 1,
+    translationWorkers: 1,
+    chunkMinutes: 15,
+    asrProfiles: [
+      { id: "fun_asr", name: "Fun-ASR", providerType: "dashscope_funasr", baseUrl: "https://dashscope.test/api/v1", model: "fun-asr", apiKey: "asr-key" }
+    ],
+    llmProfiles: [
+      { id: "test_llm", name: "Test LLM", providerType: "openai", baseUrl: "https://llm.test/v1", model: "test", apiKey: "llm-key" }
+    ]
+  });
+  chrome.storage.sync.remove = async () => {};
+  context.transcribeDashScopeFunAsrFile = async () => {
+    funAsrCalls += 1;
+    return { transcripts: [{ sentences: [{ begin_time: 3000, end_time: 4000, text: "fresh funasr source" }] }] };
+  };
+  context.translateBrowserSegments = async segments => {
+    translationCalls += 1;
+    return segments.map(segment => ({ ...segment, text: "Fun-ASR 新译文" }));
+  };
+  context.ensureSubtitleOverlay = async () => {};
+  context.attachBrowserJobVttIfReady = async () => {};
+  context.recordForRerunFunAsrTest = record;
+  vm.runInContext("browserPreloadJobs.set('browser-rerun-funasr', recordForRerunFunAsrTest)", context);
+  context.setTabStatus(3051, { preload: "completed", preloadJob: record.job, page: { url: "" }, context: { href: "" } });
+  try {
+    await context.rerunAsrPreload(3051, [0], { targetLanguage: "zh-CN" });
+
+    assert.equal(funAsrCalls, 1);
+    assert.equal(translationCalls, 1);
+    assert.equal(record.sourceSegmentsByChunk.get(0)[0].text, "fresh funasr source");
+    assert.equal(record.translatedSegmentsByChunk.get(0)[0].text, "Fun-ASR 新译文");
+    assert.doesNotMatch(JSON.stringify(record.job.translation.transcript), /old funasr/);
+    assert.equal(record.job.translation.chunkStatuses[0].stage, "completed");
+  } finally {
+    vm.runInContext("browserPreloadJobs.delete('browser-rerun-funasr')", context);
+    delete context.recordForRerunFunAsrTest;
+    context.transcribeDashScopeFunAsrFile = originalFunAsr;
+    context.translateBrowserSegments = originalTranslate;
+    context.ensureSubtitleOverlay = originalEnsureSubtitleOverlay;
+    context.attachBrowserJobVttIfReady = originalAttachBrowserJobVttIfReady;
+    chrome.storage.local.get = originalLocalGet;
+    chrome.storage.sync.remove = originalSyncRemove;
   }
 }
 
@@ -4670,6 +5055,307 @@ function add(tabId, candidate) {
   context.translateBrowserSegments = originalTranslate;
   context.ensureSubtitleOverlay = originalEnsureSubtitleOverlay;
   context.attachBrowserJobVttIfReady = originalAttachBrowserJobVttIfReady;
+}
+
+{
+  const record = {
+    tabId: 3014,
+    metadata: { title: "Retranslate must not keep wrong-language stale translation" },
+    modelConfig: {
+      asrWorkers: 1,
+      workers: 1,
+      targetLanguage: "zh-CN",
+      asr: { providerType: "dashscope_funasr", baseUrl: "https://dashscope.test/api/v1", model: "fun-asr", apiKey: "test" },
+      translation: { providerType: "openai", baseUrl: "https://llm.test/v1", model: "test", apiKey: "test" }
+    },
+    audioChunks: [{ index: 0, start: 0, end: 900, file: { name: "chunk-001.mp3" } }],
+    sourceSegmentsByChunk: new Map([[0, [{ start: 1, end: 2, text: "こんにちは", chunkIndex: 0, segmentIndex: 0 }]]]),
+    translatedSegmentsByChunk: new Map([[0, [{ start: 1, end: 2, text: "old English", chunkIndex: 0, segmentIndex: 0 }]]]),
+    job: {
+      id: "browser-retry-clears-stale-translation",
+      status: "completed",
+      stage: "completed_with_warnings",
+      extract: { elapsedSeconds: 1 },
+      translation: {
+        chunkStatuses: [{
+          index: 0,
+          stage: "failed",
+          status: "失败",
+          attempts: 1,
+          sourceCount: 1,
+          translatedCount: 1,
+          error: "翻译失败"
+        }],
+        chunksTotal: 1,
+        chunksDone: 1,
+        chunksFailed: 1,
+        chunksAsr: 0,
+        chunksTranslating: 0
+      }
+    }
+  };
+  let funAsrCalls = 0;
+  const originalFunAsr = context.transcribeDashScopeFunAsrFile;
+  const originalTranslate = context.translateBrowserSegments;
+  const originalEnsureSubtitleOverlay = context.ensureSubtitleOverlay;
+  const originalAttachBrowserJobVttIfReady = context.attachBrowserJobVttIfReady;
+  context.transcribeDashScopeFunAsrFile = async () => {
+    funAsrCalls += 1;
+    return { transcripts: [{ begin_time: 1000, end_time: 2000, text: "fresh asr" }] };
+  };
+  context.translateBrowserSegments = async () => {
+    throw new Error("mock translation rate limited");
+  };
+  context.ensureSubtitleOverlay = async () => {};
+  context.attachBrowserJobVttIfReady = async () => {};
+
+  await context.retryBrowserFailedPreload(record, [0]);
+
+  assert.equal(funAsrCalls, 0);
+  assert.deepEqual(JSON.parse(JSON.stringify(record.translatedSegmentsByChunk.get(0))), []);
+  assert.equal(record.job.translation.transcript.source[0].text, "こんにちは");
+  assert.deepEqual(JSON.parse(JSON.stringify(record.job.translation.transcript.translated)), []);
+  assert.doesNotMatch(JSON.stringify(record.job.translation.transcript), /old English/);
+  assert.match(record.job.translation.chunkStatuses[0].error, /未生成译文/);
+  context.transcribeDashScopeFunAsrFile = originalFunAsr;
+  context.translateBrowserSegments = originalTranslate;
+  context.ensureSubtitleOverlay = originalEnsureSubtitleOverlay;
+  context.attachBrowserJobVttIfReady = originalAttachBrowserJobVttIfReady;
+}
+
+{
+  const record = {
+    tabId: 3011,
+    pipeline: "funasr",
+    metadata: { title: "Fun-ASR retry translation only" },
+    modelConfig: {
+      asrWorkers: 1,
+      workers: 2,
+      targetLanguage: "zh-CN",
+      asr: { providerType: "dashscope_funasr", baseUrl: "https://dashscope.test/api/v1", model: "fun-asr", apiKey: "test" },
+      translation: { providerType: "openai", baseUrl: "https://llm.test/v1", model: "test", apiKey: "test" }
+    },
+    audioChunks: [{ index: 0, start: 0, end: 7200, duration: 7200, file: { name: "chunk-001.mp3", buffer: new ArrayBuffer(1) } }],
+    sourceSegmentsByChunk: new Map([[0, [{ start: 1, end: 2, text: "hello", chunkIndex: 0, segmentIndex: 0 }]]]),
+    translatedSegmentsByChunk: new Map(),
+    job: {
+      id: "funasr-retry-translation-only",
+      pipeline: "funasr",
+      status: "completed",
+      stage: "completed_with_warnings",
+      extract: { elapsedSeconds: 1, duration: 7200 },
+      translation: {
+        chunkStatuses: [{
+          index: 0,
+          stage: "failed",
+          status: "失败",
+          attempts: 1,
+          sourceCount: 1,
+          translatedCount: 0,
+          error: "翻译失败"
+        }],
+        chunksTotal: 1,
+        chunksDone: 1,
+        chunksFailed: 1,
+        chunksAsr: 0,
+        chunksTranslating: 0
+      }
+    }
+  };
+  let funAsrCalls = 0;
+  let translationCalls = 0;
+  const originalFunAsr = context.transcribeDashScopeFunAsrFile;
+  const originalTranslate = context.translateBrowserSegments;
+  const originalEnsureSubtitleOverlay = context.ensureSubtitleOverlay;
+  const originalAttachBrowserJobVttIfReady = context.attachBrowserJobVttIfReady;
+  context.transcribeDashScopeFunAsrFile = async () => {
+    funAsrCalls += 1;
+    return { transcripts: [{ begin_time: 1000, end_time: 2000, text: "fresh asr" }] };
+  };
+  context.translateBrowserSegments = async segments => {
+    translationCalls += 1;
+    return segments.map(segment => ({ ...segment, text: "译文" }));
+  };
+  context.ensureSubtitleOverlay = async () => {};
+  context.attachBrowserJobVttIfReady = async () => {};
+
+  await context.retryBrowserFunAsrFailedPreload(record, [0]);
+
+  assert.equal(funAsrCalls, 0);
+  assert.equal(translationCalls, 1);
+  assert.equal(record.translatedSegmentsByChunk.get(0)[0].text, "译文");
+  assert.equal(record.job.translation.chunkStatuses[0].stage, "completed");
+  context.transcribeDashScopeFunAsrFile = originalFunAsr;
+  context.translateBrowserSegments = originalTranslate;
+  context.ensureSubtitleOverlay = originalEnsureSubtitleOverlay;
+  context.attachBrowserJobVttIfReady = originalAttachBrowserJobVttIfReady;
+}
+
+{
+  const modelSettingsVersion = vm.runInContext("MODEL_SETTINGS_VERSION", context);
+  const originalLocalGet = chrome.storage.local.get;
+  const originalLocalSet = chrome.storage.local.set;
+  const originalSyncRemove = chrome.storage.sync.remove;
+  const originalTranslate = context.translateBrowserSegments;
+  const originalEnsureSubtitleOverlay = context.ensureSubtitleOverlay;
+  const originalAttachBrowserJobVttIfReady = context.attachBrowserJobVttIfReady;
+  const stored = {
+    modelSettingsVersion,
+    selectedAsrProfileId: "openai_whisper",
+    selectedLlmProfileId: "test_llm",
+    targetLanguage: "zh-CN",
+    asrProfiles: [
+      { id: "openai_whisper", name: "OpenAI Whisper", providerType: "openai", baseUrl: "https://api.openai.com/v1", model: "whisper-1", apiKey: "asr-key" }
+    ],
+    llmProfiles: [
+      { id: "test_llm", name: "Test LLM", providerType: "openai", baseUrl: "https://llm.current/v1", model: "current-llm", apiKey: "llm-key" }
+    ],
+    translationWorkers: 1
+  };
+  const record = {
+    tabId: 3012,
+    metadata: { title: "Retranslate uses current target language" },
+    modelConfig: {
+      asrWorkers: 1,
+      workers: 2,
+      targetLanguage: "en",
+      asr: { providerType: "openai", baseUrl: "https://asr.test/v1", model: "whisper", apiKey: "test" },
+      translation: { providerType: "openai", baseUrl: "https://llm.old/v1", model: "old-llm", apiKey: "old" }
+    },
+    audioChunks: [{ index: 0, start: 0, end: 900, file: { name: "chunk-001.mp3" } }],
+    sourceSegmentsByChunk: new Map([[0, [{ start: 1, end: 2, text: "こんにちは", chunkIndex: 0, segmentIndex: 0 }]]]),
+    translatedSegmentsByChunk: new Map(),
+    job: {
+      id: "browser-current-target-language",
+      status: "completed",
+      stage: "completed_with_warnings",
+      extract: { elapsedSeconds: 1 },
+      translation: {
+        chunkStatuses: [{ index: 0, stage: "failed", status: "失败", attempts: 1, sourceCount: 1, translatedCount: 0 }],
+        chunksTotal: 1,
+        chunksDone: 1,
+        chunksFailed: 1,
+        chunksAsr: 0,
+        chunksTranslating: 0
+      }
+    }
+  };
+  let observedTarget = "";
+  let observedModel = "";
+  chrome.storage.local.get = async () => stored;
+  chrome.storage.local.set = async () => {};
+  chrome.storage.sync.remove = async () => {};
+  context.translateBrowserSegments = async (segments, config, targetLanguage) => {
+    observedTarget = targetLanguage;
+    observedModel = config.model;
+    return segments.map(segment => ({ ...segment, text: "中文译文" }));
+  };
+  context.ensureSubtitleOverlay = async () => {};
+  context.attachBrowserJobVttIfReady = async () => {};
+  context.recordForCurrentTargetLanguageTest = record;
+  vm.runInContext("browserPreloadJobs.set('browser-current-target-language', recordForCurrentTargetLanguageTest)", context);
+  context.setTabStatus(3012, { preload: "completed", preloadJob: record.job, page: { url: "" }, context: { href: "" } });
+  try {
+    await context.retranslatePreload(3012, [0]);
+    assert.equal(observedTarget, "zh-CN");
+    assert.equal(observedModel, "current-llm");
+    assert.equal(record.modelConfig.targetLanguage, "zh-CN");
+    assert.equal(record.job.translation.targetLanguage, "zh-CN");
+  } finally {
+    vm.runInContext("browserPreloadJobs.delete('browser-current-target-language')", context);
+    delete context.recordForCurrentTargetLanguageTest;
+    chrome.storage.local.get = originalLocalGet;
+    chrome.storage.local.set = originalLocalSet;
+    chrome.storage.sync.remove = originalSyncRemove;
+    context.translateBrowserSegments = originalTranslate;
+    context.ensureSubtitleOverlay = originalEnsureSubtitleOverlay;
+    context.attachBrowserJobVttIfReady = originalAttachBrowserJobVttIfReady;
+  }
+}
+
+{
+  const modelSettingsVersion = vm.runInContext("MODEL_SETTINGS_VERSION", context);
+  const originalLocalGet = chrome.storage.local.get;
+  const originalLocalSet = chrome.storage.local.set;
+  const originalSyncRemove = chrome.storage.sync.remove;
+  const originalTranslate = context.translateBrowserSegments;
+  const originalFunAsr = context.transcribeDashScopeFunAsrFile;
+  const originalTranscribe = context.transcribeBrowserAudioChunk;
+  const originalEnsureSubtitleOverlay = context.ensureSubtitleOverlay;
+  const originalAttachBrowserJobVttIfReady = context.attachBrowserJobVttIfReady;
+  const stored = {
+    modelSettingsVersion,
+    selectedAsrProfileId: "fun_asr",
+    selectedLlmProfileId: "test_llm",
+    targetLanguage: "zh-CN",
+    asrProfiles: [
+      { id: "fun_asr", name: "Fun-ASR", providerType: "dashscope_funasr", baseUrl: "https://dashscope.test/api/v1", model: "fun-asr", apiKey: "asr-key" }
+    ],
+    llmProfiles: [
+      { id: "test_llm", name: "Test LLM", providerType: "openai", baseUrl: "https://llm.current/v1", model: "current-llm", apiKey: "llm-key" }
+    ],
+    translationWorkers: 1
+  };
+  let observedTarget = "";
+  let observedModel = "";
+  let funAsrCalls = 0;
+  let asrCalls = 0;
+  chrome.storage.local.get = async () => stored;
+  chrome.storage.local.set = async () => {};
+  chrome.storage.sync.remove = async () => {};
+  context.translateBrowserSegments = async (segments, config, targetLanguage) => {
+    observedTarget = targetLanguage;
+    observedModel = config.model;
+    return segments.map(segment => ({ ...segment, text: `中文-${segment.text}` }));
+  };
+  context.transcribeDashScopeFunAsrFile = async () => {
+    funAsrCalls += 1;
+    return {};
+  };
+  context.transcribeBrowserAudioChunk = async () => {
+    asrCalls += 1;
+    return [];
+  };
+  context.ensureSubtitleOverlay = async () => {};
+  context.attachBrowserJobVttIfReady = async () => {};
+  try {
+    const result = await context.retranslateCachedTranscript(3013, {
+      metadata: { title: "Cached source", pageUrl: "https://example.test/watch", sourceUrl: "https://media.example.test/video.m3u8" },
+      source: [
+        { start: 1, end: 2, text: "こんにちは" },
+        { start: 3, end: 4, text: "Oh." }
+      ],
+      translated: []
+    }, { title: "Cached source" });
+    assert.equal(funAsrCalls, 0);
+    assert.equal(asrCalls, 0);
+    assert.equal(observedTarget, "zh-CN");
+    assert.equal(observedModel, "current-llm");
+    assert.equal(result.job.pipeline, "cached-transcript");
+    assert.equal(result.job.translation.transcript.translated[0].text, "中文-こんにちは");
+    assert.equal(result.job.translation.transcript.translated[1].text, "中文-Oh.");
+  } finally {
+    chrome.storage.local.get = originalLocalGet;
+    chrome.storage.local.set = originalLocalSet;
+    chrome.storage.sync.remove = originalSyncRemove;
+    context.translateBrowserSegments = originalTranslate;
+    context.transcribeDashScopeFunAsrFile = originalFunAsr;
+    context.transcribeBrowserAudioChunk = originalTranscribe;
+    context.ensureSubtitleOverlay = originalEnsureSubtitleOverlay;
+    context.attachBrowserJobVttIfReady = originalAttachBrowserJobVttIfReady;
+  }
+}
+
+{
+  await assert.rejects(
+    () => context.retranslateCachedTranscript(3015, {
+      metadata: { title: "Translated-only cache" },
+      translated: [
+        { start: 1, end: 2, text: "old English" }
+      ]
+    }, { title: "Translated-only cache" }),
+    /没有可复用的 ASR 原文/
+  );
 }
 
 {

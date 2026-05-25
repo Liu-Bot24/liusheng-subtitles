@@ -32,6 +32,15 @@ export const FuguangBrowserModelProfiles = (() => {
       apiKey: ""
     },
     {
+      id: "dashscope_funasr",
+      name: "阿里云 Fun-ASR",
+      providerType: "dashscope_funasr",
+      baseUrl: "https://dashscope.aliyuncs.com/api/v1",
+      model: "fun-asr",
+      vadFilter: "off",
+      apiKey: ""
+    },
+    {
       id: "custom_asr",
       name: "自定义 ASR",
       providerType: "openai",
@@ -100,7 +109,7 @@ export const FuguangBrowserModelProfiles = (() => {
 
   function normalizeProviderType(providerType) {
     const value = String(providerType || "").trim();
-    return ["openai", "groq", "xai", "anthropic"].includes(value) ? value : "openai";
+    return ["openai", "groq", "xai", "anthropic", "dashscope_funasr"].includes(value) ? value : "openai";
   }
 
   function mergeProfileDefaults(defaultProfile, storedProfile) {

@@ -17,6 +17,7 @@ const WEB_FFMPEG_HLS_TS_MAX_SEGMENTS_PER_CHUNK = 360;
 const WEB_FFMPEG_HLS_SEGMENT_DOWNLOAD_CONCURRENCY = 10;
 const WEB_FFMPEG_ASR_LOGICAL_CHUNK_MIN_SECONDS = 10;
 const WEB_FFMPEG_ASR_LOGICAL_CHUNK_MAX_SECONDS = 30 * 60;
+const WEB_FFMPEG_ASR_LONG_FILE_CHUNK_MAX_SECONDS = 2 * 60 * 60;
 const WEB_FFMPEG_ASR_CONTEXT_OVERLAP_SECONDS = 2;
 const WEB_FFMPEG_ASR_VAD_SPLIT_MIN_SILENCE_SECONDS = 2;
 const WEB_FFMPEG_WORKER_RECYCLE_INTERNAL_CHUNKS = 48;
@@ -182,7 +183,9 @@ async function collectSpeechAudioWithWebFfmpeg(message) {
 
 async function extractHlsAudioWithWebFfmpeg(message) {
   const fetchOptions = buildMediaFetchOptions(message);
-  const logicalChunkSeconds = normalizeHlsLogicalChunkSeconds(message.asrChunkSeconds || message.chunkSeconds || 900);
+  const logicalChunkSeconds = normalizeHlsLogicalChunkSeconds(message.asrChunkSeconds || message.chunkSeconds || 900, {
+    longFile: isLongFileAsrMode(message)
+  });
   let playlistUrl = message.sourceUrl;
   let playlistText = "";
   await updateMediaHeaderRuleDomains(message, [
@@ -211,7 +214,9 @@ async function extractHlsAudioWithWebFfmpeg(message) {
   if (!media.segments.length) {
     throw new Error("HLS 播放列表里没有可下载的媒体切片。");
   }
-  const groups = buildHlsInternalExtractionGroups(media, logicalChunkSeconds);
+  const groups = buildHlsInternalExtractionGroups(media, logicalChunkSeconds, {
+    longFile: isLongFileAsrMode(message)
+  });
   reportWebFfmpegExtractionProgress(message, {
     phase: "playlist",
     percent: 3,
@@ -223,7 +228,9 @@ async function extractHlsAudioWithWebFfmpeg(message) {
     message: `已解析播放列表，共 ${media.segments.length} 个媒体切片，准备生成 ${groups.length} 个内部媒体切片`
   });
   const internalChunks = [];
-  const logicalState = createHlsLogicalChunkState(logicalChunkSeconds);
+  const logicalState = createHlsLogicalChunkState(logicalChunkSeconds, {
+    longFile: isLongFileAsrMode(message)
+  });
   const logicalChunks = [];
   let bytes = 0;
   let downloadedSegments = 0;
@@ -479,9 +486,9 @@ async function extractHlsAudioWithWebFfmpeg(message) {
   };
 }
 
-function createHlsLogicalChunkState(logicalChunkSeconds) {
+function createHlsLogicalChunkState(logicalChunkSeconds, options = {}) {
   return {
-    logicalChunkSeconds: normalizeHlsLogicalChunkSeconds(logicalChunkSeconds),
+    logicalChunkSeconds: normalizeHlsLogicalChunkSeconds(logicalChunkSeconds, options),
     pendingParts: [],
     pendingStart: 0,
     pendingEnd: 0,
@@ -489,13 +496,14 @@ function createHlsLogicalChunkState(logicalChunkSeconds) {
   };
 }
 
-function normalizeHlsLogicalChunkSeconds(value) {
+function normalizeHlsLogicalChunkSeconds(value, options = {}) {
   const seconds = Number(value);
-  const fallback = WEB_FFMPEG_ASR_LOGICAL_CHUNK_MAX_SECONDS;
+  const maxSeconds = options.longFile ? WEB_FFMPEG_ASR_LONG_FILE_CHUNK_MAX_SECONDS : WEB_FFMPEG_ASR_LOGICAL_CHUNK_MAX_SECONDS;
+  const fallback = maxSeconds;
   const normalized = Number.isFinite(seconds) && seconds > 0 ? seconds : fallback;
   return Math.max(
     WEB_FFMPEG_ASR_LOGICAL_CHUNK_MIN_SECONDS,
-    Math.min(WEB_FFMPEG_ASR_LOGICAL_CHUNK_MAX_SECONDS, Math.floor(normalized))
+    Math.min(maxSeconds, Math.floor(normalized))
   );
 }
 
@@ -529,7 +537,9 @@ async function splitHlsInternalChunkForAsr(message, internalChunk, logicalChunkS
   const coreStart = hlsChunkCoreStart(internalChunk);
   const coreEnd = hlsChunkCoreEnd(internalChunk);
   const coreDuration = Math.max(0, coreEnd - coreStart);
-  const uploadSeconds = normalizeHlsLogicalChunkSeconds(logicalChunkSeconds);
+  const uploadSeconds = normalizeHlsLogicalChunkSeconds(logicalChunkSeconds, {
+    longFile: isLongFileAsrMode(message)
+  });
   if (!coreDuration || coreDuration <= uploadSeconds + 0.001) {
     return [internalChunk];
   }
@@ -703,17 +713,17 @@ function hlsShouldSplitLogicalChunkAtVadGap(pendingParts, nextSpeechIntervals) {
   return firstNextSpeech.start - lastCurrentSpeech.end >= WEB_FFMPEG_ASR_VAD_SPLIT_MIN_SILENCE_SECONDS;
 }
 
-function buildHlsInternalExtractionGroups(media, logicalChunkSeconds) {
+function buildHlsInternalExtractionGroups(media, logicalChunkSeconds, options = {}) {
   const coreGroups = groupHlsSegments(media.segments, {
     maxDurationSeconds: WEB_FFMPEG_HLS_EXTRACT_CHUNK_SECONDS,
     maxSegments: hlsMaxSegmentsPerExtractChunk(media)
   });
-  return addHlsLogicalBoundaryContextToGroups(coreGroups, media.segments, logicalChunkSeconds);
+  return addHlsLogicalBoundaryContextToGroups(coreGroups, media.segments, logicalChunkSeconds, options);
 }
 
-function addHlsLogicalBoundaryContextToGroups(groups, segments, logicalChunkSeconds) {
+function addHlsLogicalBoundaryContextToGroups(groups, segments, logicalChunkSeconds, options = {}) {
   const overlap = WEB_FFMPEG_ASR_CONTEXT_OVERLAP_SECONDS;
-  const logicalSeconds = normalizeHlsLogicalChunkSeconds(logicalChunkSeconds);
+  const logicalSeconds = normalizeHlsLogicalChunkSeconds(logicalChunkSeconds, options);
   const mediaEnd = Array.isArray(segments) && segments.length
     ? pickFiniteNumber(segments.at(-1).end, 0)
     : 0;
@@ -987,6 +997,10 @@ function isHlsSource(message) {
     mime.includes("mpegurl") ||
     mime.includes("vnd.apple.mpegurl")
   );
+}
+
+function isLongFileAsrMode(message = {}) {
+  return message.asrMode === "long-file" || message.longFileMode === true;
 }
 
 async function fetchText(url, options) {

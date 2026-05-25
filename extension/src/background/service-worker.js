@@ -3,6 +3,7 @@ import { FuguangBrowserAsrPostprocess } from "./browser-asr-postprocess.js";
 import { FuguangBrowserLanguage } from "./browser-language.js";
 import { FuguangBrowserMediaCandidates } from "./browser-media-candidates.js";
 import { FuguangBrowserModelProfiles } from "./browser-model-profiles.js";
+import { FuguangBrowserFunAsrProvider } from "./browser-funasr-provider.js";
 import { FuguangBrowserTranslationPipeline } from "./browser-translation-pipeline.js";
 import { FuguangMediaHeaderRules } from "./media-header-rules.js";
 
@@ -54,6 +55,11 @@ var findProfile = FuguangBrowserModelProfiles.findProfile;
 var normalizeProviderType = FuguangBrowserModelProfiles.normalizeProviderType;
 var normalizeSelectedProfileId = FuguangBrowserModelProfiles.normalizeSelectedProfileId;
 var normalizeStoredProfiles = FuguangBrowserModelProfiles.normalizeStoredProfiles;
+var isDashScopeFunAsrConfig = FuguangBrowserFunAsrProvider.isDashScopeFunAsrConfig;
+var dashScopeFunAsrChunkSeconds = FuguangBrowserFunAsrProvider.dashScopeFunAsrChunkSeconds;
+var dashScopeFunAsrShouldDiarize = FuguangBrowserFunAsrProvider.dashScopeFunAsrShouldDiarize;
+var normalizeDashScopeFunAsrResult = FuguangBrowserFunAsrProvider.normalizeDashScopeFunAsrResult;
+var transcribeDashScopeFunAsrFile = FuguangBrowserFunAsrProvider.transcribeDashScopeFunAsrFile;
 var translateBrowserSegments = FuguangBrowserTranslationPipeline.translateBrowserSegments;
 var translateBrowserSegmentsBatch = FuguangBrowserTranslationPipeline.translateBrowserSegmentsBatch;
 var browserTranslationFailures = FuguangBrowserTranslationPipeline.browserTranslationFailures;
@@ -68,7 +74,9 @@ const MESSAGE = {
   START_PRELOAD_AUTO: "FUGUANG_START_PRELOAD_AUTO",
   RETRY_PRELOAD: "FUGUANG_RETRY_PRELOAD",
   RETRY_PRELOAD_CHUNKS: "FUGUANG_RETRY_PRELOAD_CHUNKS",
+  RERUN_ASR_PRELOAD: "FUGUANG_RERUN_ASR_PRELOAD",
   RETRANSLATE_PRELOAD: "FUGUANG_RETRANSLATE_PRELOAD",
+  RETRANSLATE_TRANSCRIPT: "FUGUANG_RETRANSLATE_TRANSCRIPT",
   CANCEL_PRELOAD: "FUGUANG_CANCEL_PRELOAD",
   CLEAR_PRELOAD_AUDIO_CACHE: "FUGUANG_CLEAR_PRELOAD_AUDIO_CACHE",
   CHECK_PRELOAD_JOB: "FUGUANG_CHECK_PRELOAD_JOB",
@@ -342,8 +350,12 @@ async function handleMessage(message, sender) {
       return retryPreload(message.tabId);
     case MESSAGE.RETRY_PRELOAD_CHUNKS:
       return retryPreload(message.tabId, message.chunkIndexes || []);
+    case MESSAGE.RERUN_ASR_PRELOAD:
+      return rerunAsrPreload(message.tabId, message.chunkIndexes || [], { targetLanguage: message.targetLanguage });
     case MESSAGE.RETRANSLATE_PRELOAD:
-      return retranslatePreload(message.tabId, message.chunkIndexes || []);
+      return retranslatePreload(message.tabId, message.chunkIndexes || [], { targetLanguage: message.targetLanguage });
+    case MESSAGE.RETRANSLATE_TRANSCRIPT:
+      return retranslateCachedTranscript(message.tabId, message.transcript, message.metadata || {}, { targetLanguage: message.targetLanguage });
     case MESSAGE.CANCEL_PRELOAD:
       return cancelPreload(message.tabId, message.jobId);
     case MESSAGE.CLEAR_PRELOAD_AUDIO_CACHE:
@@ -563,10 +575,14 @@ async function startBrowserPreload(tabId, candidate, metadata, modelConfig) {
     throw new Error("当前媒体源暂不支持浏览器内预加载。请选择 HLS 或直连音视频源。");
   }
   validateBrowserPreloadModelConfig(modelConfig);
-  const browserAsrChunkSeconds = await browserAsrEffectiveUploadChunkSeconds(modelConfig);
+  const usesFunAsr = isDashScopeFunAsrConfig(modelConfig.asr);
+  const browserAsrChunkSeconds = usesFunAsr
+    ? dashScopeFunAsrChunkSeconds(metadata)
+    : await browserAsrEffectiveUploadChunkSeconds(modelConfig);
   const jobId = `browser-${Date.now()}`;
   const job = {
     id: jobId,
+    pipeline: usesFunAsr ? "funasr" : "browser",
     status: "running",
     stage: "extracting",
     source: candidate.url,
@@ -602,7 +618,7 @@ async function startBrowserPreload(tabId, candidate, metadata, modelConfig) {
       segmentCount: 0,
       sourceSegments: 0,
       translatedSegments: 0,
-      asrWorkers: modelConfig.asrWorkers,
+      asrWorkers: usesFunAsr ? 1 : modelConfig.asrWorkers,
       translationWorkers: modelConfig.workers,
       workers: modelConfig.workers
     }
@@ -618,7 +634,8 @@ async function startBrowserPreload(tabId, candidate, metadata, modelConfig) {
     sourceSegmentsByChunk: new Map(),
     translatedSegmentsByChunk: new Map(),
     browserAsrDiagnosticsByChunk: new Map(),
-    browserAsrChunkSeconds: browserAsrChunkSeconds
+    browserAsrChunkSeconds: browserAsrChunkSeconds,
+    pipeline: usesFunAsr ? "funasr" : "browser"
   };
   browserPreloadJobs.set(jobId, record);
   publishBrowserPreloadJob(record);
@@ -651,6 +668,9 @@ async function runBrowserPreloadJob(jobId) {
   const record = browserPreloadJobs.get(jobId);
   if (!record) {
     return;
+  }
+  if (record.pipeline === "funasr" || record.job?.pipeline === "funasr") {
+    return runBrowserFunAsrPreloadJob(jobId);
   }
   startBrowserChunkPipeline(record);
   let audio = {};
@@ -723,6 +743,187 @@ async function runBrowserPreloadJob(jobId) {
   }
 }
 
+async function runBrowserFunAsrPreloadJob(jobId) {
+  const record = browserPreloadJobs.get(jobId);
+  if (!record) {
+    return;
+  }
+  let audio = {};
+  let extractionError = null;
+  try {
+    audio = await extractCandidateAudioInBrowser(record);
+    if (isBrowserJobCancelled(record)) {
+      return;
+    }
+    const chunks = record.audioChunks?.length
+      ? record.audioChunks
+      : normalizeBrowserAudioChunks(
+          audio,
+          Number(audio.asrChunkSeconds || audio.chunkSeconds || record.browserAsrChunkSeconds) || dashScopeFunAsrChunkSeconds(record.metadata),
+          record.metadata?.duration
+        );
+    record.audioChunks = uniqueBrowserAudioChunks(chunks);
+    if (!record.audioChunks.length) {
+      throw createNoBrowserAudioChunksError(audio);
+    }
+    record.job.extract = {
+      ...record.job.extract,
+      status: "completed",
+      progress: 100,
+      phase: "completed",
+      message: "",
+      chunkCount: record.audioChunks.length,
+      availableSeconds: Math.round(Number(audio.duration || 0) || record.audioChunks.reduce((sum, chunk) => sum + (chunk.duration || 0), 0)),
+      duration: pickFinite(audio.duration, record.job.extract.duration, record.metadata?.duration),
+      elapsedSeconds: elapsedSeconds(record.startedAt)
+    };
+    record.job.stage = "asr";
+    record.job.translation = {
+      ...record.job.translation,
+      status: "running",
+      chunkCount: record.audioChunks.length,
+      chunksTotal: record.audioChunks.length,
+      asrWorkers: 1,
+      translationWorkers: record.modelConfig.workers,
+      workers: record.modelConfig.workers,
+      chunkStatuses: record.audioChunks.map((chunk, index) => ({
+        ...createChunkStatus(index, "queued"),
+        index: Number.isInteger(Number(chunk.index)) ? Number(chunk.index) : index
+      }))
+    };
+    publishBrowserPreloadJob(record);
+  } catch (error) {
+    extractionError = error;
+  }
+  if (extractionError) {
+    throw extractionError;
+  }
+  const labelSpeakers = dashScopeFunAsrShouldDiarize({
+    chunksTotal: record.audioChunks.length,
+    duration: pickFinite(record.job.extract.duration, record.metadata?.duration)
+  });
+  const concurrency = browserFunAsrConcurrency(record);
+  await runPool(record.audioChunks, concurrency, async chunk => {
+    await processBrowserFunAsrChunk(record, chunk, { labelSpeakers });
+  });
+  if (isBrowserJobCancelled(record)) {
+    return;
+  }
+  publishBrowserSubtitle(record);
+  const completion = finalizeBrowserCompletionState(record);
+  await attachBrowserJobVttIfReady(record);
+  if (browserCompletionAllowsAudioRelease(completion)) {
+    await releaseBrowserAudioChunks(record);
+  }
+}
+
+function uniqueBrowserAudioChunks(chunks = []) {
+  const seen = new Set();
+  return (Array.isArray(chunks) ? chunks : [])
+    .filter(chunk => isUsableBrowserAudioFile(chunk?.file))
+    .map((chunk, index) => ({
+      ...chunk,
+      index: Number.isInteger(Number(chunk.index)) ? Number(chunk.index) : index
+    }))
+    .filter(chunk => {
+      if (seen.has(chunk.index)) {
+        return false;
+      }
+      seen.add(chunk.index);
+      return true;
+    })
+    .sort((left, right) => left.index - right.index || left.start - right.start);
+}
+
+function browserFunAsrConcurrency(record) {
+  return Math.max(1, Math.min(2, Number(record?.audioChunks?.length || 1) || 1));
+}
+
+async function processBrowserFunAsrChunk(record, chunk, options = {}) {
+  if (isBrowserJobCancelled(record)) {
+    return;
+  }
+  const index = Number.isInteger(Number(chunk.index)) ? Number(chunk.index) : 0;
+  const current = record.job.translation.chunkStatuses[index] || createChunkStatus(index, "queued");
+  const attempt = Math.max(1, Number(current.attempts || 0) + 1);
+  updateChunkStatus(record, index, {
+    stage: "asr",
+    status: "识别",
+    attempts: attempt,
+    error: "",
+    message: `Fun-ASR 长文件识别 ${index + 1}/${record.audioChunks.length}`
+  });
+  try {
+    const fileBuffer = await getBrowserAudioChunkBuffer(chunk.file);
+    const payload = await transcribeDashScopeFunAsrFile(
+      {
+        name: chunk.file?.name || `funasr-${index + 1}.mp3`,
+        mime: chunk.file?.mime || "audio/mpeg",
+        buffer: fileBuffer
+      },
+      record.modelConfig.asr,
+      {
+        chunksTotal: record.audioChunks.length,
+        duration: pickFinite(record.job.extract.duration, record.metadata?.duration),
+        labelSpeakers: options.labelSpeakers,
+        onProgress(progress) {
+          updateChunkStatus(record, index, {
+            stage: "asr",
+            status: "识别",
+            attempts: attempt,
+            message: `Fun-ASR ${progress.status || "处理中"} · ${index + 1}/${record.audioChunks.length}`
+          });
+        }
+      }
+    );
+    const sourceSegments = normalizeBrowserSourceSegmentsForTranslation(
+      normalizeDashScopeFunAsrResult(payload, chunk, {
+        labelSpeakers: options.labelSpeakers,
+        chunkLabelIndex: index
+      }),
+      index
+    );
+    record.sourceSegmentsByChunk.set(index, sourceSegments);
+    if (!sourceSegments.length) {
+      record.translatedSegmentsByChunk.set(index, []);
+      updateChunkStatus(record, index, {
+        stage: "completed",
+        status: "完成",
+        attempts: attempt,
+        sourceCount: 0,
+        translatedCount: 0,
+        message: "Fun-ASR 未返回可显示语音"
+      });
+      publishBrowserSubtitle(record);
+      return;
+    }
+    updateChunkStatus(record, index, {
+      stage: "asr_done",
+      status: "待翻译",
+      attempts: attempt,
+      sourceCount: sourceSegments.length,
+      error: "",
+      message: `Fun-ASR 原文 ${sourceSegments.length}`
+    });
+    await processBrowserTranslationChunk(record, {
+      index,
+      start: chunk.start,
+      end: chunk.end,
+      duration: chunk.duration
+    }, sourceSegments);
+  } catch (error) {
+    updateChunkStatus(record, index, {
+      stage: "failed",
+      status: "失败",
+      attempts: attempt,
+      sourceCount: 0,
+      translatedCount: 0,
+      error: `Fun-ASR 识别失败：${error.message || String(error)}`
+    });
+    publishBrowserSubtitle(record);
+  }
+}
+
 async function extractCandidateAudioInBrowser(record) {
   await ensureOffscreenDocument();
   const webFfmpeg = await getWebFfmpegConfig();
@@ -743,6 +944,7 @@ async function extractCandidateAudioInBrowser(record) {
     duration: pickFinite(candidate.duration, record.metadata?.duration),
     chunkSeconds: record.modelConfig.chunkSeconds,
     asrChunkSeconds: record.browserAsrChunkSeconds || browserAsrUploadChunkSeconds(record.modelConfig),
+    asrMode: (record.pipeline === "funasr" || record.job?.pipeline === "funasr") ? "long-file" : "",
     cacheNamespace: record.job.id,
     jobId: record.job.id
   }), record.job.id);
@@ -765,6 +967,18 @@ function applyOffscreenWebFfmpegChunkReady(message) {
   const record = findBrowserPreloadRecord(message?.jobId, message?.tabId);
   if (!record || record.cancelled) {
     return {};
+  }
+  if (record.pipeline === "funasr" || record.job?.pipeline === "funasr") {
+    const emitted = appendBrowserFunAsrAudioChunk(record, message.chunk || {});
+    if (message.duration) {
+      record.job.extract.duration = pickFinite(message.duration, record.job.extract.duration);
+    }
+    if (message.internalChunksDone || message.internalChunksTotal) {
+      record.job.extract.internalChunksDone = pickNonNegativeInteger(message.internalChunksDone, record.job.extract.internalChunksDone);
+      record.job.extract.internalChunksTotal = pickNonNegativeInteger(message.internalChunksTotal, record.job.extract.internalChunksTotal);
+    }
+    publishBrowserPreloadJob(record);
+    return { chunks: emitted.length };
   }
   const emitted = appendBrowserInternalAudioChunk(record, message.chunk || {});
   if (message.duration) {
@@ -861,12 +1075,33 @@ function appendBrowserInternalAudioChunk(record, chunk) {
   return flushBrowserInternalAudioChunks(record, false);
 }
 
+function appendBrowserFunAsrAudioChunk(record, chunk) {
+  ensureBrowserChunkPipelineState(record);
+  const normalized = normalizeBrowserInternalAudioChunk(chunk);
+  if (!normalized || !isUsableBrowserAudioFile(normalized.file)) {
+    return [];
+  }
+  record.browserStreamingInternalChunks = true;
+  const nextIndex = Number.isInteger(normalized.index) ? normalized.index : record.audioChunks.length;
+  const item = { ...normalized, index: nextIndex };
+  if (record.audioChunks.some(chunk => chunk?.index === item.index)) {
+    return [];
+  }
+  record.audioChunks.push(item);
+  record.audioChunks.sort((left, right) => left.index - right.index);
+  record.job.extract.availableSeconds = Math.max(
+    Number(record.job.extract.availableSeconds || 0) || 0,
+    Math.round(Number(item.end || 0) || 0)
+  );
+  return [item];
+}
+
 function flushBrowserInternalAudioChunks(record, final = false) {
   ensureBrowserChunkPipelineState(record);
   const emitted = [];
-  const logicalChunkSeconds = normalizeBrowserAsrUploadChunkSeconds(
-    record.browserAsrChunkSeconds || record.modelConfig?.asrUploadChunkSeconds
-  );
+  const logicalChunkSeconds = (record.pipeline === "funasr" || record.job?.pipeline === "funasr")
+    ? Math.max(10, Math.floor(Number(record.browserAsrChunkSeconds || 0) || dashScopeFunAsrChunkSeconds(record.metadata)))
+    : normalizeBrowserAsrUploadChunkSeconds(record.browserAsrChunkSeconds || record.modelConfig?.asrUploadChunkSeconds);
   while (record.browserInternalChunkCursor < record.browserInternalAudioChunks.length) {
     const chunk = record.browserInternalAudioChunks[record.browserInternalChunkCursor];
     const pending = record.browserPendingLogicalChunk;
@@ -1378,6 +1613,7 @@ async function processBrowserTranslationChunk(record, chunk, sourceSegments) {
     status: "翻译",
     attempts: attempt,
     sourceCount: sourceSegments.length,
+    targetLanguage: record.modelConfig.targetLanguage,
     error: "",
     message: `第 ${attempt} 次尝试`
   });
@@ -1408,6 +1644,7 @@ async function processBrowserTranslationChunk(record, chunk, sourceSegments) {
       stage: warningMessage ? "completed_with_warnings" : "completed",
       status: warningMessage ? "部分完成" : "完成",
       translatedCount: translatedSegments.length,
+      targetLanguage: record.modelConfig.targetLanguage,
       translationFailures: translationFailures.length,
       asrFailures,
       asrErrors,
@@ -3864,6 +4101,10 @@ async function retryPreload(tabId, chunkIndexes = []) {
   clearPreloadSubtitleSuppression(tabId, jobId);
   const browserRecord = browserPreloadJobs.get(jobId);
   if (browserRecord) {
+    await refreshBrowserTranslationModelConfig(browserRecord);
+    if (browserRecord.pipeline === "funasr" || browserRecord.job?.pipeline === "funasr") {
+      return retryBrowserFunAsrFailedPreload(browserRecord, chunkIndexes);
+    }
     return retryBrowserFailedPreload(browserRecord, chunkIndexes);
   }
   if (state.preloadJob?.status === "running" || state.preloadJob?.status === "queued") {
@@ -3880,7 +4121,92 @@ async function retryPreload(tabId, chunkIndexes = []) {
   throw new Error("后台任务状态已过期或这个任务不是当前浏览器内预加载任务，不能重试失败识别分段。请重新抽取。");
 }
 
-async function retranslatePreload(tabId, chunkIndexes = []) {
+async function rerunAsrPreload(tabId, chunkIndexes = [], options = {}) {
+  const state = getState(tabId);
+  const jobId = state.preloadJob?.id;
+  if (!jobId) {
+    throw new Error("没有正在跟踪的预加载任务，不能重新 ASR。请先抽取音频。");
+  }
+  clearPreloadSubtitleSuppression(tabId, jobId);
+  const browserRecord = browserPreloadJobs.get(jobId);
+  if (!browserRecord) {
+    throw new Error("后台任务状态已过期，不能复用音频重新 ASR。请重新抽取。");
+  }
+  await refreshBrowserTranslationModelConfig(browserRecord, options);
+  return rerunBrowserAsrFromAudio(browserRecord, chunkIndexes);
+}
+
+async function rerunBrowserAsrFromAudio(record, chunkIndexes = []) {
+  if (record?.job?.audioCacheRemoved) {
+    throw new Error("当前任务的音频缓存已清除，不能重新 ASR。请重新抽取。");
+  }
+  if (!Array.isArray(record?.audioChunks) || !record.audioChunks.length) {
+    throw new Error("没有可复用的音频缓存，不能重新 ASR。请重新抽取。");
+  }
+  const indexes = collectBrowserAsrRerunIndexes(record, chunkIndexes);
+  if (!indexes.length) {
+    throw new Error("没有匹配到可重新 ASR 的音频分段。");
+  }
+  const isFunAsr = record.pipeline === "funasr" || record.job?.pipeline === "funasr";
+  record.job.status = "running";
+  record.job.stage = "retrying";
+  record.job.subtitleCleared = false;
+  resetBrowserRecognitionResults(record, indexes);
+  publishBrowserSubtitle(record);
+  publishBrowserPreloadJob(record);
+  if (isFunAsr) {
+    const chunksByIndex = new Map(record.audioChunks.map(chunk => [Number(chunk.index), chunk]));
+    const chunks = indexes.map(index => chunksByIndex.get(index)).filter(Boolean);
+    if (!chunks.length) {
+      throw new Error("Fun-ASR 任务没有保留可重新识别的音频分段，请重新抽取。");
+    }
+    const labelSpeakers = dashScopeFunAsrShouldDiarize({
+      chunksTotal: record.audioChunks.length,
+      duration: pickFinite(record.job.extract?.duration, record.metadata?.duration)
+    });
+    await runPool(chunks, browserFunAsrConcurrency(record), async chunk => {
+      await processBrowserFunAsrChunk(record, chunk, { labelSpeakers });
+    });
+  } else {
+    await runPool(indexes, Math.max(record.modelConfig.asrWorkers || 1, 1), async index => {
+      await retryBrowserAsrGroup(record, index);
+    });
+  }
+  publishBrowserSubtitle(record);
+  finalizeBrowserCompletionState(record);
+  return { preload: record.job.status, job: record.job, message: "已提交重新 ASR。" };
+}
+
+function collectBrowserAsrRerunIndexes(record, chunkIndexes = []) {
+  const requested = new Set(Array.isArray(chunkIndexes) ? chunkIndexes.map(Number).filter(Number.isFinite) : []);
+  const isFunAsr = record?.pipeline === "funasr" || record?.job?.pipeline === "funasr";
+  const indexes = (record?.audioChunks || [])
+    .map(chunk => isFunAsr ? Number(chunk.index) : browserTranslationGroupIndex(record, chunk))
+    .filter(Number.isFinite)
+    .filter(index => !requested.size || requested.has(index));
+  return [...new Set(indexes)].sort((left, right) => left - right);
+}
+
+function resetBrowserRecognitionResults(record, indexes) {
+  for (const index of indexes) {
+    record.sourceSegmentsByChunk?.delete(index);
+    record.translatedSegmentsByChunk?.delete(index);
+    updateChunkStatus(record, index, {
+      stage: "queued",
+      status: "排队",
+      attempts: 0,
+      sourceCount: 0,
+      translatedCount: 0,
+      asrFailures: 0,
+      asrErrors: [],
+      translationFailures: 0,
+      error: "",
+      message: "等待重新 ASR"
+    });
+  }
+}
+
+async function retranslatePreload(tabId, chunkIndexes = [], options = {}) {
   const state = getState(tabId);
   const jobId = state.preloadJob?.id;
   if (!jobId) {
@@ -3889,6 +4215,7 @@ async function retranslatePreload(tabId, chunkIndexes = []) {
   clearPreloadSubtitleSuppression(tabId, jobId);
   const browserRecord = browserPreloadJobs.get(jobId);
   if (browserRecord) {
+    await refreshBrowserTranslationModelConfig(browserRecord, options);
     return retryBrowserTranslationOnly(browserRecord, chunkIndexes, { failedOnly: false });
   }
   if (state.preloadJob?.status === "running" || state.preloadJob?.status === "queued") {
@@ -3899,6 +4226,106 @@ async function retranslatePreload(tabId, chunkIndexes = []) {
     };
   }
   throw new Error("后台任务状态已过期或这个任务不是当前浏览器内预加载任务，不能只重翻译。请重新抽取。");
+}
+
+async function retranslateCachedTranscript(tabId, transcript, metadata = {}, options = {}) {
+  const sourceSegments = transcriptSourceSegmentsForTranslation(transcript);
+  if (!sourceSegments.length) {
+    throw new Error("本地字幕缓存没有可复用的 ASR 原文，不能只重翻译。");
+  }
+  const modelConfig = await getModelConfig();
+  if (options.targetLanguage) {
+    modelConfig.targetLanguage = normalizeTargetLanguage(options.targetLanguage, modelConfig.targetLanguage);
+  }
+  const normalizedMetadata = {
+    title: metadata.title || transcript?.metadata?.title || "",
+    pageUrl: metadata.pageUrl || transcript?.metadata?.pageUrl || "",
+    sourceUrl: metadata.sourceUrl || transcript?.metadata?.sourceUrl || "",
+    duration: pickFinite(metadata.duration, transcript?.metadata?.duration, sourceSegments.at(-1)?.end)
+  };
+  const jobId = `cache-translate-${Date.now()}`;
+  const job = {
+    id: jobId,
+    pipeline: "cached-transcript",
+    status: "running",
+    stage: "retry_translation",
+    source: normalizedMetadata.sourceUrl || normalizedMetadata.pageUrl || "subtitle-cache",
+    sourceUrl: normalizedMetadata.sourceUrl || "",
+    metadata: normalizedMetadata,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    extract: {
+      status: "completed",
+      progress: 100,
+      phase: "completed",
+      message: "使用本地字幕缓存原文",
+      chunkCount: 0,
+      availableSeconds: Math.round(Number(normalizedMetadata.duration || 0) || 0),
+      duration: normalizedMetadata.duration || null,
+      chunkSeconds: modelConfig.chunkSeconds,
+      asrChunkSeconds: 0,
+      bitrate: "",
+      elapsedSeconds: 0
+    },
+    translation: {
+      status: "running",
+      targetLanguage: modelConfig.targetLanguage,
+      chunkCount: 1,
+      chunksTotal: 1,
+      chunksDone: 0,
+      chunksFailed: 0,
+      chunksAsr: 0,
+      chunksTranslating: 0,
+      chunkStatuses: [createChunkStatus(0, "queued")],
+      segmentCount: 0,
+      sourceSegments: sourceSegments.length,
+      translatedSegments: 0,
+      asrWorkers: 0,
+      translationWorkers: modelConfig.workers,
+      workers: modelConfig.workers
+    }
+  };
+  const record = {
+    tabId,
+    candidate: { url: normalizedMetadata.sourceUrl || normalizedMetadata.pageUrl || "", title: normalizedMetadata.title || "" },
+    metadata: normalizedMetadata,
+    modelConfig,
+    job,
+    startedAt: Date.now(),
+    cancelled: false,
+    sourceSegmentsByChunk: new Map([[0, sourceSegments]]),
+    translatedSegmentsByChunk: new Map(),
+    browserAsrDiagnosticsByChunk: new Map(),
+    audioChunks: [],
+    pipeline: "cached-transcript"
+  };
+  browserPreloadJobs.set(jobId, record);
+  publishBrowserPreloadJob(record);
+  return retryBrowserTranslationOnly(record, [0], { failedOnly: false });
+}
+
+function transcriptSourceSegmentsForTranslation(transcript) {
+  const source = Array.isArray(transcript?.source) ? transcript.source : [];
+  return normalizeBrowserSourceSegmentsForTranslation(source, 0);
+}
+
+async function refreshBrowserTranslationModelConfig(record, options = {}) {
+  const current = await getModelConfig();
+  const targetLanguage = options.targetLanguage
+    ? normalizeTargetLanguage(options.targetLanguage, current.targetLanguage)
+    : current.targetLanguage;
+  record.modelConfig = {
+    ...record.modelConfig,
+    translation: current.translation,
+    targetLanguage,
+    workers: current.workers
+  };
+  if (record.job?.translation) {
+    record.job.translation.translationWorkers = current.workers;
+    record.job.translation.workers = current.workers;
+    record.job.translation.targetLanguage = targetLanguage;
+  }
+  return record.modelConfig;
 }
 
 async function retryBrowserFailedPreload(record, chunkIndexes = []) {
@@ -3922,7 +4349,9 @@ async function retryBrowserFailedPreload(record, chunkIndexes = []) {
   publishBrowserPreloadJob(record);
   if (sourceRetryIndexes.length) {
     await runPool(sourceRetryIndexes, Math.max(record.modelConfig.workers || 1, 1), async index => {
-      await translateBrowserChunkFromSource(record, index, reusableBrowserSourceSegments(record, index), "重翻译，不重新识别");
+      await translateBrowserChunkFromSource(record, index, reusableBrowserSourceSegments(record, index), "重翻译，不重新识别", {
+        replaceExisting: true
+      });
     });
   }
   await runPool(asrRetryIndexes, Math.max(record.modelConfig.asrWorkers, 1), async index => {
@@ -3934,6 +4363,78 @@ async function retryBrowserFailedPreload(record, chunkIndexes = []) {
     await releaseBrowserAudioChunks(record);
   }
   return { preload: record.job.status, job: record.job };
+}
+
+async function retryBrowserFunAsrFailedPreload(record, chunkIndexes = []) {
+  const { translationIndexes, asrIndexes } = browserFunAsrRetryPlan(record, chunkIndexes);
+  if (!translationIndexes.length && !asrIndexes.length) {
+    throw new Error("当前 Fun-ASR 任务没有可继续处理的识别分段。");
+  }
+  const chunksByIndex = new Map((record.audioChunks || []).map(chunk => [Number(chunk.index), chunk]));
+  const chunks = asrIndexes.map(index => chunksByIndex.get(index)).filter(Boolean);
+  if (asrIndexes.length && !chunks.length) {
+    throw new Error("Fun-ASR 任务没有保留可继续识别的音频分段，请重新开始任务。");
+  }
+  record.job.status = "running";
+  record.job.stage = asrIndexes.length ? "retrying" : "retry_translation";
+  publishBrowserPreloadJob(record);
+  if (translationIndexes.length) {
+    await runPool(translationIndexes, Math.max(record.modelConfig.workers || 1, 1), async index => {
+      await translateBrowserChunkFromSource(record, index, reusableBrowserSourceSegments(record, index), "只重翻译，不重新识别", {
+        replaceExisting: true
+      });
+    });
+  }
+  const labelSpeakers = dashScopeFunAsrShouldDiarize({
+    chunksTotal: record.audioChunks.length,
+    duration: pickFinite(record.job.extract?.duration, record.metadata?.duration)
+  });
+  if (chunks.length) {
+    await runPool(chunks, browserFunAsrConcurrency(record), async chunk => {
+      await processBrowserFunAsrChunk(record, chunk, { labelSpeakers });
+    });
+  }
+  publishBrowserSubtitle(record);
+  finalizeBrowserCompletionState(record);
+  return { preload: record.job.status, job: record.job };
+}
+
+function browserFunAsrRetryPlan(record, chunkIndexes = []) {
+  const requested = new Set(Array.isArray(chunkIndexes) ? chunkIndexes.map(Number).filter(Number.isFinite) : []);
+  const statuses = record.job.translation?.chunkStatuses || [];
+  const requestedMatches = index => !requested.size || requested.has(Number(index));
+  const failedStatuses = statuses
+    .filter(status => status?.stage === "failed" && requestedMatches(status.index));
+  let indexes = failedStatuses
+    .map(status => Number(status.index))
+    .filter(Number.isFinite);
+  if (!indexes.length) {
+    const sourceIndexes = [...(record.sourceSegmentsByChunk?.keys?.() || [])]
+      .map(Number)
+      .filter(index => Number.isFinite(index) && requestedMatches(index))
+      .filter(index => {
+        const status = statuses[index] || {};
+        const translated = record.translatedSegmentsByChunk?.get?.(index);
+        return status.stage !== "completed" || browserTranslationFailures(translated).length > 0 || !Array.isArray(translated);
+      });
+    indexes = sourceIndexes.length
+      ? sourceIndexes
+      : (record.audioChunks || [])
+          .map(chunk => Number(chunk.index))
+          .filter(index => Number.isFinite(index) && requestedMatches(index));
+  }
+  const uniqueIndexes = [...new Set(indexes)].sort((left, right) => left - right);
+  const translationIndexes = [];
+  const asrIndexes = [];
+  for (const index of uniqueIndexes) {
+    const status = statuses[index] || {};
+    if (reusableBrowserSourceSegments(record, index).length && chunkStatusAsrFailureCount(status) <= 0) {
+      translationIndexes.push(index);
+    } else {
+      asrIndexes.push(index);
+    }
+  }
+  return { translationIndexes, asrIndexes };
 }
 
 function collectBrowserRetryIndexes(record, requested) {
@@ -4067,7 +4568,7 @@ async function retryBrowserAsrGroup(record, groupIndex) {
     asrErrors: errors.slice(0, 5),
     error: errors.length ? `有 ${errors.length} 个识别音频分段失败，先翻译可用原文。` : ""
   });
-  await translateBrowserChunkFromSource(record, index, normalizedSource, suffix);
+  await translateBrowserChunkFromSource(record, index, normalizedSource, suffix, { replaceExisting: true });
 }
 
 async function retryBrowserTranslationOnly(record, chunkIndexes = [], options = {}) {
@@ -4096,7 +4597,9 @@ async function retryBrowserTranslationOnly(record, chunkIndexes = [], options = 
   record.job.stage = "retry_translation";
   publishBrowserPreloadJob(record);
   await runPool(indexes, Math.max(record.modelConfig.workers || 1, 1), async index => {
-    await translateBrowserChunkFromSource(record, index, reusableBrowserSourceSegments(record, index), "只重翻译，不重新识别");
+    await translateBrowserChunkFromSource(record, index, reusableBrowserSourceSegments(record, index), "只重翻译，不重新识别", {
+      replaceExisting: true
+    });
   });
   publishBrowserSubtitle(record);
   finalizeBrowserCompletionState(record);
@@ -4108,17 +4611,22 @@ function reusableBrowserSourceSegments(record, index) {
   return Array.isArray(segments) ? segments : [];
 }
 
-async function translateBrowserChunkFromSource(record, index, sourceSegments, message) {
+async function translateBrowserChunkFromSource(record, index, sourceSegments, message, options = {}) {
   const statuses = record.job.translation?.chunkStatuses || [];
   const current = statuses[index] || {};
   const asrFailures = chunkStatusAsrFailureCount(current);
   const asrErrors = Array.isArray(current.asrErrors) ? current.asrErrors : [];
   const attempt = (current.attempts || 0) + 1;
+  const replaceExisting = Boolean(options.replaceExisting);
+  if (replaceExisting) {
+    record.translatedSegmentsByChunk.set(index, []);
+  }
   updateChunkStatus(record, index, {
     stage: "translation",
     status: "翻译",
     attempts: attempt,
     sourceCount: sourceSegments.length,
+    targetLanguage: record.modelConfig.targetLanguage,
     error: "",
     message: `第 ${attempt} 次尝试 · ${message}`
   });
@@ -4144,7 +4652,7 @@ async function translateBrowserChunkFromSource(record, index, sourceSegments, me
       }
     );
   } catch (error) {
-    const previous = record.translatedSegmentsByChunk.get(index);
+    const previous = replaceExisting ? [] : record.translatedSegmentsByChunk.get(index);
     if (Array.isArray(previous) && previous.length) {
       translatedSegments = previous;
     } else {
@@ -4171,6 +4679,7 @@ async function translateBrowserChunkFromSource(record, index, sourceSegments, me
     status: warningMessage ? "部分完成" : "完成",
     sourceCount: sourceSegments.length,
     translatedCount: translatedSegments.length,
+    targetLanguage: record.modelConfig.targetLanguage,
     translationFailures: translationFailures.length,
     asrFailures,
     asrErrors,
@@ -4524,8 +5033,47 @@ async function clearPreloadSubtitleState(tabId, jobId) {
   const state = getState(tabId);
   const targetJobId = jobId || state.preloadJob?.id || "";
   suppressPreloadSubtitleAttachment(tabId, targetJobId);
+  const browserRecord = targetJobId ? browserPreloadJobs.get(targetJobId) : null;
+  if (browserRecord) {
+    clearBrowserSubtitleStateForJob(browserRecord);
+  } else if (targetJobId && state.preloadJob?.id === targetJobId) {
+    state.preloadJob = clearPreloadJobSubtitlePayload(state.preloadJob);
+  }
   await detachPreloadVtt(tabId);
   return { cleared: Boolean(targetJobId) };
+}
+
+function clearBrowserSubtitleStateForJob(record) {
+  if (!record?.job?.translation) {
+    return;
+  }
+  record.translatedSegmentsByChunk = new Map();
+  record.job = clearPreloadJobSubtitlePayload(record.job, collectChunkSegments(record.sourceSegmentsByChunk || new Map()));
+  publishBrowserPreloadJob(record);
+}
+
+function clearPreloadJobSubtitlePayload(job, sourceSegments = null) {
+  const translation = job?.translation || {};
+  const source = Array.isArray(sourceSegments)
+    ? sourceSegments
+    : Array.isArray(translation.transcript?.source)
+      ? translation.transcript.source
+      : [];
+  return {
+    ...job,
+    subtitleCleared: true,
+    reusableSourceChunks: job?.reusableSourceChunks || translation.reusableSourceChunks || (source.length ? 1 : 0),
+    translation: {
+      ...translation,
+      vttPath: "",
+      vttText: "",
+      transcript: { source, translated: [], metadata: translation.transcript?.metadata || job?.metadata || {} },
+      segmentCount: 0,
+      sourceSegments: source.length,
+      translatedSegments: 0,
+      reusableSourceChunks: translation.reusableSourceChunks || job?.reusableSourceChunks || (source.length ? 1 : 0)
+    }
+  };
 }
 
 function suppressPreloadSubtitleAttachment(tabId, jobId) {

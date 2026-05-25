@@ -39,6 +39,25 @@ function plain(value) {
 }
 
 {
+  const result = parseSubtitleImportText(`NOTE
+Source page: https://example.test/watch?v=source-page
+Exported by: LLM 生肉翻译工具 https://blog.liu-qi.cn/tools
+
+1
+00:00:01,200 --> 00:00:03,400
+第一句字幕
+`, { filename: "sample.srt" });
+
+  assert.equal(result.format, "srt");
+  assert.equal(result.transcript.translated.length, 1);
+  assert.deepEqual(plain(result.transcript.translated[0]), {
+    start: 1.2,
+    end: 3.4,
+    text: "第一句字幕"
+  });
+}
+
+{
   const result = parseSubtitleImportText(`WEBVTT
 
 NOTE 这是一条注释
