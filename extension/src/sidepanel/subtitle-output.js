@@ -8,9 +8,13 @@
   function subtitleOutputRuntimeState() {
     const state = runtimeStateProvider() || {};
     return {
-      mode: state.mode === "bilingual" ? "bilingual" : "translated",
+      mode: normalizeSubtitleDisplayMode(state.mode),
       isRunning: state.isRunning === true
     };
+  }
+
+  function normalizeSubtitleDisplayMode(mode) {
+    return ["translated", "source", "bilingual"].includes(mode) ? mode : "translated";
   }
 
   function parseVtt(vtt) {
@@ -157,19 +161,16 @@
   }
 
   function cuesToVtt(cues, mode = subtitleOutputRuntimeState().mode, options = {}) {
+    const displayMode = normalizeSubtitleDisplayMode(mode);
     const lines = ["WEBVTT", ""];
     for (const cue of cues) {
-      if (!shouldIncludeCueInSubtitleOutput(cue, mode, cues, options)) {
+      if (!shouldIncludeCueInSubtitleOutput(cue, displayMode, cues, options)) {
         continue;
       }
-      if (!Number.isFinite(cue.start) || !Number.isFinite(cue.end) || !cue.text) {
+      const textLines = subtitleCueTextLines(cue, displayMode);
+      if (!Number.isFinite(cue.start) || !Number.isFinite(cue.end) || !textLines.length) {
         continue;
       }
-      const textLines = [];
-      if (mode === "bilingual" && cue.sourceText && cue.sourceText !== cue.text) {
-        textLines.push(cue.sourceText);
-      }
-      textLines.push(cue.text);
       lines.push(formatCueTime(cue.start, cue.end));
       lines.push(textLines.join("\n"));
       lines.push("");
@@ -178,15 +179,12 @@
   }
 
   function cuesToSrt(cues, mode = subtitleOutputRuntimeState().mode, options = {}) {
+    const displayMode = normalizeSubtitleDisplayMode(mode);
     const body = cues
-      .filter(cue => shouldIncludeCueInSubtitleOutput(cue, mode, cues, options))
-      .filter(cue => Number.isFinite(cue.start) && Number.isFinite(cue.end) && cue.text)
+      .filter(cue => shouldIncludeCueInSubtitleOutput(cue, displayMode, cues, options))
+      .filter(cue => Number.isFinite(cue.start) && Number.isFinite(cue.end) && subtitleCueTextLines(cue, displayMode).length)
       .map((cue, index) => {
-        const textLines = [];
-        if (mode === "bilingual" && cue.sourceText && cue.sourceText !== cue.text) {
-          textLines.push(cue.sourceText);
-        }
-        textLines.push(cue.text);
+        const textLines = subtitleCueTextLines(cue, displayMode);
         return [
           String(index + 1),
           `${formatSrtTimestamp(cue.start)} --> ${formatSrtTimestamp(cue.end)}`,
@@ -224,7 +222,11 @@
     if (!cue) {
       return false;
     }
-    if (mode !== "translated" || !cue.sourceOnly) {
+    const displayMode = normalizeSubtitleDisplayMode(mode);
+    if (displayMode === "source") {
+      return Boolean(subtitleCueSourceText(cue));
+    }
+    if (displayMode !== "translated" || !cue.sourceOnly) {
       return true;
     }
     const hasRealTranslatedCue = Array.isArray(cues) && cues.some(item => item && !item.sourceOnly && cleanSubtitleText(item.text));
@@ -235,6 +237,25 @@
       return options.allowRunningSourcePreview !== false;
     }
     return options.allowCompletedSourceFallback !== false;
+  }
+
+  function subtitleCueTextLines(cue, mode) {
+    const displayMode = normalizeSubtitleDisplayMode(mode);
+    const sourceText = subtitleCueSourceText(cue);
+    const translatedText = cleanSubtitleText(cue?.text);
+    if (displayMode === "source") {
+      return sourceText ? [sourceText] : [];
+    }
+    if (displayMode === "bilingual") {
+      return sourceText && sourceText !== translatedText
+        ? [sourceText, translatedText].filter(Boolean)
+        : [translatedText].filter(Boolean);
+    }
+    return [translatedText].filter(Boolean);
+  }
+
+  function subtitleCueSourceText(cue) {
+    return cleanSubtitleText(cue?.sourceText || (cue?.sourceOnly ? cue?.text : ""));
   }
 
   function firstFiniteNumber(...values) {
@@ -281,6 +302,7 @@
 
   Object.assign(global, {
     setSubtitleOutputRuntimeStateProvider,
+    normalizeSubtitleDisplayMode,
     parseVtt,
     cuesFromTranscript,
     transcriptHasRealTranslatedCue,
@@ -293,6 +315,8 @@
     cuesToSrt,
     formatSrtNoteBlock,
     shouldIncludeCueInSubtitleOutput,
+    subtitleCueTextLines,
+    subtitleCueSourceText,
     firstFiniteNumber,
     cleanSubtitleText,
     formatCueTime,

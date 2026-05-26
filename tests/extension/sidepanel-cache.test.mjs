@@ -580,12 +580,12 @@ const clearMissingNonCacheDisplayState = await vm.runInContext(`
   })()
 `, context);
 
-assert.equal(clearMissingNonCacheDisplayState.detached, false);
-assert.equal(clearMissingNonCacheDisplayState.message, "当前页面没有已保存的字幕缓存。");
-assert.equal(clearMissingNonCacheDisplayState.listText, "运行中字幕");
-assert.equal(clearMissingNonCacheDisplayState.cuesLength, 1);
-assert.equal(clearMissingNonCacheDisplayState.renderedSubtitleJobId, "running-job");
-assert.equal(clearMissingNonCacheDisplayState.currentTranscriptIsNull, false);
+assert.equal(clearMissingNonCacheDisplayState.detached, true);
+assert.equal(clearMissingNonCacheDisplayState.message, "当前页面没有已保存的字幕缓存，已清除当前显示的缓存字幕。");
+assert.equal(clearMissingNonCacheDisplayState.listText, "已清除当前页面字幕缓存。");
+assert.equal(clearMissingNonCacheDisplayState.cuesLength, 0);
+assert.equal(clearMissingNonCacheDisplayState.renderedSubtitleJobId, "");
+assert.equal(clearMissingNonCacheDisplayState.currentTranscriptIsNull, true);
 
 const clearCompletedNonCacheDisplayState = await vm.runInContext(`
   (async () => {
@@ -726,9 +726,9 @@ assert.deepEqual(JSON.parse(JSON.stringify(completedJobDisplayState)), {
   warningJobTitle: "完成，有警告",
   retryTranslationJobTitle: "正在重新翻译字幕，不会重新识别音频...",
   retryTranslationStage: "重翻译",
-  translationStage: "识别翻译",
+  translationStage: "翻译",
   unknownStage: "处理中",
-  unknownChunkStage: "排队",
+  unknownChunkStage: "待识别",
   completedStep: "完成",
   completedPhaseStep: "完成",
   doneStep: "完成",
@@ -775,7 +775,7 @@ const subtitleFocusButtonState = await vm.runInContext(`
 assert.deepEqual(JSON.parse(JSON.stringify(subtitleFocusButtonState)), {
   cacheSubtitleState: {
     hidden: false,
-    text: "任务详情",
+    text: "展开任务",
     focus: true
   },
   emptyState: {
@@ -785,6 +785,50 @@ assert.deepEqual(JSON.parse(JSON.stringify(subtitleFocusButtonState)), {
   clearedJobState: {
     hidden: true,
     focus: false
+  }
+});
+
+const sourcePreviewTaskFocusState = await vm.runInContext(`
+  (() => {
+    taskDetailsExpanded = false;
+    taskDetailsManuallyCollapsed = false;
+    subtitleDisplayMode = "translated";
+    currentTranscript = {
+      source: [{ start: 1, end: 2, text: "原文", chunkIndex: 0, segmentIndex: 0 }],
+      translated: []
+    };
+    subtitleCues = [{ start: 1, end: 2, text: "原文", sourceText: "原文", sourceOnly: true }];
+    elements.taskPanel.classList.remove("subtitles-focus");
+    updateTaskPanelFocus({
+      status: "completed",
+      stage: "completed",
+      translation: { segmentCount: 1, translatedSegments: 0, chunksFailed: 0 }
+    });
+    const initial = {
+      hidden: elements.toggleTaskDetails.hidden,
+      text: elements.toggleTaskDetails.textContent,
+      focus: elements.taskPanel.classList.contains("subtitles-focus")
+    };
+    toggleTaskDetails();
+    const collapsed = {
+      hidden: elements.toggleTaskDetails.hidden,
+      text: elements.toggleTaskDetails.textContent,
+      focus: elements.taskPanel.classList.contains("subtitles-focus")
+    };
+    return { initial, collapsed };
+  })()
+`, context);
+
+assert.deepEqual(JSON.parse(JSON.stringify(sourcePreviewTaskFocusState)), {
+  initial: {
+    hidden: false,
+    text: "收起任务",
+    focus: false
+  },
+  collapsed: {
+    hidden: false,
+    text: "展开任务",
+    focus: true
   }
 });
 
@@ -945,7 +989,6 @@ const funAsrJobStatusMetricsState = await vm.runInContext(`
         chunksTotal: 0,
         chunksAsr: 0,
         chunksTranslating: 0,
-        asrWorkers: 1,
         translationWorkers: 4,
         chunkStatuses: []
       }
@@ -956,7 +999,6 @@ const funAsrJobStatusMetricsState = await vm.runInContext(`
     return {
       chunkLabel: Object.keys(values).find(label => label.includes("长文件")),
       chunkValue: values["长文件分段"],
-      doneValue: values["长文件完成"],
       asrTranslationText: progressRows[1].children[0].children[1].textContent
     };
   })()
@@ -965,7 +1007,6 @@ const funAsrJobStatusMetricsState = await vm.runInContext(`
 assert.deepEqual(JSON.parse(JSON.stringify(funAsrJobStatusMetricsState)), {
   chunkLabel: "长文件分段",
   chunkValue: "最长 2 小时",
-  doneValue: "0/?",
   asrTranslationText: "等待长文件音频"
 });
 
@@ -981,7 +1022,6 @@ const exportSubtitleState = await vm.runInContext(`
     };
     try {
       activeTab = { id: 1, title: "A/B: 视频标题?", url: "https://example.test/watch?v=source-page" };
-      elements.pageTitle.textContent = "A/B: 视频标题?";
       subtitleCues = [
         { start: 0, end: 1.5, time: "00:00:00.000 --> 00:00:01.500", sourceText: "hello", text: "你好" },
         { start: 2, end: 3, time: "00:00:02.000 --> 00:00:03.000", sourceText: "world", text: "世界" }
@@ -1011,7 +1051,7 @@ assert.deepEqual(JSON.parse(JSON.stringify(exportSubtitleState)), {
     text: [
       "NOTE",
       "Source page: https://example.test/watch?v=source-page",
-      "Exported by: LLM 生肉翻译工具 https://blog.liu-qi.cn/tools",
+      "Exported by: 流声字幕 https://blog.liu-qi.cn/tools",
       "",
       "1",
       "00:00:00,000 --> 00:00:01,500",
@@ -1099,6 +1139,64 @@ assert.deepEqual(JSON.parse(JSON.stringify(retryStageButtonState)), {
   }
 });
 
+const clearSubtitleButtonState = await vm.runInContext(`
+  (() => {
+    currentSubtitleCacheEntry = null;
+    cachedSubtitleLoadedKey = "";
+    renderedSubtitleJobId = "";
+    currentTranscript = null;
+    subtitleCues = [];
+    updateActionButtons({
+      id: "browser-no-subtitle",
+      status: "completed",
+      translation: { chunkStatuses: [], chunksFailed: 0 }
+    });
+    const empty = elements.clearSubtitleCache.disabled;
+
+    renderedSubtitleJobId = "browser-waiting-subtitle";
+    updateActionButtons({
+      id: "browser-waiting-subtitle",
+      status: "running",
+      translation: { chunkStatuses: [], chunksFailed: 0 }
+    });
+    const waitingOnly = elements.clearSubtitleCache.disabled;
+
+    renderedSubtitleJobId = "browser-has-subtitle";
+    subtitleCues = [{ start: 1, end: 2, text: "译文" }];
+    updateActionButtons({
+      id: "browser-has-subtitle",
+      status: "completed",
+      translation: { chunkStatuses: [], chunksFailed: 0 }
+    });
+    const loaded = elements.clearSubtitleCache.disabled;
+
+    updateActionButtons({
+      id: "browser-running-subtitle",
+      status: "running",
+      translation: { chunkStatuses: [], chunksFailed: 0 }
+    });
+    const running = elements.clearSubtitleCache.disabled;
+
+    subtitleCues = [];
+    currentTranscript = null;
+    updateActionButtons({
+      id: "browser-job-vtt",
+      status: "running",
+      translation: { vttText: "WEBVTT\\n\\n00:00:01.000 --> 00:00:02.000\\n译文", chunkStatuses: [], chunksFailed: 0 }
+    });
+    const jobPayload = elements.clearSubtitleCache.disabled;
+    return { empty, waitingOnly, loaded, running, jobPayload };
+  })()
+`, context);
+
+assert.deepEqual(JSON.parse(JSON.stringify(clearSubtitleButtonState)), {
+  empty: true,
+  waitingOnly: true,
+  loaded: false,
+  running: false,
+  jobPayload: false
+});
+
 const continueTaskButtonRouteState = await vm.runInContext(`
   (async () => {
     const sent = [];
@@ -1156,6 +1254,7 @@ const rerunAsrButtonRouteState = await vm.runInContext(`
     const originalTabsQuery = chrome.tabs.query;
     const originalSendMessage = chrome.runtime.sendMessage;
     activeTab = { id: 1, title: "Video", url: "https://example.test/watch" };
+    setSourceLanguageValue("ja");
     setTargetLanguageValue("zh-CN");
     currentJobId = "job-rerun-asr";
     currentJob = {
@@ -1171,6 +1270,7 @@ const rerunAsrButtonRouteState = await vm.runInContext(`
       sent.push({
         type: message.type,
         tabId: message.tabId,
+        sourceLanguage: message.sourceLanguage,
         targetLanguage: message.targetLanguage,
         chunkIndexes: message.chunkIndexes
       });
@@ -1199,6 +1299,7 @@ assert.deepEqual(JSON.parse(JSON.stringify(rerunAsrButtonRouteState.sent)), [
   {
     type: "FUGUANG_RERUN_ASR_PRELOAD",
     tabId: 1,
+    sourceLanguage: "ja",
     targetLanguage: "zh-CN",
     chunkIndexes: [0]
   }
@@ -1381,38 +1482,69 @@ assert.equal(asrProfileState.defaultVadFilter, "auto");
 
 const targetLanguageState = await vm.runInContext(`
   (() => {
-    setTargetLanguageValue("english");
+    setTargetLanguageValue("en");
     const english = getTargetLanguageValue();
-    setTargetLanguageValue("zh_cn");
+    setTargetLanguageValue("zh-CN");
     const chinese = getTargetLanguageValue();
+    setTargetLanguageValue("ja");
+    const japanese = getTargetLanguageValue();
+    setTargetLanguageValue("fr");
+    const french = getTargetLanguageValue();
+    setTargetLanguageValue("ko");
+    const korean = getTargetLanguageValue();
+    setTargetLanguageValue("de");
+    const german = getTargetLanguageValue();
+    setTargetLanguageValue("ru");
+    const russian = getTargetLanguageValue();
+    setTargetLanguageValue("japanese");
+    const menuAliasFallback = getTargetLanguageValue();
     setTargetLanguageValue("unknown-language");
     const fallback = getTargetLanguageValue();
-    return { english, chinese, fallback };
+    return { english, chinese, japanese, french, korean, german, russian, menuAliasFallback, fallback };
   })()
 `, context);
 
 assert.equal(targetLanguageState.english, "en");
 assert.equal(targetLanguageState.chinese, "zh-CN");
+assert.equal(targetLanguageState.japanese, "ja");
+assert.equal(targetLanguageState.french, "fr");
+assert.equal(targetLanguageState.korean, "ko");
+assert.equal(targetLanguageState.german, "de");
+assert.equal(targetLanguageState.russian, "ru");
+assert.equal(targetLanguageState.menuAliasFallback, "zh-CN");
 assert.equal(targetLanguageState.fallback, "zh-CN");
 
 const sourceLanguageState = await vm.runInContext(`
   (() => {
     setSourceLanguageValue("auto");
     const auto = getSourceLanguageValue();
-    setSourceLanguageValue("japanese");
+    setSourceLanguageValue("ja");
     const japanese = getSourceLanguageValue();
-    setSourceLanguageValue("zh_cn");
+    setSourceLanguageValue("zh");
     const chinese = getSourceLanguageValue();
+    setSourceLanguageValue("japanese");
+    const menuAliasFallback = getSourceLanguageValue();
     setSourceLanguageValue("unknown-language");
     const fallback = getSourceLanguageValue();
-    return { auto, japanese, chinese, fallback };
+    return { auto, japanese, chinese, menuAliasFallback, fallback };
   })()
 `, context);
 
 assert.equal(sourceLanguageState.auto, "auto");
 assert.equal(sourceLanguageState.japanese, "ja");
 assert.equal(sourceLanguageState.chinese, "zh");
+assert.equal(sourceLanguageState.menuAliasFallback, "auto");
 assert.equal(sourceLanguageState.fallback, "auto");
+
+const sidepanelLanguageOptions = await vm.runInContext(`
+  (() => ({
+    target: FuguangSidepanelLanguage.targetLanguages.map(language => language.code),
+    source: FuguangSidepanelLanguage.sourceLanguages.map(language => language.code)
+  }))()
+`, context);
+
+assert.deepEqual(JSON.parse(JSON.stringify(sidepanelLanguageOptions.target)), ["zh-CN", "en", "ja", "fr", "ko", "de", "ru"]);
+assert.deepEqual(JSON.parse(JSON.stringify(sidepanelLanguageOptions.source)), ["auto", "zh", "en", "ja", "ko", "fr", "de", "ru", "es", "pt", "it"]);
 
 const localeSwitchState = await vm.runInContext(`
   (() => {
@@ -1532,7 +1664,7 @@ assert.equal(syncedSubtitleSettingsState.opacity, 42);
 assert.equal(syncedSubtitleSettingsState.overlayEnabled, false);
 assert.equal(syncedSubtitleSettingsState.displayMode, "bilingual");
 assert.equal(syncedSubtitleSettingsState.overlayText, "浮层关");
-assert.equal(syncedSubtitleSettingsState.modeText, "双语开");
+assert.equal(syncedSubtitleSettingsState.modeText, "双语");
 
 const subtitleCacheVersionState = await vm.runInContext(`
   (async () => buildSubtitleCacheKey({
@@ -3543,7 +3675,7 @@ const sourceOnlyTranslatedExportState = await vm.runInContext(`
 
 assert.deepEqual(JSON.parse(JSON.stringify(sourceOnlyTranslatedExportState)), {
   downloads: 0,
-  message: "当前模式下还没有可导出的译文。",
+  message: "当前模式下还没有可导出的字幕。",
   text: ""
 });
 
@@ -3578,8 +3710,37 @@ const sourceOnlyBilingualAttachState = await vm.runInContext(`
   })()
 `, context);
 
-assert.equal(sourceOnlyBilingualAttachState.subtitleDisplayMode, "bilingual");
+assert.equal(sourceOnlyBilingualAttachState.subtitleDisplayMode, "source");
 assert.equal((sourceOnlyBilingualAttachState.attachedVtt.match(/source only/g) || []).length, 1);
+
+const subtitleModeCycleState = await vm.runInContext(`
+  (async () => {
+    activeTab = { id: 1 };
+    subtitleOverlayEnabled = false;
+    subtitleDisplayMode = "translated";
+    renderSubtitleModeButton();
+    const translatedPressed = elements.subtitleModeToggle["aria-pressed"];
+    await toggleSubtitleMode();
+    const first = subtitleDisplayMode;
+    const sourcePressed = elements.subtitleModeToggle["aria-pressed"];
+    await toggleSubtitleMode();
+    const second = subtitleDisplayMode;
+    const bilingualPressed = elements.subtitleModeToggle["aria-pressed"];
+    await toggleSubtitleMode();
+    const third = subtitleDisplayMode;
+    return { first, second, third, buttonText: elements.subtitleModeToggle.textContent, translatedPressed, sourcePressed, bilingualPressed };
+  })()
+`, context);
+
+assert.deepEqual(JSON.parse(JSON.stringify(subtitleModeCycleState)), {
+  first: "source",
+  second: "bilingual",
+  third: "translated",
+  buttonText: "译文",
+  translatedPressed: "true",
+  sourcePressed: "false",
+  bilingualPressed: "true"
+});
 
 const sourcePreviewNoticeText = await vm.runInContext(`
   (() => {

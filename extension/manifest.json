@@ -1,10 +1,11 @@
 {
   "manifest_version": 3,
-  "name": "LLM 生肉翻译",
-  "description": "用 LLM 为网页视频生成、翻译和显示字幕。",
+  "name": "流声字幕 - 基于 ASR 与大语言模型的流媒体影视、动漫生肉视频字幕生成与翻译",
+  "short_name": "流声字幕",
+  "description": "基于 ASR 与大语言模型，为流媒体影视、动漫生肉视频生成字幕并翻译。",
   "version": "0.1.0",
   "action": {
-    "default_title": "LLM 生肉翻译"
+    "default_title": "流声字幕"
   },
   "icons": {
     "16": "assets/icon-16.png",

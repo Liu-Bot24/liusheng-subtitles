@@ -37,7 +37,8 @@ class FakeElement {
     this.tagName = tagName.toUpperCase();
     this.id = "";
     this.hidden = false;
-    this.textContent = "";
+    this._textContent = "";
+    this.textContentWrites = 0;
     this.dataset = {};
     this.children = [];
     this.parentElement = null;
@@ -58,6 +59,15 @@ class FakeElement {
       add: () => {},
       remove: () => {}
     };
+  }
+
+  set textContent(value) {
+    this._textContent = String(value ?? "");
+    this.textContentWrites += 1;
+  }
+
+  get textContent() {
+    return this._textContent || "";
   }
 
   set innerHTML(value) {
@@ -338,6 +348,9 @@ function createHarness({ settings = {}, videos = [new FakeMedia()], legacyOverla
     overlayText: () => document.getElementById(OVERLAY_ID)
       ?.querySelector("[data-fuguang-caption-text]")
       ?.textContent || "",
+    overlayTextWrites: () => document.getElementById(OVERLAY_ID)
+      ?.querySelector("[data-fuguang-caption-text]")
+      ?.textContentWrites || 0,
     overlayHidden: () => document.getElementById(OVERLAY_ID)?.hidden,
     clearOverlayOnly: () => {
       const overlay = document.getElementById(OVERLAY_ID);
@@ -416,6 +429,25 @@ function createHarness({ settings = {}, videos = [new FakeMedia()], legacyOverla
   video.currentTime = 52.05;
   harness.runIntervals();
   assert.equal(harness.overlayText(), "这是什么啊");
+}
+
+{
+  const video = new FakeMedia({ currentTime: 1, paused: true });
+  const harness = createHarness({ videos: [video] });
+  await harness.ready();
+  assert.equal((await harness.send({ type: "FUGUANG_ATTACH_VTT", vtt: SAMPLE_VTT, signature: "sample-signature" })).ok, true);
+  assert.equal(harness.overlayText(), "first cue");
+  const writesAfterFirstAttach = harness.overlayTextWrites();
+  assert.equal((await harness.send({
+    type: "FUGUANG_ATTACH_VTT",
+    vtt: `${SAMPLE_VTT}
+00:00:06.000 --> 00:00:07.000
+later cue
+`,
+    signature: "sample-signature-2"
+  })).ok, true);
+  assert.equal(harness.overlayText(), "first cue");
+  assert.equal(harness.overlayTextWrites(), writesAfterFirstAttach);
 }
 
 {

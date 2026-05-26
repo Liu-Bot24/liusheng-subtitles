@@ -351,7 +351,10 @@ async function handleMessage(message, sender) {
     case MESSAGE.RETRY_PRELOAD_CHUNKS:
       return retryPreload(message.tabId, message.chunkIndexes || []);
     case MESSAGE.RERUN_ASR_PRELOAD:
-      return rerunAsrPreload(message.tabId, message.chunkIndexes || [], { targetLanguage: message.targetLanguage });
+      return rerunAsrPreload(message.tabId, message.chunkIndexes || [], {
+        sourceLanguage: message.sourceLanguage,
+        targetLanguage: message.targetLanguage
+      });
     case MESSAGE.RETRANSLATE_PRELOAD:
       return retranslatePreload(message.tabId, message.chunkIndexes || [], { targetLanguage: message.targetLanguage });
     case MESSAGE.RETRANSLATE_TRANSCRIPT:
@@ -748,6 +751,7 @@ async function runBrowserFunAsrPreloadJob(jobId) {
   if (!record) {
     return;
   }
+  startBrowserFunAsrChunkPipeline(record);
   let audio = {};
   let extractionError = null;
   try {
@@ -755,17 +759,19 @@ async function runBrowserFunAsrPreloadJob(jobId) {
     if (isBrowserJobCancelled(record)) {
       return;
     }
-    const chunks = record.audioChunks?.length
-      ? record.audioChunks
-      : normalizeBrowserAudioChunks(
-          audio,
-          Number(audio.asrChunkSeconds || audio.chunkSeconds || record.browserAsrChunkSeconds) || dashScopeFunAsrChunkSeconds(record.metadata),
-          record.metadata?.duration
-        );
-    record.audioChunks = uniqueBrowserAudioChunks(chunks);
+    const chunks = normalizeBrowserAudioChunks(
+      audio,
+      Number(audio.asrChunkSeconds || audio.chunkSeconds || record.browserAsrChunkSeconds) || dashScopeFunAsrChunkSeconds(record.metadata),
+      record.metadata?.duration
+    );
+    for (const chunk of chunks) {
+      appendBrowserFunAsrAudioChunk(record, chunk);
+    }
+    record.audioChunks = uniqueBrowserAudioChunks(record.audioChunks);
     if (!record.audioChunks.length) {
       throw createNoBrowserAudioChunksError(audio);
     }
+    const chunksTotal = browserFunAsrExpectedChunkCount(record);
     record.job.extract = {
       ...record.job.extract,
       status: "completed",
@@ -777,35 +783,29 @@ async function runBrowserFunAsrPreloadJob(jobId) {
       duration: pickFinite(audio.duration, record.job.extract.duration, record.metadata?.duration),
       elapsedSeconds: elapsedSeconds(record.startedAt)
     };
-    record.job.stage = "asr";
+    record.job.stage = browserFunAsrHasOpenWork(record) ? "asr" : "completed";
     record.job.translation = {
       ...record.job.translation,
       status: "running",
-      chunkCount: record.audioChunks.length,
-      chunksTotal: record.audioChunks.length,
+      chunkCount: chunksTotal,
+      chunksTotal,
       asrWorkers: 1,
       translationWorkers: record.modelConfig.workers,
       workers: record.modelConfig.workers,
-      chunkStatuses: record.audioChunks.map((chunk, index) => ({
-        ...createChunkStatus(index, "queued"),
-        index: Number.isInteger(Number(chunk.index)) ? Number(chunk.index) : index
-      }))
+      chunkStatuses: record.job.translation.chunkStatuses || []
     };
     publishBrowserPreloadJob(record);
   } catch (error) {
     extractionError = error;
+  } finally {
+    closeBrowserFunAsrQueue(record);
   }
+  await waitBrowserFunAsrChunkPipeline(record).catch(error => {
+    extractionError = extractionError || error;
+  });
   if (extractionError) {
     throw extractionError;
   }
-  const labelSpeakers = dashScopeFunAsrShouldDiarize({
-    chunksTotal: record.audioChunks.length,
-    duration: pickFinite(record.job.extract.duration, record.metadata?.duration)
-  });
-  const concurrency = browserFunAsrConcurrency(record);
-  await runPool(record.audioChunks, concurrency, async chunk => {
-    await processBrowserFunAsrChunk(record, chunk, { labelSpeakers });
-  });
   if (isBrowserJobCancelled(record)) {
     return;
   }
@@ -836,7 +836,45 @@ function uniqueBrowserAudioChunks(chunks = []) {
 }
 
 function browserFunAsrConcurrency(record) {
-  return Math.max(1, Math.min(2, Number(record?.audioChunks?.length || 1) || 1));
+  return Math.max(1, Math.min(2, browserFunAsrExpectedChunkCount(record)));
+}
+
+function browserFunAsrExpectedChunkCount(record) {
+  const seconds = pickFinite(
+    record?.job?.extract?.duration,
+    record?.metadata?.duration,
+    record?.candidate?.duration,
+    0
+  );
+  const chunkSeconds = Math.max(10, Math.floor(Number(
+    record?.job?.extract?.asrChunkSeconds
+    || record?.browserAsrChunkSeconds
+    || dashScopeFunAsrChunkSeconds(record?.metadata)
+  ) || dashScopeFunAsrChunkSeconds(record?.metadata)));
+  const knownChunks = Array.isArray(record?.audioChunks) ? record.audioChunks.length : 0;
+  const extractionCompleted = record?.job?.extract?.status === "completed" ||
+    Number(record?.job?.extract?.progress || 0) >= 100;
+  if (extractionCompleted && knownChunks > 0) {
+    return knownChunks;
+  }
+  if (seconds > 0 && chunkSeconds > 0) {
+    return Math.max(knownChunks, Math.ceil(seconds / chunkSeconds));
+  }
+  return Math.max(knownChunks, 1);
+}
+
+function browserFunAsrShouldLabelSpeakers(record) {
+  return dashScopeFunAsrShouldDiarize({
+    chunksTotal: browserFunAsrExpectedChunkCount(record),
+    duration: pickFinite(record?.job?.extract?.duration, record?.metadata?.duration)
+  });
+}
+
+function browserFunAsrHasOpenWork(record) {
+  const statuses = record?.job?.translation?.chunkStatuses || [];
+  const chunksTotal = browserFunAsrExpectedChunkCount(record);
+  return statuses.filter(Boolean).length < chunksTotal
+    || statuses.some(status => !["completed", "failed"].includes(String(status?.stage || "")));
 }
 
 async function processBrowserFunAsrChunk(record, chunk, options = {}) {
@@ -844,6 +882,10 @@ async function processBrowserFunAsrChunk(record, chunk, options = {}) {
     return;
   }
   const index = Number.isInteger(Number(chunk.index)) ? Number(chunk.index) : 0;
+  const chunksTotal = browserFunAsrExpectedChunkCount(record);
+  const labelSpeakers = typeof options.labelSpeakers === "boolean"
+    ? options.labelSpeakers
+    : browserFunAsrShouldLabelSpeakers(record);
   const current = record.job.translation.chunkStatuses[index] || createChunkStatus(index, "queued");
   const attempt = Math.max(1, Number(current.attempts || 0) + 1);
   updateChunkStatus(record, index, {
@@ -851,7 +893,7 @@ async function processBrowserFunAsrChunk(record, chunk, options = {}) {
     status: "识别",
     attempts: attempt,
     error: "",
-    message: `Fun-ASR 长文件识别 ${index + 1}/${record.audioChunks.length}`
+    message: `Fun-ASR 长文件识别 ${index + 1}/${chunksTotal}`
   });
   try {
     const fileBuffer = await getBrowserAudioChunkBuffer(chunk.file);
@@ -863,22 +905,22 @@ async function processBrowserFunAsrChunk(record, chunk, options = {}) {
       },
       record.modelConfig.asr,
       {
-        chunksTotal: record.audioChunks.length,
+        chunksTotal,
         duration: pickFinite(record.job.extract.duration, record.metadata?.duration),
-        labelSpeakers: options.labelSpeakers,
+        labelSpeakers,
         onProgress(progress) {
           updateChunkStatus(record, index, {
             stage: "asr",
             status: "识别",
             attempts: attempt,
-            message: `Fun-ASR ${progress.status || "处理中"} · ${index + 1}/${record.audioChunks.length}`
+            message: `Fun-ASR ${progress.status || "处理中"} · ${index + 1}/${chunksTotal}`
           });
         }
       }
     );
     const sourceSegments = normalizeBrowserSourceSegmentsForTranslation(
       normalizeDashScopeFunAsrResult(payload, chunk, {
-        labelSpeakers: options.labelSpeakers,
+        labelSpeakers,
         chunkLabelIndex: index
       }),
       index
@@ -1076,7 +1118,7 @@ function appendBrowserInternalAudioChunk(record, chunk) {
 }
 
 function appendBrowserFunAsrAudioChunk(record, chunk) {
-  ensureBrowserChunkPipelineState(record);
+  ensureBrowserFunAsrPipelineState(record);
   const normalized = normalizeBrowserInternalAudioChunk(chunk);
   if (!normalized || !isUsableBrowserAudioFile(normalized.file)) {
     return [];
@@ -1089,10 +1131,26 @@ function appendBrowserFunAsrAudioChunk(record, chunk) {
   }
   record.audioChunks.push(item);
   record.audioChunks.sort((left, right) => left.index - right.index);
+  const chunksTotal = browserFunAsrExpectedChunkCount(record);
+  record.job.stage = "asr";
+  record.job.translation = {
+    ...record.job.translation,
+    status: "running",
+    chunkCount: chunksTotal,
+    chunksTotal,
+    asrWorkers: browserFunAsrConcurrency(record),
+    translationWorkers: record.modelConfig.workers,
+    workers: record.modelConfig.workers,
+    chunkStatuses: record.job.translation.chunkStatuses || []
+  };
+  if (!record.job.translation.chunkStatuses[item.index]) {
+    record.job.translation.chunkStatuses[item.index] = createChunkStatus(item.index, "queued");
+  }
   record.job.extract.availableSeconds = Math.max(
     Number(record.job.extract.availableSeconds || 0) || 0,
     Math.round(Number(item.end || 0) || 0)
   );
+  enqueueAsyncQueue(record.browserFunAsrQueue, item);
   return [item];
 }
 
@@ -1401,9 +1459,21 @@ function completeBrowserAsrChunkForGroup(record, chunk, sourceSegments, error = 
     asrFailures: group.failed,
     asrErrors: group.errors.slice(0, 5),
     error: "",
-    message: `识别音频分段 ${group.completed}/${group.total}${group.failed ? ` · ${group.failed} 失败` : ""}`
+    message: browserAsrGroupProgressMessage(group, chunk)
   });
   maybeFinalizeBrowserTranslationGroup(record, group);
+}
+
+function browserAsrChunkTimeRangeText(chunk) {
+  return `${formatVttTimestamp(browserAudioChunkCoreStart(chunk))} - ${formatVttTimestamp(browserAudioChunkCoreEnd(chunk))}`;
+}
+
+function browserAsrGroupProgressMessage(group, chunk) {
+  const suffix = group.failed ? ` · ${group.failed} 失败` : "";
+  if (group.completed >= group.total) {
+    return `识别完成${suffix}`;
+  }
+  return `识别到 ${formatVttTimestamp(browserAudioChunkCoreEnd(chunk))}${suffix}`;
 }
 
 function maybeFinalizeBrowserTranslationGroup(record, group) {
@@ -1532,6 +1602,42 @@ function ensureBrowserChunkPipelineState(record) {
   }
 }
 
+function ensureBrowserFunAsrPipelineState(record) {
+  ensureBrowserChunkPipelineState(record);
+  if (!record.browserFunAsrQueue) {
+    record.browserFunAsrQueue = createAsyncQueue();
+  }
+}
+
+function startBrowserFunAsrChunkPipeline(record) {
+  ensureBrowserFunAsrPipelineState(record);
+  if (record.browserFunAsrPipelinePromise) {
+    return record.browserFunAsrPipelinePromise;
+  }
+  record.browserFunAsrPipelinePromise = runQueueWorkers(
+    record.browserFunAsrQueue,
+    browserFunAsrConcurrency(record),
+    async chunk => {
+      await processBrowserFunAsrChunk(record, chunk, {
+        labelSpeakers: browserFunAsrShouldLabelSpeakers(record)
+      });
+    }
+  );
+  return record.browserFunAsrPipelinePromise;
+}
+
+async function waitBrowserFunAsrChunkPipeline(record) {
+  if (!record.browserFunAsrPipelinePromise) {
+    return;
+  }
+  await record.browserFunAsrPipelinePromise;
+}
+
+function closeBrowserFunAsrQueue(record) {
+  ensureBrowserFunAsrPipelineState(record);
+  closeAsyncQueue(record.browserFunAsrQueue);
+}
+
 function startBrowserChunkPipeline(record) {
   ensureBrowserChunkPipelineState(record);
   if (record.browserPipelinePromise) {
@@ -1575,7 +1681,7 @@ async function processBrowserAsrChunk(record, chunk) {
     status: "识别",
     attempts: Math.max(1, current.attempts || 1),
     error: "",
-    message: `识别音频分段 ${group.completed + 1}/${group.total}`
+    message: `识别 ${browserAsrChunkTimeRangeText(chunk)}`
   });
   if (shouldSkipBrowserAsrChunk(chunk)) {
     updateChunkStatus(record, group.index, {
@@ -1583,7 +1689,7 @@ async function processBrowserAsrChunk(record, chunk) {
       status: "跳过",
       attempts: Math.max(1, current.attempts || 1),
       error: "",
-      message: `跳过无语音分段 ${group.completed + 1}/${group.total}`
+      message: `跳过无语音 ${browserAsrChunkTimeRangeText(chunk)}`
     });
     completeBrowserAsrChunkForGroup(record, chunk, []);
     return;
@@ -3749,7 +3855,7 @@ async function attachBrowserJobVttIfReady(record) {
   const response = await sendMessageToMediaFrame(record.tabId, {
     type: MESSAGE.ATTACH_VTT,
     vtt: attachment.vtt,
-    label: "LLM 生肉翻译",
+    label: "流声字幕",
     signature
   });
   if (response?.ok) {
@@ -3762,6 +3868,13 @@ async function buildBrowserVttAttachment(job) {
   const mode = await getSubtitleDisplayMode();
   const transcript = job.translation?.transcript;
   const allowSourcePreview = browserJobAllowsSourcePreview(job);
+  if (mode === "source") {
+    const source = transcriptToSourceVtt(transcript);
+    if (source) {
+      return { mode, vtt: source };
+    }
+    return { mode, vtt: "" };
+  }
   if (mode === "bilingual") {
     const bilingual = transcriptToBilingualVtt(transcript, { allowSourcePreview });
     if (bilingual) {
@@ -4132,7 +4245,7 @@ async function rerunAsrPreload(tabId, chunkIndexes = [], options = {}) {
   if (!browserRecord) {
     throw new Error("后台任务状态已过期，不能复用音频重新 ASR。请重新抽取。");
   }
-  await refreshBrowserTranslationModelConfig(browserRecord, options);
+  await refreshBrowserTranslationModelConfig(browserRecord, { ...options, refreshAsrLanguage: true });
   return rerunBrowserAsrFromAudio(browserRecord, chunkIndexes);
 }
 
@@ -4216,7 +4329,7 @@ async function retranslatePreload(tabId, chunkIndexes = [], options = {}) {
   const browserRecord = browserPreloadJobs.get(jobId);
   if (browserRecord) {
     await refreshBrowserTranslationModelConfig(browserRecord, options);
-    return retryBrowserTranslationOnly(browserRecord, chunkIndexes, { failedOnly: false });
+    return retryBrowserTranslationOnly(browserRecord, chunkIndexes, { failedOnly: false, resetAttempts: true });
   }
   if (state.preloadJob?.status === "running" || state.preloadJob?.status === "queued") {
     return {
@@ -4314,18 +4427,37 @@ async function refreshBrowserTranslationModelConfig(record, options = {}) {
   const targetLanguage = options.targetLanguage
     ? normalizeTargetLanguage(options.targetLanguage, current.targetLanguage)
     : current.targetLanguage;
+  const shouldRefreshAsrLanguage = options.refreshAsrLanguage || Object.hasOwn(options, "sourceLanguage");
   record.modelConfig = {
     ...record.modelConfig,
     translation: current.translation,
     targetLanguage,
     workers: current.workers
   };
+  if (shouldRefreshAsrLanguage) {
+    record.modelConfig.asr = withCurrentAsrSourceLanguage(
+      record.modelConfig.asr,
+      Object.hasOwn(options, "sourceLanguage") ? options.sourceLanguage : current.asr?.language
+    );
+  }
   if (record.job?.translation) {
     record.job.translation.translationWorkers = current.workers;
     record.job.translation.workers = current.workers;
     record.job.translation.targetLanguage = targetLanguage;
   }
   return record.modelConfig;
+}
+
+function withCurrentAsrSourceLanguage(asrConfig, sourceLanguage) {
+  const next = { ...(asrConfig || {}) };
+  const normalized = normalizeAsrLanguage(sourceLanguage || "");
+  delete next.sourceLanguage;
+  if (normalized) {
+    next.language = normalized;
+  } else {
+    delete next.language;
+  }
+  return next;
 }
 
 async function retryBrowserFailedPreload(record, chunkIndexes = []) {
@@ -4504,17 +4636,16 @@ async function retryBrowserAsrGroup(record, groupIndex) {
     sourceCount: 0,
     translatedCount: 0,
     error: "",
-    message: `第 ${attempt} 次尝试 · 重新识别 ${chunks.length} 个音频分段`
+    message: `第 ${attempt} 次尝试 · 重新识别字幕分组`
   });
   await runPool(chunks, Math.max(record.modelConfig.asrWorkers || 1, 1), async chunk => {
-    const ordinal = chunks.findIndex(item => item.index === chunk.index) + 1;
     updateChunkStatus(record, index, {
       stage: "asr",
       status: "识别",
       attempts: attempt,
       sourceCount: sourceSegments.length,
       error: "",
-      message: `第 ${attempt} 次尝试 · 识别音频分段 ${ordinal}/${chunks.length}`
+      message: `第 ${attempt} 次尝试 · 识别 ${browserAsrChunkTimeRangeText(chunk)}`
     });
     try {
       const chunkSegments = await transcribeBrowserAudioChunk(chunk, record.modelConfig.asr, {
@@ -4595,6 +4726,11 @@ async function retryBrowserTranslationOnly(record, chunkIndexes = [], options = 
   }
   record.job.status = "running";
   record.job.stage = "retry_translation";
+  record.job.subtitleCleared = false;
+  if (options.resetAttempts) {
+    resetBrowserTranslationResults(record, indexes);
+    publishBrowserSubtitle(record);
+  }
   publishBrowserPreloadJob(record);
   await runPool(indexes, Math.max(record.modelConfig.workers || 1, 1), async index => {
     await translateBrowserChunkFromSource(record, index, reusableBrowserSourceSegments(record, index), "只重翻译，不重新识别", {
@@ -4604,6 +4740,23 @@ async function retryBrowserTranslationOnly(record, chunkIndexes = [], options = 
   publishBrowserSubtitle(record);
   finalizeBrowserCompletionState(record);
   return { preload: record.job.status, job: record.job };
+}
+
+function resetBrowserTranslationResults(record, indexes = []) {
+  for (const index of indexes) {
+    const sourceSegments = reusableBrowserSourceSegments(record, index);
+    record.translatedSegmentsByChunk?.set(index, []);
+    updateChunkStatus(record, index, {
+      stage: "queued",
+      status: "排队",
+      attempts: 0,
+      sourceCount: sourceSegments.length,
+      translatedCount: 0,
+      translationFailures: 0,
+      error: "",
+      message: "等待重新翻译"
+    });
+  }
 }
 
 function reusableBrowserSourceSegments(record, index) {
@@ -5181,7 +5334,7 @@ async function attachVttText(tabId, vtt) {
   const response = await sendMessageToMediaFrame(tabId, {
     type: MESSAGE.ATTACH_VTT,
     vtt,
-    label: "LLM 生肉翻译",
+    label: "流声字幕",
     signature
   });
   if (!response?.ok) {
@@ -5208,7 +5361,9 @@ function vttContentSignature(vtt) {
 
 async function getSubtitleDisplayMode() {
   const stored = await chrome.storage.sync.get({ subtitleDisplayMode: "translated" }).catch(() => ({}));
-  return stored.subtitleDisplayMode === "bilingual" ? "bilingual" : "translated";
+  return ["translated", "source", "bilingual"].includes(stored.subtitleDisplayMode)
+    ? stored.subtitleDisplayMode
+    : "translated";
 }
 
 async function isSubtitleOverlayEnabled() {
@@ -5226,6 +5381,11 @@ function transcriptToTranslatedVtt(transcript, options = {}) {
     return segmentsToVtt(translated);
   }
   return "";
+}
+
+function transcriptToSourceVtt(transcript) {
+  const source = Array.isArray(transcript?.source) ? transcript.source : [];
+  return source.length ? segmentsToVtt(source) : "";
 }
 
 function transcriptToBilingualVtt(transcript, options = {}) {
@@ -5703,7 +5863,6 @@ async function getModelConfig() {
   clearLegacyModelSyncFields();
   persistMigratedModelSettings(localStored, asrProfiles, llmProfiles, selectedAsrId, selectedLlmId);
   validateSelectedModelProfiles(selectedAsr, selectedLlm);
-  const migratedWorkerDefaults = localStored.modelSettingsVersion !== MODEL_SETTINGS_VERSION;
   const sourceLanguage = normalizeAsrLanguage(localStored.sourceLanguage || DEFAULT_MODEL_SETTINGS.sourceLanguage);
   const asrConfig = compactProviderConfig(selectedAsr);
   if (sourceLanguage) {
@@ -5713,9 +5872,7 @@ async function getModelConfig() {
     asr: asrConfig,
     translation: compactProviderConfig(selectedLlm),
     targetLanguage: normalizeTargetLanguage(localStored.targetLanguage || DEFAULT_MODEL_SETTINGS.targetLanguage),
-    asrWorkers: migratedWorkerDefaults
-      ? DEFAULT_MODEL_SETTINGS.asrWorkers
-      : Number(localStored.asrWorkers) || DEFAULT_MODEL_SETTINGS.asrWorkers,
+    asrWorkers: DEFAULT_MODEL_SETTINGS.asrWorkers,
     workers: Number(localStored.translationWorkers) || DEFAULT_MODEL_SETTINGS.translationWorkers,
     chunkMinutes: clampInteger(localStored.chunkMinutes, 1, 60, DEFAULT_MODEL_SETTINGS.chunkMinutes),
     chunkSeconds: clampInteger(localStored.chunkMinutes, 1, 60, DEFAULT_MODEL_SETTINGS.chunkMinutes) * 60

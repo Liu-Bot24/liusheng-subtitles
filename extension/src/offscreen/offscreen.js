@@ -20,6 +20,7 @@ const WEB_FFMPEG_ASR_LOGICAL_CHUNK_MAX_SECONDS = 30 * 60;
 const WEB_FFMPEG_ASR_LONG_FILE_CHUNK_MAX_SECONDS = 2 * 60 * 60;
 const WEB_FFMPEG_ASR_CONTEXT_OVERLAP_SECONDS = 2;
 const WEB_FFMPEG_ASR_VAD_SPLIT_MIN_SILENCE_SECONDS = 2;
+const WEB_FFMPEG_HLS_DURATION_CLIP_MAX_DRIFT_SECONDS = 5 * 60;
 const WEB_FFMPEG_WORKER_RECYCLE_INTERNAL_CHUNKS = 48;
 const WEB_FFMPEG_READY_TIMEOUT_MS = 30 * 1000;
 const WEB_FFMPEG_IDLE_TIMEOUT_MS = 120 * 1000;
@@ -206,7 +207,10 @@ async function extractHlsAudioWithWebFfmpeg(message) {
     playlistUrl = variant.url;
     playlistText = await fetchText(playlistUrl, fetchOptions);
   }
-  const media = parseHlsMediaPlaylist(playlistText, playlistUrl);
+  const media = clipHlsMediaToRequestedDuration(
+    parseHlsMediaPlaylist(playlistText, playlistUrl),
+    pickFiniteNumber(message.duration, 0)
+  );
   await updateMediaHeaderRuleDomains(message, hlsMediaHeaderRuleUrls(media));
   if (media.unsupportedEncryption) {
     throw new Error(`当前 HLS 使用 ${media.unsupportedEncryption} 加密，浏览器内 Web FFmpeg 暂不能预处理。`);
@@ -1326,6 +1330,45 @@ function parseHlsMediaPlaylist(text, baseUrl) {
     segment.end = cursor;
   }
   return { segments, mapUrl, unsupportedEncryption, duration: cursor };
+}
+
+function clipHlsMediaToRequestedDuration(media, requestedDuration) {
+  const duration = pickFiniteNumber(requestedDuration, 0);
+  const mediaDuration = pickFiniteNumber(media?.duration, 0);
+  const drift = mediaDuration - duration;
+  if (
+    !Array.isArray(media?.segments)
+    || !duration
+    || !mediaDuration
+    || drift <= 0.25
+    || drift > WEB_FFMPEG_HLS_DURATION_CLIP_MAX_DRIFT_SECONDS
+  ) {
+    return media;
+  }
+  const segments = [];
+  for (const segment of media.segments) {
+    const start = pickFiniteNumber(segment.start, 0);
+    const end = pickFiniteNumber(segment.end, start + Number(segment.duration || 0));
+    if (start >= duration) {
+      break;
+    }
+    const clippedEnd = Math.min(end, duration);
+    if (clippedEnd <= start) {
+      continue;
+    }
+    segments.push({
+      ...segment,
+      start,
+      end: clippedEnd,
+      duration: Math.max(0, clippedEnd - start)
+    });
+    if (end >= duration) {
+      break;
+    }
+  }
+  return segments.length
+    ? { ...media, segments, duration }
+    : media;
 }
 
 function hlsMediaHeaderRuleUrls(media) {

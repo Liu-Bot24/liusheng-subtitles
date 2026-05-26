@@ -1627,6 +1627,52 @@ https://segment-cdn.example.test/seg-001.ts
 }
 
 {
+  const rawSegments = [];
+  let cursor = 0;
+  for (let index = 0; index < 80; index += 1) {
+    rawSegments.push({
+      start: cursor,
+      end: cursor + 180,
+      duration: 180,
+      url: `https://cdn.example.test/long-file-${index}.ts`
+    });
+    cursor += 180;
+  }
+  rawSegments.push({
+    start: cursor,
+    end: cursor + 15,
+    duration: 15,
+    url: "https://cdn.example.test/long-file-padding.ts"
+  });
+  const media = context.clipHlsMediaToRequestedDuration({
+    segments: rawSegments,
+    duration: 14415,
+    mapUrl: "",
+    unsupportedEncryption: ""
+  }, 14373);
+  assert.equal(media.duration, 14373);
+  assert.equal(media.segments.at(-1).end, 14373);
+  const internalGroups = context.buildHlsInternalExtractionGroups(media, 7200, { longFile: true });
+  const state = context.createHlsLogicalChunkState(7200, { longFile: true });
+  const logicalPartGroups = [];
+  for (const [index, group] of internalGroups.entries()) {
+    logicalPartGroups.push(...context.collectHlsLogicalPartGroups(state, {
+      index,
+      start: group.start,
+      end: group.end,
+      coreStart: group.coreStart,
+      coreEnd: group.coreEnd,
+      duration: group.end - group.start,
+      file: { name: `long-file-${index}.mp3`, mime: "audio/mpeg", cacheUrl: `https://fuguang.local/long-file-${index}` }
+    }));
+  }
+  logicalPartGroups.push(...context.collectHlsLogicalPartGroups(state, null, true));
+  assert.equal(logicalPartGroups.length, 2);
+  assert.equal(logicalPartGroups[0][0].coreStart, 0);
+  assert.equal(logicalPartGroups.at(-1).at(-1).coreEnd, 14373);
+}
+
+{
   const state = context.createHlsLogicalChunkState(900);
   const first = context.collectHlsLogicalPartGroups(state, {
     index: 0,

@@ -64,6 +64,10 @@ Object.assign(context, context.FuguangBrowserFunAsrProvider);
     false,
     "Fun-ASR should keep DashScope built-in sensitive-word filtering enabled by default"
   );
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(context.buildDashScopeFunAsrParameters({ language: "zh" }))),
+    { language_hints: ["zh"] }
+  );
 }
 
 {

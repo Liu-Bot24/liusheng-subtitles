@@ -71,7 +71,7 @@
       return false;
     }
     if (message?.type === MESSAGE.ATTACH_VTT) {
-      sendResponse({ ok: attachVtt(message.vtt, message.label || "LLM 生肉翻译", message.signature || "") });
+      sendResponse({ ok: attachVtt(message.vtt, message.label || "流声字幕", message.signature || "") });
       return false;
     }
     if (message?.type === MESSAGE.GET_VIDEO_STATE) {
@@ -137,9 +137,23 @@
     }
     const overlay = ensureOverlay();
     const textNode = overlay.querySelector("[data-fuguang-caption-text]");
-    textNode.textContent = text;
-    overlay.dataset.mode = mode;
     const start = Number(cueStart);
+    const nextText = String(text || "");
+    const nextMode = String(mode || "preload");
+    const nextCueStart = Number.isFinite(start) ? String(start) : "";
+    const currentCueStart = overlay.dataset.cueStart || "";
+    if (
+      !overlay.hidden &&
+      textNode.textContent === nextText &&
+      overlay.dataset.mode === nextMode &&
+      currentCueStart === nextCueStart
+    ) {
+      return;
+    }
+    if (textNode.textContent !== nextText) {
+      textNode.textContent = nextText;
+    }
+    overlay.dataset.mode = nextMode;
     if (Number.isFinite(start)) {
       overlay.dataset.cueStart = String(start);
       overlay.title = "双击跳转到这句字幕";

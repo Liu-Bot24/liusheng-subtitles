@@ -23,7 +23,6 @@ const MESSAGE = {
 const DEFAULTS = {
   sourceLanguage: "auto",
   targetLanguage: "zh-CN",
-  asrWorkers: 1,
   translationWorkers: 3,
   chunkMinutes: 15,
   subtitleFontSize: 28,
@@ -37,8 +36,9 @@ const DEFAULT_LOCALE = "zh";
 const LOCALES = new Set(["en", "zh"]);
 const I18N = {
   zh: {
-    appName: "LLM 生肉翻译",
-    documentTitle: "LLM 生肉翻译",
+    appName: "流声字幕",
+    documentTitle: "流声字幕",
+    appTagline: "基于 ASR 与 LLM 的生肉视频字幕生成器",
     currentTab: "当前标签页",
     languageLabel: "语言",
     tabsLabel: "页面切换",
@@ -58,10 +58,10 @@ const I18N = {
     langFrench: "法语",
     langGerman: "德语",
     langRussian: "俄语",
-    langSpanish: "西语",
-    langPortuguese: "葡语",
-    langItalian: "意语",
-    targetChinese: "中文（简体）",
+    langSpanish: "西班牙语",
+    langPortuguese: "葡萄牙语",
+    langItalian: "意大利语",
+    targetChinese: "中文",
     targetEnglish: "英文",
     start: "开始",
     startExtract: "开始抽取",
@@ -80,12 +80,13 @@ const I18N = {
     fullSubtitles: "完整字幕",
     overlayOn: "浮层开",
     overlayOff: "浮层关",
-    bilingualOn: "双语开",
-    bilingual: "双语",
+    subtitleModeTranslated: "译文",
+    subtitleModeSource: "原文",
+    subtitleModeBilingual: "双语",
     exportSrt: "导出SRT",
     importSubtitle: "导入",
     clearSubtitleCache: "清字幕缓存",
-    taskDetails: "任务详情",
+    taskDetails: "展开任务",
     collapseTask: "收起任务",
     subtitlePlaceholder: "字幕生成后会显示在这里。",
     asrSettings: "语音识别",
@@ -106,10 +107,9 @@ const I18N = {
     openaiFormat: "OpenAI 格式",
     anthropicFormat: "Anthropic 格式",
     targetLanguage: "目标语言",
-    asrWorkers: "ASR 并发",
     translationWorkers: "翻译并发",
-    chunkMinutes: "翻译分段时长（分钟）",
-    funAsrLongFileHint: "Fun-ASR 使用长文件链路：ASR 并发不适用于该模式，系统会按 2 小时以内粗切，通常串行或最多少量并行提交。",
+    chunkMinutes: "字幕分组时长（分钟）",
+    funAsrLongFileHint: "Fun-ASR 使用长文件链路：系统会按 2 小时以内粗切，完成后进入字幕翻译。",
     subtitleStyle: "字幕样式",
     fontSize: "文字大小（像素）",
     backgroundOpacity: "背景透明度 %",
@@ -138,23 +138,23 @@ const I18N = {
     statusCancelled: "任务已停止",
     statusRunning: "处理中",
     jobExtractingTranslating: "正在边抽边译",
-    jobAsrTranslation: "正在识别和翻译",
+    jobAsrTranslation: "正在生成字幕",
     jobRetryFailed: "正在重试失败分段",
     jobPreloading: "正在预加载音频",
     stageQueued: "排队中",
     stageExtracting: "抽取",
     stageExtractingTranslating: "边抽边译",
     stageAsr: "语音识别",
-    stageAsrTranslation: "识别翻译",
+    stageAsrTranslation: "字幕生成",
     stageRetryFailed: "重试失败",
     stageRetryTranslation: "重翻译",
-    stageTranslating: "识别翻译",
+    stageTranslating: "翻译",
     stageTranslated: "完成",
     stageCompleted: "完成",
     stageCancelled: "已停止",
     stageFailed: "失败",
     stageProcessing: "处理中",
-    chunkQueued: "排队",
+    chunkQueued: "待识别",
     chunkAsr: "识别",
     chunkAsrDone: "待翻译",
     chunkTranslation: "翻译",
@@ -163,21 +163,18 @@ const I18N = {
     chunkFailed: "失败",
     chunkStopped: "停止",
     metricExtract: "抽取",
-    metricAsrTranslation: "识别 / 翻译",
+    metricAsrTranslation: "字幕进度",
     metricCurrentStep: "当前步骤",
-    metricChunkMinutes: "分段时长",
+    metricChunkMinutes: "字幕分组时长",
     metricLongFileChunk: "长文件分段",
     metricReady: "已可用",
-    metricDoneChunks: "分段完成",
-    metricDoneLongFileChunks: "长文件完成",
-    metricAsrActive: "识别中",
+    metricDoneChunks: "分组完成",
     metricTranslating: "翻译中",
-    metricAsrWorkers: "ASR 并发",
     metricTranslationWorkers: "翻译并发",
     metricFailed: "失败",
     metricElapsed: "耗时",
     audioExtract: "音频抽取",
-    asrTranslation: "识别 / 翻译",
+    asrTranslation: "字幕进度",
     minutes: "{count} 分钟",
     maxHours: "最长 {count} 小时",
     maxMinutes: "最长 {count} 分钟",
@@ -218,7 +215,7 @@ const I18N = {
     clearingAudio: "正在清除当前任务的音频缓存...",
     audioCleared: "当前任务音频缓存已清除。",
     subtitleEmptyFile: "字幕文件为空。",
-    noRealTranslationMode: "当前模式下没有可显示的译文。",
+    noRealTranslationMode: "当前模式下没有可显示的字幕。",
     cueJumpTitle: "双击跳转到这句字幕",
     seekDone: "已跳转到字幕时间点。",
     cacheLoaded: "已加载本地缓存：{title}",
@@ -229,13 +226,13 @@ const I18N = {
     partialTranslationPreview: "部分译文已完成，剩余句子会暂时显示原文。",
     noPlayer: "当前页面没有可挂载字幕的播放器。",
     noExportSubtitle: "还没有可导出的字幕。",
-    noExportRealTranslation: "当前模式下还没有可导出的译文。",
+    noExportRealTranslation: "当前模式下还没有可导出的字幕。",
     srtExported: "SRT 字幕已导出。",
     importNoSubtitle: "导入文件没有可用字幕。",
     importNoContext: "导入文件缺少网页或媒体信息，无法保存到当前页面。",
     importDone: "已导入 {format} 字幕，并保存到当前页面。",
     importFailed: "导入失败：{error}",
-    fuguangJson: "LLM 生肉翻译 JSON",
+    fuguangJson: "流声字幕 JSON",
     subtitleGeneric: "字幕",
     noCacheLocation: "当前页面没有可定位的字幕缓存。",
     noSavedSubtitleCache: "当前页面没有已保存的字幕缓存。",
@@ -297,8 +294,9 @@ const I18N = {
     backendNoResponse: "扩展后台暂时没有响应：{error}"
   },
   en: {
-    appName: "LLM Raw Translator",
-    documentTitle: "LLM Raw Translator",
+    appName: "LiuSheng Subtitles",
+    documentTitle: "LiuSheng Subtitles",
+    appTagline: "Raw video subtitle generator powered by ASR and LLM",
     currentTab: "Current tab",
     languageLabel: "Language",
     tabsLabel: "Tabs",
@@ -321,7 +319,7 @@ const I18N = {
     langSpanish: "Spanish",
     langPortuguese: "Portuguese",
     langItalian: "Italian",
-    targetChinese: "Chinese (Simplified)",
+    targetChinese: "Chinese",
     targetEnglish: "English",
     start: "Start",
     startExtract: "Start",
@@ -340,12 +338,13 @@ const I18N = {
     fullSubtitles: "Full Subtitles",
     overlayOn: "Overlay On",
     overlayOff: "Overlay Off",
-    bilingualOn: "Bilingual On",
-    bilingual: "Bilingual",
+    subtitleModeTranslated: "Translation",
+    subtitleModeSource: "Source",
+    subtitleModeBilingual: "Bilingual",
     exportSrt: "Export SRT",
     importSubtitle: "Import",
     clearSubtitleCache: "Clear Subtitles",
-    taskDetails: "Task Details",
+    taskDetails: "Show Task",
     collapseTask: "Hide Task",
     subtitlePlaceholder: "Subtitles will appear here.",
     asrSettings: "Speech Recognition",
@@ -366,10 +365,9 @@ const I18N = {
     openaiFormat: "OpenAI Compatible",
     anthropicFormat: "Anthropic",
     targetLanguage: "Target Language",
-    asrWorkers: "ASR Workers",
     translationWorkers: "Translation Workers",
-    chunkMinutes: "Segment Minutes",
-    funAsrLongFileHint: "Fun-ASR uses a long-file workflow: ASR worker concurrency does not apply to this mode; audio is coarsely split under two hours and usually submitted serially or with very limited parallelism.",
+    chunkMinutes: "Subtitle Group Length (min)",
+    funAsrLongFileHint: "Fun-ASR uses a long-file workflow: audio is coarsely split under two hours, then subtitles are translated.",
     subtitleStyle: "Subtitle Style",
     fontSize: "Font Size (px)",
     backgroundOpacity: "Background Opacity %",
@@ -398,23 +396,23 @@ const I18N = {
     statusCancelled: "Stopped",
     statusRunning: "Processing",
     jobExtractingTranslating: "Extracting and translating",
-    jobAsrTranslation: "Recognizing and translating",
+    jobAsrTranslation: "Generating subtitles",
     jobRetryFailed: "Retrying failed segments",
     jobPreloading: "Preloading audio",
     stageQueued: "Queued",
     stageExtracting: "Extracting",
     stageExtractingTranslating: "Extracting + translating",
     stageAsr: "Speech recognition",
-    stageAsrTranslation: "ASR + translation",
+    stageAsrTranslation: "Subtitle generation",
     stageRetryFailed: "Retrying failed",
     stageRetryTranslation: "Retranslating",
-    stageTranslating: "ASR + translation",
+    stageTranslating: "Translating",
     stageTranslated: "Done",
     stageCompleted: "Done",
     stageCancelled: "Stopped",
     stageFailed: "Failed",
     stageProcessing: "Processing",
-    chunkQueued: "Queued",
+    chunkQueued: "Waiting for ASR",
     chunkAsr: "ASR",
     chunkAsrDone: "To translate",
     chunkTranslation: "Translating",
@@ -423,21 +421,18 @@ const I18N = {
     chunkFailed: "Failed",
     chunkStopped: "Stopped",
     metricExtract: "Extract",
-    metricAsrTranslation: "ASR / Translation",
+    metricAsrTranslation: "Subtitle Progress",
     metricCurrentStep: "Current Step",
-    metricChunkMinutes: "Segment Length",
+    metricChunkMinutes: "Subtitle Group Length",
     metricLongFileChunk: "Long-file Segment",
     metricReady: "Ready Audio",
-    metricDoneChunks: "Segments Done",
-    metricDoneLongFileChunks: "Long-file Segments Done",
-    metricAsrActive: "ASR Active",
+    metricDoneChunks: "Groups Done",
     metricTranslating: "Translating",
-    metricAsrWorkers: "ASR Workers",
     metricTranslationWorkers: "Translation Workers",
     metricFailed: "Failed",
     metricElapsed: "Elapsed",
     audioExtract: "Audio Extraction",
-    asrTranslation: "ASR / Translation",
+    asrTranslation: "Subtitle Progress",
     minutes: "{count} min",
     maxHours: "Up to {count} hr",
     maxMinutes: "Up to {count} min",
@@ -478,7 +473,7 @@ const I18N = {
     clearingAudio: "Clearing audio cache for this task...",
     audioCleared: "Audio cache cleared for this task.",
     subtitleEmptyFile: "The subtitle file is empty.",
-    noRealTranslationMode: "No translated subtitles are available in this mode.",
+    noRealTranslationMode: "No subtitles are available in this mode.",
     cueJumpTitle: "Double-click to seek to this subtitle",
     seekDone: "Jumped to subtitle time.",
     cacheLoaded: "Loaded local cache: {title}",
@@ -489,13 +484,13 @@ const I18N = {
     partialTranslationPreview: "Some translations are ready; remaining lines temporarily show source text.",
     noPlayer: "No subtitle-capable player was found on this page.",
     noExportSubtitle: "There are no subtitles to export yet.",
-    noExportRealTranslation: "There are no translated subtitles to export in this mode yet.",
+    noExportRealTranslation: "There are no subtitles to export in this mode yet.",
     srtExported: "SRT exported.",
     importNoSubtitle: "The imported file does not contain usable subtitles.",
     importNoContext: "The imported file does not contain page or media information for caching.",
     importDone: "Imported {format} subtitles and saved them for this page.",
     importFailed: "Import failed: {error}",
-    fuguangJson: "LLM Raw JSON",
+    fuguangJson: "LiuSheng Subtitles JSON",
     subtitleGeneric: "Subtitles",
     noCacheLocation: "No subtitle cache can be matched to this page.",
     noSavedSubtitleCache: "This page has no saved subtitle cache.",
@@ -647,7 +642,6 @@ const elements = {
   llmApiKeyHint: document.querySelector("#llmApiKeyHint"),
   sourceLanguage: document.querySelector("#sourceLanguage"),
   targetLanguage: document.querySelector("#targetLanguage"),
-  asrWorkers: document.querySelector("#asrWorkers"),
   translationWorkers: document.querySelector("#translationWorkers"),
   chunkMinutes: document.querySelector("#chunkMinutes"),
   funAsrLongFileHint: document.querySelector("#funAsrLongFileHint"),
@@ -693,6 +687,7 @@ let pendingSubtitlePromise = null;
 let cachedSubtitleLoadedKey = "";
 let cacheAutoLoadInFlight = false;
 let taskDetailsExpanded = false;
+let taskDetailsManuallyCollapsed = false;
 let renderedCandidateSignature = "";
 let lastActivatedTabKey = "";
 let elapsedTicker = 0;
@@ -945,11 +940,7 @@ async function loadSettings() {
   applyStoredSettings({
     ...DEFAULTS,
     ...localStored,
-    ...subtitleSyncSettings,
-    asrWorkers:
-      localStored.modelSettingsVersion === MODEL_SETTINGS_VERSION
-        ? localStored.asrWorkers || DEFAULTS.asrWorkers
-        : DEFAULTS.asrWorkers
+    ...subtitleSyncSettings
   });
   renderSelectedProfile("asr");
   renderSelectedProfile("llm");
@@ -959,13 +950,12 @@ async function loadSettings() {
 function applyStoredSettings(data) {
   setSourceLanguageValue(data.sourceLanguage || DEFAULTS.sourceLanguage);
   setTargetLanguageValue(data.targetLanguage || DEFAULTS.targetLanguage);
-  elements.asrWorkers.value = valueOrDefault(data.asrWorkers, DEFAULTS.asrWorkers);
   elements.translationWorkers.value = valueOrDefault(data.translationWorkers, DEFAULTS.translationWorkers);
   elements.chunkMinutes.value = valueOrDefault(data.chunkMinutes, DEFAULTS.chunkMinutes);
   elements.subtitleFontSize.value = valueOrDefault(data.subtitleFontSize, DEFAULTS.subtitleFontSize);
   elements.subtitleBackgroundOpacity.value = valueOrDefault(data.subtitleBackgroundOpacity, DEFAULTS.subtitleBackgroundOpacity);
   subtitleOverlayEnabled = data.subtitleOverlayEnabled !== false;
-  subtitleDisplayMode = data.subtitleDisplayMode === "bilingual" ? "bilingual" : DEFAULTS.subtitleDisplayMode;
+  subtitleDisplayMode = normalizeSubtitleDisplayMode(data.subtitleDisplayMode || DEFAULTS.subtitleDisplayMode);
   renderSubtitleModeButton();
   renderSubtitleOverlayButton();
 }
@@ -1154,11 +1144,10 @@ async function saveSettings() {
     llmProfiles: uniqueProfiles(llmProfiles),
     sourceLanguage: getSourceLanguageValue(),
     targetLanguage: getTargetLanguageValue(),
-    asrWorkers: clampSetting(elements.asrWorkers.value, 1, 8, DEFAULTS.asrWorkers),
     translationWorkers: clampSetting(elements.translationWorkers.value, 1, 6, DEFAULTS.translationWorkers),
     chunkMinutes: Math.round(clampSetting(elements.chunkMinutes.value, 1, 60, DEFAULTS.chunkMinutes))
   });
-  await chrome.storage.local.remove(["asrApiKey", "llmApiKey", "asrBaseUrl", "asrModel", "llmBaseUrl", "llmModel", "llmProviderType"]).catch(() => {});
+  await chrome.storage.local.remove(["asrApiKey", "llmApiKey", "asrBaseUrl", "asrModel", "llmBaseUrl", "llmModel", "llmProviderType", "asrWorkers"]).catch(() => {});
   setMessage(t("settingsSaved"));
 }
 
@@ -1187,7 +1176,6 @@ async function refreshStatus() {
     renderEmptyJob(response.error);
     return;
   }
-  elements.pageTitle.textContent = response.page?.title || response.page?.url || t("currentTab");
   elements.status.textContent = statusLabel(response);
   candidates = response.candidates || [];
   ensureSelection();
@@ -1373,11 +1361,15 @@ async function rerunAsrFromSidePanel(chunkIndexes = []) {
   asrRetryRequestInFlight = true;
   updateActionButtons(currentJob);
   setMessage(t("rerunAsrMessage"));
+  if (!chunkIndexes.length) {
+    clearSubtitles(t("waitingNewSubtitles"), currentJobId);
+  }
   try {
     const response = await send({
       type: MESSAGE.RERUN_ASR_PRELOAD,
       tabId: requestContext.tabId,
       chunkIndexes: Array.isArray(chunkIndexes) ? chunkIndexes : [],
+      sourceLanguage: getSourceLanguageValue(),
       targetLanguage: getTargetLanguageValue()
     });
     if (!response.ok) {
@@ -1413,6 +1405,9 @@ async function retryTranslationFromSidePanel(chunkIndexes = []) {
   translationRetryRequestInFlight = true;
   updateActionButtons(currentJob);
   setMessage(t("retranslateOnlyMessage"));
+  if (!chunkIndexes.length) {
+    clearSubtitles(t("waitingNewSubtitles"), currentJobId);
+  }
   try {
     const response = await send({
       type: MESSAGE.RETRANSLATE_PRELOAD,
@@ -1480,10 +1475,15 @@ function cachedTranscriptRetranslateMetadata() {
   const selected = getSelectedCandidate();
   return {
     ...metadata,
-    title: currentSubtitleCacheEntry?.title || metadata.title || elements.pageTitle.textContent || selected?.title || activeTab?.title || "",
+    title: currentPageTitleFallback(metadata),
     pageUrl: currentSubtitleCacheEntry?.pageUrl || metadata.pageUrl || activeTab?.url || selected?.pageUrl || "",
     sourceUrl: currentSubtitleCacheEntry?.sourceUrl || metadata.sourceUrl || selected?.url || ""
   };
+}
+
+function currentPageTitleFallback(metadata = {}) {
+  const selected = getSelectedCandidate();
+  return currentSubtitleCacheEntry?.title || metadata.title || selected?.title || activeTab?.title || "";
 }
 
 function currentTranscriptHasReusableSource() {
@@ -1607,6 +1607,7 @@ function renderJob(job) {
   if (job?.id) {
     if (currentJobId && currentJobId !== job.id) {
       taskDetailsExpanded = false;
+      taskDetailsManuallyCollapsed = false;
       renderedSubtitleSignature = "";
       activeCueIndex = -1;
       currentTranscript = null;
@@ -1650,12 +1651,8 @@ function renderJob(job) {
     metric(t("metricCurrentStep"), extractionActivityText(extraction)),
     metric(funAsrJob ? t("metricLongFileChunk") : t("metricChunkMinutes"), chunkDurationText(job, extraction)),
     metric(t("metricReady"), extraction.readySeconds ? formatDuration(extraction.readySeconds) : "-"),
-    metric(funAsrJob ? t("metricDoneLongFileChunks") : t("metricDoneChunks"), `${translation.chunksDone || 0}/${translation.chunksTotal || "?"}`),
-    metric(t("metricAsrActive"), translation.chunksAsr || 0),
     metric(t("metricTranslating"), translation.chunksTranslating || 0),
-    metric(t("metricAsrWorkers"), translation.asrWorkers || "-"),
     metric(t("metricTranslationWorkers"), translation.translationWorkers || "-"),
-    metric(t("metricFailed"), translation.chunksFailed || 0),
     metric(t("metricElapsed"), formatElapsedSeconds(progress.elapsedSeconds || translation.elapsedSeconds || 0), "elapsed")
   );
 
@@ -1845,7 +1842,7 @@ async function renderSubtitles(jobId, job = null) {
   const requestTabKey = activeTabKey(activeTab);
   const requestCurrentJobId = currentJobId || "";
   const signature = subtitleSignature(jobId, job);
-  const needsTranscriptRetry = subtitleDisplayMode === "bilingual" && subtitleCues.length && subtitleCueSource !== "transcript";
+  const needsTranscriptRetry = subtitleDisplayModeRequiresTranscript(subtitleDisplayMode) && subtitleCues.length && subtitleCueSource !== "transcript";
   if (signature && renderedSubtitleSignature === signature && renderedSubtitleJobId === jobId && subtitleCues.length && !needsTranscriptRetry) {
     startSubtitleFollow();
     await attachCurrentSubtitlesToPage();
@@ -1922,12 +1919,14 @@ function renderSubtitleCueList() {
     elements.subtitleList.textContent = renderedSubtitleJobId ? t("subtitleEmptyFile") : t("subtitlePlaceholder");
     renderSubtitleNotice();
     updateTaskPanelFocus(currentJob);
+    updateActionButtons(currentJob);
     return;
   }
   if (!visibleCues.length) {
     elements.subtitleList.textContent = t("noRealTranslationMode");
     renderSubtitleNotice();
     updateTaskPanelFocus(currentJob);
+    updateActionButtons(currentJob);
     return;
   }
   for (const { cue, index } of visibleCues) {
@@ -1953,7 +1952,7 @@ function renderSubtitleCueList() {
     }
     const text = document.createElement("div");
     text.className = "subtitle-text";
-    text.textContent = cue.text;
+    text.textContent = subtitleCueTextLines(cue, subtitleDisplayMode).slice(-1)[0] || "";
     textWrap.appendChild(text);
     item.title = t("cueJumpTitle");
     item.addEventListener("dblclick", () => seekToCue(cue.start, index));
@@ -1971,6 +1970,7 @@ function renderSubtitleCueList() {
   renderSubtitleModeButton();
   renderSubtitleNotice();
   updateTaskPanelFocus(currentJob);
+  updateActionButtons(currentJob);
 }
 
 function clearSubtitles(text, jobId = "") {
@@ -1987,6 +1987,8 @@ function clearSubtitles(text, jobId = "") {
   currentSubtitleCacheEntry = null;
   cachedSubtitleLoadedKey = "";
   activeCueIndex = -1;
+  taskDetailsExpanded = false;
+  taskDetailsManuallyCollapsed = false;
   stopSubtitleFollow();
   renderSubtitleNotice("");
   elements.subtitleList.replaceChildren();
@@ -2153,10 +2155,10 @@ function setActiveCueIndex(index, options = {}) {
 }
 
 async function toggleSubtitleMode() {
-  subtitleDisplayMode = subtitleDisplayMode === "bilingual" ? "translated" : "bilingual";
+  subtitleDisplayMode = nextSubtitleDisplayMode(subtitleDisplayMode);
   await chrome.storage.sync.set({ subtitleDisplayMode }).catch(() => {});
   renderSubtitleCueList();
-  if (subtitleDisplayMode === "bilingual" && renderedSubtitleJobId && subtitleCueSource !== "transcript") {
+  if (subtitleDisplayModeRequiresTranscript(subtitleDisplayMode) && renderedSubtitleJobId && subtitleCueSource !== "transcript") {
     renderedSubtitleSignature = "";
     await renderSubtitles(renderedSubtitleJobId, currentJob);
   }
@@ -2166,6 +2168,21 @@ async function toggleSubtitleMode() {
     setActiveCueIndex(index, { forceScroll: true });
   }
   await attachCurrentSubtitlesToPage();
+}
+
+function nextSubtitleDisplayMode(mode) {
+  const normalized = normalizeSubtitleDisplayMode(mode);
+  if (normalized === "translated") {
+    return "source";
+  }
+  if (normalized === "source") {
+    return "bilingual";
+  }
+  return "translated";
+}
+
+function subtitleDisplayModeRequiresTranscript(mode) {
+  return normalizeSubtitleDisplayMode(mode) !== "translated";
 }
 
 async function toggleSubtitleOverlay() {
@@ -2185,9 +2202,14 @@ async function setSubtitleOverlayEnabled(enabled) {
 }
 
 function renderSubtitleModeButton() {
-  const bilingual = subtitleDisplayMode === "bilingual";
-  elements.subtitleModeToggle.textContent = bilingual ? t("bilingualOn") : t("bilingual");
-  elements.subtitleModeToggle.setAttribute("aria-pressed", String(bilingual));
+  const mode = normalizeSubtitleDisplayMode(subtitleDisplayMode);
+  const labelKey = {
+    translated: "subtitleModeTranslated",
+    source: "subtitleModeSource",
+    bilingual: "subtitleModeBilingual"
+  }[mode];
+  elements.subtitleModeToggle.textContent = t(labelKey);
+  elements.subtitleModeToggle.setAttribute("aria-pressed", String(mode !== "source"));
 }
 
 function renderSubtitleOverlayButton() {
@@ -2242,13 +2264,16 @@ function subtitleSourcePreviewNoticeText() {
 }
 
 function toggleTaskDetails() {
-  taskDetailsExpanded = !taskDetailsExpanded;
+  const currentlyFocusedOnSubtitles = elements.taskPanel.classList.contains("subtitles-focus");
+  taskDetailsExpanded = currentlyFocusedOnSubtitles;
+  taskDetailsManuallyCollapsed = !currentlyFocusedOnSubtitles;
   updateTaskPanelFocus(currentJob);
 }
 
 function updateTaskPanelFocus(job) {
   const ready = hasDisplayableSubtitles() || isCompleteJobWithSubtitles(job);
-  const focusSubtitles = ready && !taskDetailsExpanded;
+  const autoFocusReady = hasRealTranslatedSubtitles() || isCompleteJobWithTranslatedSubtitles(job);
+  const focusSubtitles = ready && !taskDetailsExpanded && (autoFocusReady || taskDetailsManuallyCollapsed);
   elements.taskPanel.classList.toggle("subtitles-focus", focusSubtitles);
   elements.toggleTaskDetails.hidden = !ready;
   elements.toggleTaskDetails.textContent = focusSubtitles ? t("taskDetails") : t("collapseTask");
@@ -2256,6 +2281,10 @@ function updateTaskPanelFocus(job) {
 
 function hasDisplayableSubtitles() {
   return subtitleCues.some(cue => shouldIncludeCueInSubtitleOutput(cue, subtitleDisplayMode, subtitleCues));
+}
+
+function hasRealTranslatedSubtitles() {
+  return subtitleCues.some(cue => !cue?.sourceOnly && cleanSubtitleText(cue?.text || ""));
 }
 
 function isCompleteJobWithSubtitles(job) {
@@ -2273,6 +2302,14 @@ function isCompleteJobWithSubtitles(job) {
     Number(translation.chunksFailed || job.progress?.chunksFailed || 0) === 0 &&
     (status === "done" || status === "completed" || stage === "translated" || stage === "completed")
   );
+}
+
+function isCompleteJobWithTranslatedSubtitles(job) {
+  if (!isCompleteJobWithSubtitles(job)) {
+    return false;
+  }
+  const translation = job.translation || job.progress?.translation || {};
+  return Number(translation.translatedSegments || 0) > 0;
 }
 
 function progressBar(label, percent, text) {
@@ -2534,14 +2571,14 @@ async function exportCurrentSubtitle() {
     return;
   }
   const blob = new Blob([srt], { type: "application/x-subrip;charset=utf-8" });
-  await downloadBlob(blob, `${safeFilename(elements.pageTitle.textContent || "llm-raw-subtitle")}.srt`);
+  await downloadBlob(blob, `${safeFilename(currentPageTitleFallback() || "liusheng-subtitles")}.srt`);
   setMessage(t("srtExported"));
 }
 
 function buildSrtExportMetadata() {
   return {
     sourcePage: currentSrtSourcePageUrl(),
-    exportedBy: "LLM 生肉翻译工具 https://blog.liu-qi.cn/tools"
+    exportedBy: "流声字幕 https://blog.liu-qi.cn/tools"
   };
 }
 
@@ -2675,13 +2712,13 @@ function shouldClearCurrentSubtitleDisplayForCacheAction() {
   if (!subtitleCues.length && !currentTranscript && !renderedSubtitleJobId) {
     return false;
   }
-  return !isRunningJob(currentJob);
+  return true;
 }
 
 async function clearDisplayedSubtitleStateForCacheAction() {
   let suppressError = "";
   const jobIdToSuppress = currentJobId || renderedSubtitleJobId || currentSubtitleCacheEntry?.jobId || "";
-  if (jobIdToSuppress) {
+  if (jobIdToSuppress && !isRunningJob(currentJob)) {
     clearedSubtitleJobIds.add(jobIdToSuppress);
     try {
       await suppressPreloadSubtitleState(jobIdToSuppress);
@@ -2788,7 +2825,7 @@ async function buildSubtitleCacheEntry(transcript, importedPayload = {}) {
   const context = currentSubtitleCacheContext(payload);
   const selected = getSelectedCandidate();
   const pageUrl = normalizeCacheUrl(context.pageUrl);
-  const title = payload.title || elements.pageTitle.textContent || selected?.title || "";
+  const title = payload.title || currentPageTitleFallback(payload) || selected?.title || "";
   const sourceUrl = normalizeMediaCacheUrl(context.sourceUrl);
   const id = await buildSubtitleCacheKey({ pageUrl, sourceUrl });
   return {
@@ -2964,11 +3001,11 @@ function textContentSignature(value) {
 }
 
 function safeFilename(value) {
-  const text = String(value || "llm-raw-subtitle")
+  const text = String(value || "liusheng-subtitles")
     .replace(/[\\/:*?"<>|]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
-  return (text || "llm-raw-subtitle").slice(0, 80);
+  return (text || "liusheng-subtitles").slice(0, 80);
 }
 
 function showTab(tab) {
@@ -3240,6 +3277,40 @@ function updateActionButtons(job) {
     : audioCacheRemoved
       ? t("clearAudioAgainTitle")
       : t("clearAudioTitle");
+  elements.clearSubtitleCache.disabled = !canClearCurrentSubtitleCache(job);
+}
+
+function canClearCurrentSubtitleCache(job) {
+  return (
+    Boolean(currentSubtitleCacheEntry?.id) ||
+    Boolean(cachedSubtitleLoadedKey) ||
+    Boolean(currentTranscript) ||
+    subtitleCues.length > 0 ||
+    jobHasClearableSubtitleState(job)
+  );
+}
+
+function jobHasClearableSubtitleState(job) {
+  const translation = job?.translation || job?.progress?.translation || {};
+  const transcript = translation.transcript;
+  return Boolean(
+    translation.vttText ||
+    translation.vttPath ||
+    Number(translation.segmentCount || 0) > 0 ||
+    Number(translation.sourceSegments || 0) > 0 ||
+    Number(translation.translatedSegments || 0) > 0 ||
+    transcriptHasClearableSubtitleState(transcript)
+  );
+}
+
+function transcriptHasClearableSubtitleState(transcript) {
+  return Boolean(
+    transcript &&
+    (
+      transcriptReusableSourceCount(transcript) > 0 ||
+      (Array.isArray(transcript.translated) && transcript.translated.some(segment => cleanSubtitleText(segment?.text || "")))
+    )
+  );
 }
 
 function countReusableSourceChunks(job) {

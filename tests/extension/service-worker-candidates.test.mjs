@@ -235,6 +235,138 @@ vm.runInContext(source, context, { filename: "service-worker.js" });
 }
 
 {
+  const record = {
+    tabId: 3060,
+    pipeline: "funasr",
+    metadata: { title: "Fun-ASR streaming", duration: 14400 },
+    candidate: { url: "https://media.example.test/stream.m3u8", duration: 14400 },
+    modelConfig: {
+      asrWorkers: 1,
+      workers: 1,
+      targetLanguage: "zh-CN",
+      chunkSeconds: 1200,
+      asr: { providerType: "dashscope_funasr", baseUrl: "https://dashscope.test/api/v1", model: "fun-asr", apiKey: "test" },
+      translation: { providerType: "openai", baseUrl: "https://llm.test/v1", model: "test", apiKey: "test" }
+    },
+    browserAsrChunkSeconds: 7200,
+    startedAt: Date.now(),
+    cancelled: false,
+    sourceSegmentsByChunk: new Map(),
+    translatedSegmentsByChunk: new Map(),
+    browserAsrDiagnosticsByChunk: new Map(),
+    audioChunks: [],
+    job: {
+      id: "browser-funasr-streaming",
+      pipeline: "funasr",
+      status: "running",
+      stage: "extracting",
+      extract: {
+        status: "running",
+        progress: 50,
+        duration: 14400,
+        chunkSeconds: 1200,
+        asrChunkSeconds: 7200,
+        elapsedSeconds: 0
+      },
+      translation: {
+        status: "queued",
+        chunkStatuses: [],
+        chunksTotal: 0,
+        chunksDone: 0,
+        chunksFailed: 0,
+        sourceSegments: 0,
+        translatedSegments: 0,
+        segmentCount: 0,
+        asrWorkers: 1,
+        translationWorkers: 1,
+        workers: 1
+      }
+    }
+  };
+  const originalExtract = context.extractCandidateAudioInBrowser;
+  const originalFunAsr = context.transcribeDashScopeFunAsrFile;
+  const originalTranslate = context.translateBrowserSegments;
+  const originalEnsureSubtitleOverlay = context.ensureSubtitleOverlay;
+  const originalAttachBrowserJobVttIfReady = context.attachBrowserJobVttIfReady;
+  let extractRunning = false;
+  let funAsrStartedDuringExtraction = false;
+  let funAsrCalls = 0;
+  let translationCalls = 0;
+  context.extractCandidateAudioInBrowser = async current => {
+    extractRunning = true;
+    context.applyOffscreenWebFfmpegChunkReady({
+      tabId: current.tabId,
+      jobId: current.job.id,
+      duration: 14400,
+      internalChunksDone: 40,
+      internalChunksTotal: 80,
+      chunk: {
+        logical: true,
+        index: 0,
+        start: 0,
+        end: 7200,
+        duration: 7200,
+        file: { name: "funasr-stream-001.mp3", mime: "audio/mpeg", buffer: new ArrayBuffer(1) },
+        bytes: 1
+      }
+    });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    extractRunning = false;
+    context.applyOffscreenWebFfmpegChunkReady({
+      tabId: current.tabId,
+      jobId: current.job.id,
+      duration: 14400,
+      internalChunksDone: 80,
+      internalChunksTotal: 80,
+      chunk: {
+        logical: true,
+        index: 1,
+        start: 7200,
+        end: 14400,
+        duration: 7200,
+        file: { name: "funasr-stream-002.mp3", mime: "audio/mpeg", buffer: new ArrayBuffer(1) },
+        bytes: 1
+      }
+    });
+    return { chunks: current.audioChunks, duration: 14400, asrChunkSeconds: 7200 };
+  };
+  context.transcribeDashScopeFunAsrFile = async (_file, _config, options = {}) => {
+    funAsrCalls += 1;
+    if (extractRunning) {
+      funAsrStartedDuringExtraction = true;
+    }
+    assert.equal(options.chunksTotal, 2);
+    return { transcripts: [{ sentences: [{ begin_time: 1000, end_time: 2000, text: `source ${funAsrCalls}` }] }] };
+  };
+  context.translateBrowserSegments = async segments => {
+    translationCalls += 1;
+    return segments.map(segment => ({ ...segment, text: `译文 ${translationCalls}` }));
+  };
+  context.ensureSubtitleOverlay = async () => {};
+  context.attachBrowserJobVttIfReady = async () => {};
+  context.recordForFunAsrStreamingTest = record;
+  vm.runInContext("browserPreloadJobs.set('browser-funasr-streaming', recordForFunAsrStreamingTest)", context);
+  try {
+    await context.runBrowserFunAsrPreloadJob("browser-funasr-streaming");
+
+    assert.equal(funAsrStartedDuringExtraction, true);
+    assert.equal(funAsrCalls, 2);
+    assert.equal(translationCalls, 2);
+    assert.equal(record.job.translation.chunksTotal, 2);
+    assert.equal(record.job.translation.chunkStatuses[0].stage, "completed");
+    assert.equal(record.job.translation.chunkStatuses[1].stage, "completed");
+  } finally {
+    vm.runInContext("browserPreloadJobs.delete('browser-funasr-streaming')", context);
+    delete context.recordForFunAsrStreamingTest;
+    context.extractCandidateAudioInBrowser = originalExtract;
+    context.transcribeDashScopeFunAsrFile = originalFunAsr;
+    context.translateBrowserSegments = originalTranslate;
+    context.ensureSubtitleOverlay = originalEnsureSubtitleOverlay;
+    context.attachBrowserJobVttIfReady = originalAttachBrowserJobVttIfReady;
+  }
+}
+
+{
   const recovered = context.filterAsrStrictVadRecoverySegments([
     {
       start: 1721.06,
@@ -537,15 +669,21 @@ vm.runInContext(source, context, { filename: "service-worker.js" });
 }
 
 {
-  assert.equal(context.targetLanguageName("zh-CN"), "Simplified Chinese");
+  assert.equal(context.targetLanguageName("zh-CN"), "Chinese");
   assert.equal(context.targetLanguageName("en"), "English");
+  assert.equal(context.targetLanguageName("ja"), "Japanese");
+  assert.equal(context.targetLanguageName("fr"), "French");
+  assert.equal(context.targetLanguageName("ko"), "Korean");
+  assert.equal(context.targetLanguageName("de"), "German");
+  assert.equal(context.targetLanguageName("ru"), "Russian");
+  assert.equal(context.normalizeTargetLanguage("japanese", "en"), "en");
   const messages = context.buildTranslationMessages(
     [{ start: 1, end: 2, text: "hello" }],
-    "zh-CN",
+    "ja",
     { title: "T" }
   );
-  assert.match(messages[0].content, /Simplified Chinese/);
-  assert.match(messages[1].content, /"name":"Simplified Chinese"/);
+  assert.match(messages[0].content, /Japanese/);
+  assert.match(messages[1].content, /"name":"Japanese"/);
 }
 
 {
@@ -557,8 +695,11 @@ vm.runInContext(source, context, { filename: "service-worker.js" });
   assert.equal(context.browserAsrEndpoint({ providerType: "xai", baseUrl: "https://api.x.ai/v1" }), "https://api.x.ai/v1/stt");
   assert.equal(context.browserAsrEndpoint({ providerType: "openai", baseUrl: "http://127.0.0.1:8000/v1" }), "http://127.0.0.1:8000/v1/audio/transcriptions");
   assert.equal(context.normalizeAsrLanguage("auto"), "");
+  assert.equal(context.normalizeAsrLanguage("zh"), "zh");
+  assert.equal(context.normalizeAsrLanguage("zh-CN"), "zh");
   assert.equal(context.normalizeAsrLanguage("japanese"), "ja");
   assert.equal(JSON.stringify(context.browserAsrRequestFields({ providerType: "xai" }, "en")), JSON.stringify([["format", "true"], ["language", "en"]]));
+  assert.equal(JSON.stringify(context.browserAsrRequestFields({ providerType: "xai" }, "zh")), JSON.stringify([]));
   assert.equal(JSON.stringify(context.browserAsrRequestFields({ providerType: "xai" }, "zh-CN")), JSON.stringify([]));
   assert.equal(JSON.stringify(context.browserAsrRequestFields({ providerType: "openai", model: "whisper-1" }, "")), JSON.stringify([
     ["model", "whisper-1"],
@@ -903,6 +1044,7 @@ vm.runInContext(source, context, { filename: "service-worker.js" });
     selectedLlmProfileId: "test_llm",
     sourceLanguage: "japanese",
     targetLanguage: "zh-CN",
+    asrWorkers: 7,
     asrProfiles: [
       { id: "openai_whisper", name: "OpenAI Whisper", providerType: "openai", baseUrl: "https://api.openai.com/v1", model: "whisper-1", apiKey: "asr-key" }
     ],
@@ -916,6 +1058,7 @@ vm.runInContext(source, context, { filename: "service-worker.js" });
   try {
     const config = await context.getModelConfig();
     assert.equal(config.asr.language, "ja");
+    assert.equal(config.asrWorkers, 1);
     assert.ok(context.browserAsrRequestFields(config.asr, config.asr.language).some(([name, value]) => name === "language" && value === "ja"));
 
     stored.sourceLanguage = "auto";
@@ -2923,6 +3066,22 @@ function add(tabId, candidate) {
 }
 
 {
+  const record = {
+    metadata: { duration: 14415 },
+    browserAsrChunkSeconds: 7200,
+    audioChunks: [
+      { index: 0, start: 0, end: 7200, file: { name: "funasr-1.mp3", buffer: new ArrayBuffer(1) } },
+      { index: 1, start: 7200, end: 14373, file: { name: "funasr-2.mp3", buffer: new ArrayBuffer(1) } }
+    ],
+    job: {
+      extract: { status: "completed", duration: 14415, asrChunkSeconds: 7200, progress: 100 },
+      translation: { chunkStatuses: [], chunksTotal: 0 }
+    }
+  };
+  assert.equal(context.browserFunAsrExpectedChunkCount(record), 2);
+}
+
+{
   const modelSettingsVersion = vm.runInContext("MODEL_SETTINGS_VERSION", context);
   const record = {
     job: {
@@ -3168,25 +3327,63 @@ function add(tabId, candidate) {
 
 {
   const tabId = 105;
-  seedPage(tabId, { title: "HLS quality variants", url: "https://example.test/watch/hls", duration: 0 });
+  seedPage(tabId, { title: "HLS quality variants", url: "https://example.test/watch/hls", duration: 14373 });
   add(tabId, {
-    url: "https://cdn.example.test/path/video_1080p.m3u8",
+    url: "https://cdn.example.test/path/360p/video.m3u8",
     kind: "hls",
     ext: "m3u8",
     contentType: "application/vnd.apple.mpegurl",
+    source: "xhr-body",
     initiator: "https://example.test/watch/hls"
   });
   add(tabId, {
-    url: "https://cdn.example.test/path/video_720p.m3u8",
+    url: "https://cdn.example.test/path/720p/video.m3u8",
     kind: "hls",
     ext: "m3u8",
     contentType: "application/vnd.apple.mpegurl",
+    source: "xhr-body",
+    initiator: "https://example.test/watch/hls"
+  });
+  add(tabId, {
+    url: "https://cdn.example.test/path/1080p/video.m3u8",
+    kind: "hls",
+    ext: "m3u8",
+    contentType: "application/vnd.apple.mpegurl",
+    source: "performance-entry",
     initiator: "https://example.test/watch/hls"
   });
 
   const candidates = context.getDisplayCandidates(tabId);
   assert.equal(candidates.length, 1);
-  assert.equal(candidates[0].hiddenCount, 0);
+  assert.equal(candidates[0].url, "https://cdn.example.test/path/360p/video.m3u8");
+  assert.equal(candidates[0].hiddenCount, 2);
+  assert.match(candidates[0].selectionReason, /选择较轻的流/);
+  assert.equal(candidates[0].variants.some(variant => variant.url.includes("/1080p/")), true);
+}
+
+{
+  const tabId = 122;
+  seedPage(tabId, { title: "HLS query quality variants", url: "https://example.test/watch/hls-query", duration: 600 });
+  add(tabId, {
+    url: "https://cdn.example.test/path/video.m3u8?quality=720p&token=low",
+    kind: "hls",
+    ext: "m3u8",
+    contentType: "application/vnd.apple.mpegurl",
+    initiator: "https://example.test/watch/hls-query"
+  });
+  add(tabId, {
+    url: "https://cdn.example.test/path/video.m3u8?quality=1080p&token=high",
+    kind: "hls",
+    ext: "m3u8",
+    contentType: "application/vnd.apple.mpegurl",
+    source: "performance-entry",
+    initiator: "https://example.test/watch/hls-query"
+  });
+
+  const candidates = context.getDisplayCandidates(tabId);
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0].url, "https://cdn.example.test/path/video.m3u8?quality=720p&token=low");
+  assert.equal(candidates[0].hiddenCount, 1);
 }
 
 {
@@ -3584,11 +3781,13 @@ function add(tabId, candidate) {
   const originalSyncRemove = chrome.storage.sync.remove;
   let asrCalls = 0;
   let translationCalls = 0;
+  let observedAsrLanguage = "";
   const targets = [];
   chrome.storage.local.get = async () => ({
     modelSettingsVersion,
     selectedAsrProfileId: "openai_whisper",
     selectedLlmProfileId: "test_llm",
+    sourceLanguage: "en",
     targetLanguage: "en",
     asrWorkers: 1,
     translationWorkers: 1,
@@ -3601,8 +3800,9 @@ function add(tabId, candidate) {
     ]
   });
   chrome.storage.sync.remove = async () => {};
-  context.transcribeBrowserAudioChunk = async () => {
+  context.transcribeBrowserAudioChunk = async (_chunk, asrConfig) => {
     asrCalls += 1;
+    observedAsrLanguage = asrConfig.language || "";
     return [{ start: 3, end: 4, text: "fresh source" }];
   };
   context.translateBrowserSegments = async (_segments, _config, targetLanguage) => {
@@ -3616,11 +3816,13 @@ function add(tabId, candidate) {
   vm.runInContext("browserPreloadJobs.set('browser-rerun-asr', recordForRerunAsrTest)", context);
   context.setTabStatus(3050, { preload: "completed", preloadJob: record.job, page: { url: "" }, context: { href: "" } });
   try {
-    await context.rerunAsrPreload(3050, [0], { targetLanguage: "zh-CN" });
+    await context.rerunAsrPreload(3050, [0], { sourceLanguage: "ja", targetLanguage: "zh-CN" });
 
     assert.equal(asrCalls, 1);
+    assert.equal(observedAsrLanguage, "ja");
     assert.equal(translationCalls, 1);
     assert.deepEqual(targets, ["zh-CN"]);
+    assert.equal(record.modelConfig.asr.language, "ja");
     assert.equal(record.sourceSegmentsByChunk.get(0)[0].text, "fresh source");
     assert.equal(record.translatedSegmentsByChunk.get(0)[0].text, "新译文");
     assert.doesNotMatch(JSON.stringify(record.job.translation.transcript), /old source|old translation/);
@@ -3682,10 +3884,12 @@ function add(tabId, candidate) {
   const originalSyncRemove = chrome.storage.sync.remove;
   let funAsrCalls = 0;
   let translationCalls = 0;
+  let observedFunAsrLanguage = "";
   chrome.storage.local.get = async () => ({
     modelSettingsVersion,
     selectedAsrProfileId: "fun_asr",
     selectedLlmProfileId: "test_llm",
+    sourceLanguage: "en",
     targetLanguage: "en",
     asrWorkers: 1,
     translationWorkers: 1,
@@ -3698,8 +3902,9 @@ function add(tabId, candidate) {
     ]
   });
   chrome.storage.sync.remove = async () => {};
-  context.transcribeDashScopeFunAsrFile = async () => {
+  context.transcribeDashScopeFunAsrFile = async (_file, asrConfig) => {
     funAsrCalls += 1;
+    observedFunAsrLanguage = asrConfig.language || "";
     return { transcripts: [{ sentences: [{ begin_time: 3000, end_time: 4000, text: "fresh funasr source" }] }] };
   };
   context.translateBrowserSegments = async segments => {
@@ -3712,10 +3917,12 @@ function add(tabId, candidate) {
   vm.runInContext("browserPreloadJobs.set('browser-rerun-funasr', recordForRerunFunAsrTest)", context);
   context.setTabStatus(3051, { preload: "completed", preloadJob: record.job, page: { url: "" }, context: { href: "" } });
   try {
-    await context.rerunAsrPreload(3051, [0], { targetLanguage: "zh-CN" });
+    await context.rerunAsrPreload(3051, [0], { sourceLanguage: "ja", targetLanguage: "zh-CN" });
 
     assert.equal(funAsrCalls, 1);
+    assert.equal(observedFunAsrLanguage, "ja");
     assert.equal(translationCalls, 1);
+    assert.equal(record.modelConfig.asr.language, "ja");
     assert.equal(record.sourceSegmentsByChunk.get(0)[0].text, "fresh funasr source");
     assert.equal(record.translatedSegmentsByChunk.get(0)[0].text, "Fun-ASR 新译文");
     assert.doesNotMatch(JSON.stringify(record.job.translation.transcript), /old funasr/);
@@ -5261,6 +5468,8 @@ function add(tabId, candidate) {
     assert.equal(observedModel, "current-llm");
     assert.equal(record.modelConfig.targetLanguage, "zh-CN");
     assert.equal(record.job.translation.targetLanguage, "zh-CN");
+    assert.equal(record.job.translation.chunkStatuses[0].attempts, 1);
+    assert.equal(record.job.translation.chunkStatuses[0].stage, "completed");
   } finally {
     vm.runInContext("browserPreloadJobs.delete('browser-current-target-language')", context);
     delete context.recordForCurrentTargetLanguageTest;

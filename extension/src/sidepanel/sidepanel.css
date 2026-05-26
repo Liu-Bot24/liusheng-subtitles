@@ -377,10 +377,6 @@ button:disabled {
   min-width: 96px;
 }
 
-.subtitle-actions #clearSubtitleCache {
-  color: var(--subtle);
-}
-
 .subtitle-actions [aria-pressed="true"] {
   background: var(--accent);
   color: var(--accent-ink);

@@ -41,7 +41,7 @@ function plain(value) {
 {
   const result = parseSubtitleImportText(`NOTE
 Source page: https://example.test/watch?v=source-page
-Exported by: LLM 生肉翻译工具 https://blog.liu-qi.cn/tools
+Exported by: 流声字幕 https://blog.liu-qi.cn/tools
 
 1
 00:00:01,200 --> 00:00:03,400

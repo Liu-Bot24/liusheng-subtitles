@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>LLM 生肉翻译</title>
+    <title>流声字幕</title>
     <link rel="stylesheet" href="sidepanel.css">
   </head>
   <body>
@@ -11,10 +11,10 @@
       <header class="side-header">
         <div class="brand-block">
           <div class="brand-heading">
-            <h1 data-i18n="appName">LLM 生肉翻译</h1>
+            <h1 data-i18n="appName">流声字幕</h1>
             <a class="creator-link" href="https://blog.liu-qi.cn/tools" target="_blank" rel="noopener noreferrer">Created by @liuqi</a>
           </div>
-          <p id="pageTitle" data-i18n="currentTab">当前标签页</p>
+          <p id="pageTitle" data-i18n="appTagline">基于 ASR 与 LLM 的生肉视频字幕生成器</p>
         </div>
         <div class="header-tools">
           <div id="localeSwitch" class="locale-switch" role="group" aria-label="Language">
@@ -56,9 +56,9 @@
                 <option value="fr" data-i18n="langFrench">法语</option>
                 <option value="de" data-i18n="langGerman">德语</option>
                 <option value="ru" data-i18n="langRussian">俄语</option>
-                <option value="es" data-i18n="langSpanish">西语</option>
-                <option value="pt" data-i18n="langPortuguese">葡语</option>
-                <option value="it" data-i18n="langItalian">意语</option>
+                <option value="es" data-i18n="langSpanish">西班牙语</option>
+                <option value="pt" data-i18n="langPortuguese">葡萄牙语</option>
+                <option value="it" data-i18n="langItalian">意大利语</option>
               </select>
             </label>
             <button id="startPreload" type="button" data-i18n="start">开始</button>
@@ -76,11 +76,11 @@
             <h2 data-i18n="fullSubtitles">完整字幕</h2>
             <div class="subtitle-actions">
               <button id="subtitleOverlayToggle" type="button" class="secondary small-button" aria-pressed="true">浮层开</button>
-              <button id="subtitleModeToggle" type="button" class="secondary small-button" aria-pressed="false">双语</button>
+              <button id="subtitleModeToggle" type="button" class="secondary small-button" aria-pressed="true">译文</button>
               <button id="exportSubtitle" type="button" class="secondary small-button" data-i18n="exportSrt">导出SRT</button>
               <button id="importSubtitle" type="button" class="secondary small-button" data-i18n="importSubtitle">导入</button>
               <button id="clearSubtitleCache" type="button" class="secondary small-button" data-i18n="clearSubtitleCache">清字幕缓存</button>
-              <button id="toggleTaskDetails" type="button" class="secondary small-button" hidden data-i18n="taskDetails">任务详情</button>
+              <button id="toggleTaskDetails" type="button" class="secondary small-button" hidden data-i18n="taskDetails">展开任务</button>
             </div>
           </div>
           <input id="subtitleImportFile" type="file" accept="application/json,.json,.srt,text/vtt,.vtt,.ass,.ssa" hidden>
@@ -166,7 +166,7 @@
           <label>
             <span data-i18n="targetLanguage">目标语言</span>
             <select id="targetLanguage">
-              <option value="zh-CN" data-i18n="targetChinese">中文（简体）</option>
+              <option value="zh-CN" data-i18n="targetChinese">中文</option>
               <option value="en" data-i18n="targetEnglish">英文</option>
               <option value="ja" data-i18n="langJapanese">日语</option>
               <option value="fr" data-i18n="langFrench">法语</option>
@@ -176,19 +176,15 @@
             </select>
           </label>
           <label>
-            <span data-i18n="asrWorkers">ASR 并发</span>
-            <input id="asrWorkers" type="number" min="1" max="8">
-          </label>
-          <label>
             <span data-i18n="translationWorkers">翻译并发</span>
             <input id="translationWorkers" type="number" min="1" max="6">
           </label>
           <label>
-            <span data-i18n="chunkMinutes">翻译分段时长（分钟）</span>
+            <span data-i18n="chunkMinutes">字幕分组时长（分钟）</span>
             <input id="chunkMinutes" type="number" min="1" max="60" step="1">
           </label>
         </div>
-        <p id="funAsrLongFileHint" class="settings-hint" data-i18n="funAsrLongFileHint" hidden>Fun-ASR 使用长文件链路：ASR 并发不适用于该模式，系统会按 2 小时以内粗切，通常串行或最多少量并行提交。</p>
+        <p id="funAsrLongFileHint" class="settings-hint" data-i18n="funAsrLongFileHint" hidden>Fun-ASR 使用长文件链路：系统会按 2 小时以内粗切，完成后进入字幕翻译。</p>
         <h2 data-i18n="subtitleStyle">字幕样式</h2>
         <div class="settings-grid">
           <label>

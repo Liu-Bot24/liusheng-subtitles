@@ -27,6 +27,10 @@ export const FuguangBrowserMediaCandidates = (() => {
     if (bilibiliIdentity) {
       return `bilibili:${bilibiliIdentity}:${getBilibiliTrackIdentity(urlInfo, candidate)}`;
     }
+    if (candidate.url && isManifestCandidate(candidate)) {
+      const manifestKey = exactStreamUrl(candidate.url);
+      return `${candidate.kind}:${manifestKey || candidate.url || ""}`;
+    }
     if (candidate.url && isAsrSameContentCandidate(candidate)) {
       const trackIdentity = getGenericSegmentedTrackIdentity(urlInfo, candidate);
       return `media:${urlKey}${trackIdentity ? `:${trackIdentity}` : ""}`;
@@ -337,6 +341,10 @@ export const FuguangBrowserMediaCandidates = (() => {
   function isAsrSameContentCandidate(candidate) {
     return ["audio", "video", "playlist", "media"].includes(candidate.role) ||
       ["audio", "video", "hls", "dash", "media"].includes(candidate.kind);
+  }
+
+  function isManifestCandidate(candidate = {}) {
+    return candidate.kind === "hls" || candidate.kind === "dash" || MANIFEST_EXTENSIONS.has(candidate.ext);
   }
   
   function canonicalAsrFamilyPath(candidate) {
@@ -686,6 +694,15 @@ export const FuguangBrowserMediaCandidates = (() => {
     try {
       const url = new URL(rawUrl);
       return `${url.host}${canonicalPathname(url.pathname)}`;
+    } catch {
+      return rawUrl || "";
+    }
+  }
+
+  function exactStreamUrl(rawUrl) {
+    try {
+      const url = new URL(rawUrl);
+      return `${url.host}${url.pathname}${url.search}`;
     } catch {
       return rawUrl || "";
     }

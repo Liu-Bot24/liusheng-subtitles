@@ -1,7 +1,7 @@
 export const FuguangBrowserLanguage = (() => {
   const DEFAULT_TARGET_LANGUAGE = "zh-CN";
   const TARGET_LANGUAGE_NAMES = new Map([
-    ["zh-CN", "Simplified Chinese"],
+    ["zh-CN", "Chinese"],
     ["en", "English"],
     ["ja", "Japanese"],
     ["fr", "French"],
@@ -9,34 +9,7 @@ export const FuguangBrowserLanguage = (() => {
     ["de", "German"],
     ["ru", "Russian"]
   ]);
-  const TARGET_LANGUAGE_ALIASES = new Map([
-    ["zh-cn", "zh-CN"],
-    ["zh-hans", "zh-CN"],
-    ["zh", "zh-CN"],
-    ["chinese", "zh-CN"],
-    ["中文", "zh-CN"],
-    ["简体中文", "zh-CN"],
-    ["en", "en"],
-    ["english", "en"],
-    ["英文", "en"],
-    ["ja", "ja"],
-    ["jp", "ja"],
-    ["japanese", "ja"],
-    ["日语", "ja"],
-    ["fr", "fr"],
-    ["french", "fr"],
-    ["法语", "fr"],
-    ["ko", "ko"],
-    ["kr", "ko"],
-    ["korean", "ko"],
-    ["韩语", "ko"],
-    ["de", "de"],
-    ["german", "de"],
-    ["德语", "de"],
-    ["ru", "ru"],
-    ["russian", "ru"],
-    ["俄语", "ru"]
-  ]);
+  const TARGET_LANGUAGE_CODES = new Set(TARGET_LANGUAGE_NAMES.keys());
   const ASR_LANGUAGE_ALIASES = new Map([
     ["auto", ""],
     ["automatic", ""],
@@ -49,7 +22,6 @@ export const FuguangBrowserLanguage = (() => {
     ["zh", "zh"],
     ["chinese", "zh"],
     ["中文", "zh"],
-    ["简体中文", "zh"],
     ["en", "en"],
     ["english", "en"],
     ["英语", "en"],
@@ -90,8 +62,7 @@ export const FuguangBrowserLanguage = (() => {
     if (!text) {
       return fallback;
     }
-    const key = text.toLowerCase().replace("_", "-");
-    return TARGET_LANGUAGE_ALIASES.get(key) || fallback;
+    return TARGET_LANGUAGE_CODES.has(text) ? text : fallback;
   }
 
   function targetLanguageName(value) {
@@ -107,7 +78,7 @@ export const FuguangBrowserLanguage = (() => {
     const key = text.toLowerCase().replace("_", "-");
     const normalized = ASR_LANGUAGE_ALIASES.has(key)
       ? ASR_LANGUAGE_ALIASES.get(key)
-      : TARGET_LANGUAGE_ALIASES.get(key) || key;
+      : key;
     return normalized === DEFAULT_TARGET_LANGUAGE ? "zh" : normalized;
   }
 
