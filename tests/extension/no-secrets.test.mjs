@@ -16,14 +16,14 @@ const filesToContentScan = [...new Set([...trackedFiles, ...optionalLocalTextFil
   .filter(file => fs.existsSync(path.join(repoRoot, file)))
   .sort();
 
-const forbiddenPathPatterns = [
+const secretPathPatterns = [
   { label: "tracked dotenv file", pattern: /(^|\/)\.env(?:\.|$)(?!example$)/ },
   { label: "tracked private key file", pattern: /(^|\/)(?:id_rsa|id_dsa|id_ecdsa|id_ed25519|.*\.pem|.*\.p12|.*\.pfx)$/i },
   { label: "tracked secret cache", pattern: /(^|\/)(?:secrets?|credentials?|tokens?)(?:\/|$)/i }
 ];
 
 for (const file of trackedFiles) {
-  for (const { label, pattern } of forbiddenPathPatterns) {
+  for (const { label, pattern } of secretPathPatterns) {
     assert.equal(pattern.test(file), false, `${label}: ${file}`);
   }
 }

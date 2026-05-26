@@ -90,6 +90,7 @@ const I18N = {
     collapseTask: "收起任务",
     subtitlePlaceholder: "字幕生成后会显示在这里。",
     asrSettings: "语音识别",
+    configHelpLink: "配置说明",
     translationModel: "翻译模型",
     editingProfile: "正在编辑",
     addProfile: "新增档案",
@@ -103,11 +104,18 @@ const I18N = {
     off: "关闭",
     unsupported: "不支持",
     apiKey: "API 密钥",
+    getApiKeyLink: "获取 API 密钥",
+    modelNamePlaceholder: "输入或选择模型 ID",
+    modelListLoading: "正在获取模型列表...",
+    modelListLoaded: "已获取 {count} 个模型，可直接输入或从建议中选择。",
+    modelListNeedsKey: "该平台需要先填写 API Key 才能获取模型列表。",
+    modelListUnavailable: "该档案不支持自动获取模型列表，请手动填写模型名称。",
+    modelListFetchFailed: "模型列表获取失败：{error}",
     apiFormat: "接口类型",
     openaiFormat: "OpenAI 兼容格式",
     anthropicFormat: "Anthropic 兼容格式",
     whisperCompatibleAsr: "Whisper 兼容接口",
-    funAsrCompatibleAsr: "FunASR 兼容接口",
+    funAsrCompatibleAsr: "Fun-ASR 接口",
     targetLanguage: "目标语言",
     translationWorkers: "翻译并发",
     chunkMinutes: "字幕分组时长（分钟）",
@@ -347,6 +355,7 @@ const I18N = {
     collapseTask: "Hide Task",
     subtitlePlaceholder: "Subtitles will appear here.",
     asrSettings: "Speech Recognition",
+    configHelpLink: "Configuration Guide",
     translationModel: "Translation Model",
     editingProfile: "Editing",
     addProfile: "Add Profile",
@@ -360,11 +369,18 @@ const I18N = {
     off: "Off",
     unsupported: "Not Supported",
     apiKey: "API Key",
+    getApiKeyLink: "Get API key",
+    modelNamePlaceholder: "Type or choose a model ID",
+    modelListLoading: "Loading model list...",
+    modelListLoaded: "Loaded {count} models. Type or choose from suggestions.",
+    modelListNeedsKey: "Enter an API key before loading this provider's model list.",
+    modelListUnavailable: "This profile does not support automatic model list loading. Enter the model manually.",
+    modelListFetchFailed: "Could not load model list: {error}",
     apiFormat: "API Type",
     openaiFormat: "OpenAI Compatible",
     anthropicFormat: "Anthropic Compatible",
     whisperCompatibleAsr: "Whisper-compatible API",
-    funAsrCompatibleAsr: "FunASR-compatible API",
+    funAsrCompatibleAsr: "Fun-ASR API",
     targetLanguage: "Target Language",
     translationWorkers: "Translation Workers",
     chunkMinutes: "Subtitle Group Length (min)",
@@ -587,6 +603,7 @@ const normalizeStoredProfiles = FuguangSidepanelProfiles.normalizeStoredProfiles
 const placeholderBaseUrl = FuguangSidepanelProfiles.placeholderBaseUrl;
 const profileById = FuguangSidepanelProfiles.profileById;
 const profilesForStorage = FuguangSidepanelProfiles.profilesForStorage;
+const isBuiltInLlmProfile = FuguangSidepanelProfiles.isBuiltInLlmProfile;
 
 const elements = {
   pageTitle: document.querySelector("#pageTitle"),
@@ -634,6 +651,7 @@ const elements = {
   asrVadFilterField: document.querySelector("#asrVadFilterField"),
   asrVadFilter: document.querySelector("#asrVadFilter"),
   asrApiKey: document.querySelector("#asrApiKey"),
+  asrApiKeyHelpLink: document.querySelector("#asrApiKeyHelpLink"),
   asrApiKeyHint: document.querySelector("#asrApiKeyHint"),
   llmProfileId: document.querySelector("#llmProfileId"),
   llmProfileName: document.querySelector("#llmProfileName"),
@@ -642,7 +660,10 @@ const elements = {
   llmProviderType: document.querySelector("#llmProviderType"),
   llmBaseUrl: document.querySelector("#llmBaseUrl"),
   llmModel: document.querySelector("#llmModel"),
+  llmModelSelect: document.querySelector("#llmModelSelect"),
+  llmModelHint: document.querySelector("#llmModelHint"),
   llmApiKey: document.querySelector("#llmApiKey"),
+  llmApiKeyHelpLink: document.querySelector("#llmApiKeyHelpLink"),
   llmApiKeyHint: document.querySelector("#llmApiKeyHint"),
   sourceLanguage: document.querySelector("#sourceLanguage"),
   targetLanguage: document.querySelector("#targetLanguage"),
@@ -666,6 +687,7 @@ let asrProfiles = [];
 let llmProfiles = [];
 let currentAsrProfileId = "";
 let currentLlmProfileId = "";
+let llmModelListRequestId = 0;
 let startRequestInFlight = false;
 let retryRequestInFlight = false;
 let asrRetryRequestInFlight = false;
@@ -760,6 +782,7 @@ elements.llmProfileId.addEventListener("change", () => {
 });
 elements.addLlmProfile.addEventListener("click", () => addProfile("llm"));
 elements.deleteLlmProfile.addEventListener("click", () => deleteProfile("llm"));
+elements.llmModel.addEventListener("focus", () => refreshSelectedLlmModelList());
 elements.llmProviderType.addEventListener("change", () => {
   elements.llmBaseUrl.placeholder = placeholderBaseUrl(elements.llmProviderType.value);
 });
@@ -866,9 +889,14 @@ async function init() {
   [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
   await loadSettings();
   applyLocale();
+  showTab(tabFromLocationHash());
   await activateCurrentPage();
   await refreshStatus();
   pollTimer = window.setInterval(refreshStatus, 1500);
+}
+
+function tabFromLocationHash() {
+  return window.location.hash === "#settings" ? "settings" : "task";
 }
 
 async function refreshActiveTab() {
@@ -1043,7 +1071,7 @@ function selectedProfile(kind) {
   return profileById(profiles, selectedId);
 }
 
-function updateAsrVadFilterAvailability(usesFunAsr) {
+function updateAsrVadFilterAvailability() {
   const select = elements.asrVadFilter;
   if (!select) {
     return;
@@ -1051,16 +1079,26 @@ function updateAsrVadFilterAvailability(usesFunAsr) {
   const options = Array.from(select.options || select.children || []);
   for (const option of options) {
     if (option.value === "off") {
-      option.textContent = usesFunAsr ? t("unsupported") : t("off");
+      option.textContent = t("off");
     }
-    if (option.value === "auto" || option.value === "on") {
-      option.hidden = usesFunAsr;
+    option.hidden = false;
+  }
+  select.disabled = false;
+}
+
+function updateAsrProviderTypeOptions(profile) {
+  const select = elements.asrProviderType;
+  if (!select) {
+    return;
+  }
+  const allowFunAsr = profile?.providerType === "dashscope_funasr";
+  for (const option of Array.from(select.options || select.children || [])) {
+    if (option.value !== "dashscope_funasr") {
+      continue;
     }
+    option.hidden = !allowFunAsr;
+    option.disabled = !allowFunAsr;
   }
-  if (usesFunAsr) {
-    select.value = "off";
-  }
-  select.disabled = usesFunAsr;
 }
 
 function isBuiltInAsrTemplate(profile) {
@@ -1072,7 +1110,149 @@ function isLockedAsrProviderType(profile) {
 }
 
 function shouldHideAsrProviderType(profile) {
-  return profile?.id === "xai_grok" || profile?.providerType === "xai";
+  return true;
+}
+
+function defaultLlmTemplateById(id) {
+  return FuguangSidepanelProfiles.KNOWN_LLM_PROFILES.find(profile => profile.id === id) || null;
+}
+
+function defaultAsrTemplateById(id) {
+  return FuguangSidepanelProfiles.KNOWN_ASR_PROFILES.find(profile => profile.id === id) || null;
+}
+
+function apiKeyUrlForProfile(kind, profile) {
+  const asrUrls = {
+    openai_whisper: "https://platform.openai.com/api-keys",
+    groq_whisper: "https://console.groq.com/keys",
+    xai_grok: "https://console.x.ai/",
+    dashscope_funasr: "https://bailian.console.aliyun.com/?tab=model#/api-key"
+  };
+  const llmUrls = {
+    siliconflow_llm: "https://cloud.siliconflow.cn/i/My0p5Jgs",
+    bailian_llm: "https://bailian.console.aliyun.com/?tab=model#/model-market",
+    volcengine_llm: "https://console.volcengine.com/ark/region:ark+cn-beijing/model",
+    openrouter_llm: "https://openrouter.ai/models"
+  };
+  return (kind === "asr" ? asrUrls : llmUrls)[profile?.id] || "";
+}
+
+function updateApiKeyHelpLink(kind, profile) {
+  const link = kind === "asr" ? elements.asrApiKeyHelpLink : elements.llmApiKeyHelpLink;
+  if (!link) {
+    return;
+  }
+  const url = apiKeyUrlForProfile(kind, profile);
+  link.hidden = !url;
+  if (url) {
+    link.href = url;
+  } else {
+    link.removeAttribute("href");
+  }
+}
+
+function llmModelListEndpoint(profile) {
+  if (!profile) {
+    return null;
+  }
+  if (profile.id === "openrouter_llm") {
+    return { url: "https://openrouter.ai/api/v1/models", requiresKey: false };
+  }
+  if (["siliconflow_llm", "bailian_llm", "volcengine_llm"].includes(profile.id)) {
+    const baseUrl = String(profile.baseUrl || "").trim();
+    if (!baseUrl) {
+      return null;
+    }
+    return { url: `${baseUrl.replace(/\/+$/, "")}/models`, requiresKey: true };
+  }
+  return null;
+}
+
+function setLlmModelHint(text = "") {
+  if (!elements.llmModelHint) {
+    return;
+  }
+  elements.llmModelHint.textContent = text;
+  elements.llmModelHint.hidden = !text;
+}
+
+function renderLlmModelSelect(models, currentModel = "") {
+  const select = elements.llmModelSelect;
+  if (!select) {
+    return;
+  }
+  if (!models.length) {
+    select.replaceChildren();
+    select.hidden = true;
+    return;
+  }
+  const values = [...new Set(models.map(value => String(value || "").trim()).filter(Boolean))];
+  if (!values.length) {
+    select.replaceChildren();
+    select.hidden = true;
+    return;
+  }
+  const options = values.map(model => {
+    const option = document.createElement("option");
+    option.value = model;
+    option.textContent = model;
+    return option;
+  });
+  select.replaceChildren(...options);
+  select.value = values.includes(currentModel) ? currentModel : values[0];
+  select.hidden = false;
+}
+
+function parseModelListResponse(payload) {
+  const items = Array.isArray(payload?.data)
+    ? payload.data
+    : Array.isArray(payload?.models)
+      ? payload.models
+      : [];
+  return [...new Set(items.map(item => {
+    if (typeof item === "string") {
+      return item;
+    }
+    return item?.id || item?.model || item?.name || "";
+  }).map(value => String(value || "").trim()).filter(Boolean))];
+}
+
+async function refreshSelectedLlmModelList() {
+  saveProfileFields("llm", elements.llmProfileId.value);
+  const profile = selectedProfile("llm");
+  const endpoint = llmModelListEndpoint(profile);
+  if (!endpoint) {
+    renderLlmModelSelect([], elements.llmModel.value.trim());
+    setLlmModelHint(isBuiltInLlmProfile(profile) ? t("modelListUnavailable") : "");
+    return;
+  }
+  const apiKey = elements.llmApiKey.value.trim();
+  if (endpoint.requiresKey && !apiKey) {
+    renderLlmModelSelect([], elements.llmModel.value.trim());
+    setLlmModelHint(t("modelListNeedsKey"));
+    return;
+  }
+  const requestId = ++llmModelListRequestId;
+  setLlmModelHint(t("modelListLoading"));
+  try {
+    const headers = endpoint.requiresKey ? { Authorization: `Bearer ${apiKey}` } : {};
+    const response = await fetch(endpoint.url, { headers });
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    const models = parseModelListResponse(await response.json());
+    if (requestId !== llmModelListRequestId) {
+      return;
+    }
+    renderLlmModelSelect(models, elements.llmModel.value.trim());
+    setLlmModelHint(models.length ? t("modelListLoaded", { count: models.length }) : t("modelListUnavailable"));
+  } catch (error) {
+    if (requestId !== llmModelListRequestId) {
+      return;
+    }
+    renderLlmModelSelect([], elements.llmModel.value.trim());
+    setLlmModelHint(t("modelListFetchFailed", { error: formatRuntimeError(error.message) }));
+  }
 }
 
 function setFieldHidden(field, hidden) {
@@ -1112,7 +1292,8 @@ function renderSelectedProfile(kind) {
     const builtInTemplate = isBuiltInAsrTemplate(profile);
     setFieldHidden(elements.asrProviderTypeField, shouldHideAsrProviderType(profile));
     if (elements.asrProviderType) {
-      elements.asrProviderType.value = normalizeCustomProfileProviderType("asr", profile.providerType);
+      updateAsrProviderTypeOptions(profile);
+      elements.asrProviderType.value = usesFunAsr ? "dashscope_funasr" : normalizeCustomProfileProviderType("asr", profile.providerType);
       elements.asrProviderType.disabled = builtInTemplate;
     }
     elements.asrProfileName.value = profile.name || "";
@@ -1120,12 +1301,13 @@ function renderSelectedProfile(kind) {
     elements.asrModel.value = profile.model || "";
     elements.asrVadFilter.value = normalizeAsrVadFilterMode(profile.vadFilter);
     elements.asrApiKey.value = profile.apiKey || "";
+    updateApiKeyHelpLink("asr", profile);
     elements.asrBaseUrl.disabled = false;
     elements.asrApiKey.disabled = false;
     setFieldHidden(elements.asrModelField, usesXaiAsr);
     setFieldHidden(elements.asrVadFilterField, usesXaiAsr);
     elements.asrModel.disabled = usesXaiAsr;
-    updateAsrVadFilterAvailability(usesFunAsr);
+    updateAsrVadFilterAvailability();
     if (elements.funAsrLongFileHint) {
       elements.funAsrLongFileHint.hidden = !usesFunAsr;
     }
@@ -1136,12 +1318,23 @@ function renderSelectedProfile(kind) {
     elements.deleteAsrProfile.disabled = builtInTemplate;
     return;
   }
+  const builtInLlmTemplate = isBuiltInLlmProfile(profile);
   elements.llmProviderType.value = ["openai", "anthropic"].includes(profile.providerType) ? profile.providerType : "openai";
   elements.llmProfileName.value = profile.name || "";
   elements.llmBaseUrl.value = profile.baseUrl || "";
   elements.llmModel.value = profile.model || "";
+  renderLlmModelSelect([], profile.model || "");
+  setLlmModelHint("");
   elements.llmApiKey.value = profile.apiKey || "";
+  updateApiKeyHelpLink("llm", profile);
+  elements.llmProfileName.disabled = builtInLlmTemplate;
+  elements.llmProviderType.disabled = builtInLlmTemplate;
+  elements.deleteLlmProfile.disabled = builtInLlmTemplate;
+  elements.llmBaseUrl.disabled = false;
+  elements.llmModel.disabled = false;
+  elements.llmApiKey.disabled = false;
   elements.llmBaseUrl.placeholder = placeholderBaseUrl(elements.llmProviderType.value);
+  elements.llmModel.placeholder = t("modelNamePlaceholder");
   elements.llmApiKey.placeholder = t("localOnlyPlaceholder");
   elements.llmApiKeyHint.textContent = t("llmKeyHint");
 }
@@ -1149,6 +1342,16 @@ function renderSelectedProfile(kind) {
 function saveProfileFields(kind, profileId) {
   if (kind === "asr") {
     const profile = profileById(asrProfiles, profileId || elements.asrProfileId.value);
+    if (isBuiltInAsrTemplate(profile)) {
+      const template = defaultAsrTemplateById(profile.id) || profile;
+      profile.name = template.name || profile.name || "";
+      profile.providerType = template.providerType || "openai";
+      profile.baseUrl = template.baseUrl || "";
+      profile.model = template.model || "";
+      profile.vadFilter = template.vadFilter || "auto";
+      profile.apiKey = elements.asrApiKey.value.trim();
+      return;
+    }
     if (!isLockedAsrProviderType(profile)) {
       profile.providerType = normalizeCustomProfileProviderType("asr", elements.asrProviderType.value || profile.providerType);
     }
@@ -1160,6 +1363,15 @@ function saveProfileFields(kind, profileId) {
     return;
   }
   const profile = profileById(llmProfiles, profileId || elements.llmProfileId.value);
+  if (isBuiltInLlmProfile(profile)) {
+    const template = defaultLlmTemplateById(profile.id) || profile;
+    profile.name = template.name || profile.name || "";
+    profile.providerType = template.providerType || "openai";
+    profile.baseUrl = elements.llmBaseUrl.value.trim() || template.baseUrl || "";
+    profile.model = elements.llmModel.value.trim() || template.model || "";
+    profile.apiKey = elements.llmApiKey.value.trim();
+    return;
+  }
   profile.name = elements.llmProfileName.value.trim() || profile.name || profile.model || t("unnamedProfile");
   profile.providerType = elements.llmProviderType.value.trim() || "openai";
   profile.baseUrl = elements.llmBaseUrl.value.trim();
@@ -1188,7 +1400,10 @@ function deleteProfile(kind) {
   const select = kind === "asr" ? elements.asrProfileId : elements.llmProfileId;
   const selectedId = select.value;
   const index = profiles.findIndex(profile => profile.id === selectedId);
-  if (kind === "asr" && isBuiltInAsrTemplate(profiles[index])) {
+  if (
+    (kind === "asr" && isBuiltInAsrTemplate(profiles[index])) ||
+    (kind === "llm" && isBuiltInLlmProfile(profiles[index]))
+  ) {
     renderSelectedProfile(kind);
     setMessage(t("profileDeleted"));
     return;

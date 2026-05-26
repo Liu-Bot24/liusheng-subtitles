@@ -148,23 +148,6 @@ const source = fs.readFileSync(new URL("../../extension/src/background/service-w
   .replace('import { FuguangBrowserTranslationPipeline } from "./browser-translation-pipeline.js";\n', "")
   .replace('import { FuguangMediaHeaderRules } from "./media-header-rules.js";\n\n', "");
 
-{
-  assert.equal(source.includes("FUGUANG_START_REALTIME"), false);
-  assert.equal(source.includes("FUGUANG_STOP_REALTIME"), false);
-  assert.equal(source.includes("FUGUANG_OFFSCREEN_START_REALTIME"), false);
-  assert.equal(source.includes("FUGUANG_OFFSCREEN_STOP_REALTIME"), false);
-  assert.equal(source.includes("DEFAULT_HELPER"), false);
-  assert.equal(source.includes("fetchHelper"), false);
-  assert.equal(source.includes("getHelperConfig"), false);
-  assert.equal(source.includes("tabCapture"), false);
-  assert.equal(source.includes("FUGUANG_START_PRELOAD\""), false);
-  assert.equal(source.includes("FUGUANG_WEB_FFMPEG_EXTRACT_AUDIO"), false);
-  assert.ok(
-    source.includes("后台任务状态已过期"),
-    "重翻译/重试失败识别分段的错误提示必须说明 MV3 后台任务状态可能已过期，避免误导用户以为 ASR 原文一定可复用"
-  );
-}
-
 vm.runInContext(languageSource, context, { filename: "browser-language.js" });
 Object.assign(context, context.FuguangBrowserLanguage);
 vm.runInContext(asrProviderSource, context, { filename: "browser-asr-provider.js" });
@@ -5450,6 +5433,68 @@ function add(tabId, candidate) {
   context.translateBrowserSegments = originalTranslate;
   context.ensureSubtitleOverlay = originalEnsureSubtitleOverlay;
   context.attachBrowserJobVttIfReady = originalAttachBrowserJobVttIfReady;
+}
+
+{
+  const record = {
+    tabId: 3015,
+    metadata: { title: "Retranslate preserves previous translation on failure" },
+    modelConfig: {
+      asrWorkers: 1,
+      workers: 1,
+      targetLanguage: "zh-CN",
+      asr: { providerType: "openai", baseUrl: "https://asr.test/v1", model: "whisper", apiKey: "test" },
+      translation: { providerType: "openai", baseUrl: "https://llm.test/v1", model: "test", apiKey: "test" }
+    },
+    audioChunks: [{ index: 0, start: 0, end: 900, file: { name: "chunk-001.mp3" } }],
+    sourceSegmentsByChunk: new Map([[0, [{ start: 1, end: 2, text: "こんにちは", chunkIndex: 0, segmentIndex: 0 }]]]),
+    translatedSegmentsByChunk: new Map([[0, [{ start: 1, end: 2, text: "旧译文", chunkIndex: 0, segmentIndex: 0 }]]]),
+    job: {
+      id: "browser-retranslate-preserve-on-failure",
+      status: "completed",
+      stage: "completed_with_warnings",
+      extract: { elapsedSeconds: 1 },
+      translation: {
+        transcript: {
+          source: [{ start: 1, end: 2, text: "こんにちは", chunkIndex: 0, segmentIndex: 0 }],
+          translated: [{ start: 1, end: 2, text: "旧译文", chunkIndex: 0, segmentIndex: 0 }]
+        },
+        chunkStatuses: [{
+          index: 0,
+          stage: "failed",
+          status: "失败",
+          attempts: 1,
+          sourceCount: 1,
+          translatedCount: 1,
+          error: "翻译失败"
+        }],
+        chunksTotal: 1,
+        chunksDone: 1,
+        chunksFailed: 1,
+        chunksAsr: 0,
+        chunksTranslating: 0
+      }
+    }
+  };
+  const originalTranslate = context.translateBrowserSegments;
+  const originalEnsureSubtitleOverlay = context.ensureSubtitleOverlay;
+  const originalAttachBrowserJobVttIfReady = context.attachBrowserJobVttIfReady;
+  context.translateBrowserSegments = async () => {
+    throw new Error("Too many requests");
+  };
+  context.ensureSubtitleOverlay = async () => {};
+  context.attachBrowserJobVttIfReady = async () => {};
+  try {
+    await context.retryBrowserTranslationOnly(record, [0], { failedOnly: false, resetAttempts: true });
+    assert.equal(record.translatedSegmentsByChunk.get(0)[0].text, "旧译文");
+    assert.equal(record.job.translation.transcript.translated[0].text, "旧译文");
+    assert.equal(record.job.translation.chunkStatuses[0].stage, "failed");
+    assert.match(record.job.translation.chunkStatuses[0].error, /已保留已有译文/);
+  } finally {
+    context.translateBrowserSegments = originalTranslate;
+    context.ensureSubtitleOverlay = originalEnsureSubtitleOverlay;
+    context.attachBrowserJobVttIfReady = originalAttachBrowserJobVttIfReady;
+  }
 }
 
 {

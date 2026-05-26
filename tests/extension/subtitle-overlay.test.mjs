@@ -320,7 +320,6 @@ function createHarness({ settings = {}, videos = [new FakeMedia()], legacyOverla
   assert.equal(source.includes("FUGUANG_SET_CAPTION"), false);
   assert.equal(source.includes("FUGUANG_CLEAR_CAPTION"), false);
   assert.equal(source.includes("realtime"), false);
-  assert.equal(source.includes("实时"), false);
   vm.runInContext(source, context, { filename: "subtitle-overlay.js" });
 
   return {

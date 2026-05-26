@@ -368,6 +368,28 @@ button:disabled {
   width: 3px;
 }
 
+.settings-section-heading {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  justify-content: flex-start;
+}
+
+.help-link {
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.25;
+  text-decoration: none;
+}
+
+.help-link:hover span[data-i18n],
+.help-link:focus-visible span[data-i18n] {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
 .subtitle-actions {
   align-items: center;
   display: flex;
@@ -727,6 +749,32 @@ label {
 label span {
   color: var(--muted);
   font-size: 12px;
+}
+
+.field-label-row {
+  align-items: baseline;
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.field-help-link {
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.25;
+  text-decoration: none;
+}
+
+.field-help-link span {
+  color: inherit;
+  font-size: inherit;
+}
+
+.field-help-link:hover span[data-i18n],
+.field-help-link:focus-visible span[data-i18n] {
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 .profile-row {

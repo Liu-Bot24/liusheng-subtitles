@@ -18,13 +18,47 @@ const asrProfiles = backgroundProfiles.KNOWN_ASR_PROFILES;
 const llmProfiles = backgroundProfiles.KNOWN_LLM_PROFILES;
 assert.ok(asrProfiles.some(profile => profile.id === backgroundProfiles.DEFAULT_ASR_PROFILE_ID));
 assert.ok(llmProfiles.some(profile => profile.id === backgroundProfiles.DEFAULT_LLM_PROFILE_ID));
-assert.equal(llmProfiles.length, 1);
+assert.equal(llmProfiles.length, 5);
 const defaultLlmProfile = llmProfiles.find(profile => profile.id === backgroundProfiles.DEFAULT_LLM_PROFILE_ID);
 assert.equal(defaultLlmProfile.id, "openai_custom");
 assert.equal(defaultLlmProfile.name, "自定义档案");
 assert.equal(defaultLlmProfile.providerType, "openai");
 assert.equal(defaultLlmProfile.baseUrl, "");
 assert.equal(defaultLlmProfile.model, "");
+assert.deepEqual(
+  llmProfiles.filter(profile => profile.id !== backgroundProfiles.DEFAULT_LLM_PROFILE_ID).map(profile => ({
+    id: profile.id,
+    providerType: profile.providerType,
+    baseUrl: profile.baseUrl,
+    model: profile.model
+  })),
+  [
+    {
+      id: "siliconflow_llm",
+      providerType: "openai",
+      baseUrl: "https://api.siliconflow.cn/v1",
+      model: "deepseek-ai/DeepSeek-V4-Flash"
+    },
+    {
+      id: "bailian_llm",
+      providerType: "openai",
+      baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      model: "qwen3.7-max"
+    },
+    {
+      id: "volcengine_llm",
+      providerType: "openai",
+      baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
+      model: "doubao-seed-2-0-lite-260428"
+    },
+    {
+      id: "openrouter_llm",
+      providerType: "openai",
+      baseUrl: "https://openrouter.ai/api/v1",
+      model: "deepseek/deepseek-v4-flash:free"
+    }
+  ]
+);
 assert.equal(asrProfiles.every(profile => profile.apiKey === ""), true);
 assert.equal(llmProfiles.every(profile => profile.apiKey === ""), true);
 assert.equal(asrProfiles.every(profile => ["auto", "on", "off"].includes(profile.vadFilter)), true);

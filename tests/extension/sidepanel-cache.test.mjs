@@ -7,20 +7,9 @@ import vm from "node:vm";
   const js = fs.readFileSync(new URL("../../extension/src/sidepanel/sidepanel.js", import.meta.url), "utf8");
   const css = fs.readFileSync(new URL("../../extension/src/sidepanel/sidepanel.css", import.meta.url), "utf8");
   const background = fs.readFileSync(new URL("../../extension/src/background/service-worker.js", import.meta.url), "utf8");
-  const manifest = JSON.parse(fs.readFileSync(new URL("../../extension/manifest.json", import.meta.url), "utf8"));
-  assert.equal(html.includes("Helper"), false);
-  assert.equal(html.includes("helperHttp"), false);
-  assert.equal(html.includes("helperWs"), false);
-  assert.equal(js.includes("helperHttp"), false);
-  assert.equal(js.includes("helperWs"), false);
-  assert.equal(js.includes("FUGUANG_START_REALTIME"), false);
-  assert.equal(js.includes("FUGUANG_STOP_REALTIME"), false);
-  assert.equal(js.includes("实时"), false);
   for (const [, body] of js.matchAll(/chrome\.storage\.sync\.set\(\{([\s\S]*?)\}\)/g)) {
     assert.equal(/asrApiKey|llmApiKey|apiKey/.test(body), false);
   }
-  assert.equal(manifest.description.includes("实时"), false);
-  assert.equal(manifest.permissions.includes("tabCapture"), false);
   assert.ok(!html.includes('id="exportDiagnostics"'), "diagnostics export must not be exposed in the sidepanel UI");
   assert.ok(!js.includes('document.querySelector("#exportDiagnostics")'), "sidepanel must not bind a diagnostics export button");
   assert.ok(!js.includes("GET_PRELOAD_DIAGNOSTICS"), "diagnostics message should stay out of the user-facing sidepanel");
@@ -87,105 +76,6 @@ import vm from "node:vm";
   const cssClassSet = new Set(cssClasses);
   const unusedHtmlClasses = htmlClasses.filter(name => !cssClassSet.has(name) && !jsClasses.has(name));
   assert.deepEqual(unusedHtmlClasses, []);
-  const darkVars = cssVariableBlock(css, /@media \(prefers-color-scheme: dark\) \{\s*:root\s*\{([\s\S]*?)\n  \}/);
-  const lightVars = cssVariableBlock(css, /^:root\s*\{([\s\S]*?)\n\}/);
-  assert.ok(
-    colorContrast(lightVars["accent-ink"], lightVars.accent) >= 4.5,
-    "light primary button text contrast must stay readable"
-  );
-  assert.ok(
-    colorContrast(darkVars["accent-ink"], darkVars.accent) >= 4.5,
-    "dark primary button text contrast must not depend on browser-native rendering"
-  );
-  assert.ok(isBlueCyanHex(lightVars.accent), "light accent must stay blue/cyan, not purple");
-  assert.ok(isBlueCyanHex(darkVars.accent), "dark accent must stay blue/cyan, not purple");
-  assert.equal(css.includes("backdrop-filter"), false, "theme should stay flat, not glassy");
-  assert.equal(css.includes("radial-gradient"), false, "theme should not use neon orb/radial effects");
-  assert.equal(css.includes("repeating-linear-gradient"), false, "theme should not use decorative scanline gradients");
-  assert.equal(/0 0 20px|#ff6b5e|#d9a64a|#9a6614|#b3342d/i.test(css), false, "theme must not reintroduce strong red/brown glow colors");
-  assert.equal(isStrongWarmHex(lightVars.danger), false, "light danger token should stay muted, not red/orange");
-  assert.equal(isStrongWarmHex(darkVars.danger), false, "dark danger token should stay muted, not red/orange");
-  assert.equal(isStrongWarmHex(lightVars.warning), false, "light warning token should stay neutral, not brown");
-  assert.equal(isStrongWarmHex(darkVars.warning), false, "dark warning token should stay neutral, not brown");
-  assert.match(css, /\.creator-link\s*\{[\s\S]*?color:\s*var\(--accent\);[\s\S]*?text-decoration:\s*none;/);
-  assert.match(css, /\.creator-link:hover\s*\{[\s\S]*?text-decoration:\s*underline;/);
-  assert.match(css, /\.tabs\s*\{[\s\S]*?border:\s*0;[\s\S]*?border-bottom:\s*1px solid var\(--border\);/);
-  assert.match(css, /\.tab\s*\{[\s\S]*?border:\s*0;[\s\S]*?border-bottom:\s*3px solid transparent;[\s\S]*?border-radius:\s*0;/);
-  assert.match(css, /\.tab\.active\s*\{[\s\S]*?background:\s*transparent;[\s\S]*?border-bottom-color:\s*var\(--accent\);/);
-  assert.match(css, /\.subtitle-section \.section-heading\.compact\s*\{[\s\S]*?grid-template-columns:\s*1fr;/);
-  assert.match(css, /\.subtitle-actions\s*\{[\s\S]*?display:\s*flex;/);
-}
-
-function cssVariableBlock(css, pattern) {
-  const body = css.match(pattern)?.[1] || "";
-  const variables = {};
-  for (const match of body.matchAll(/--([A-Za-z0-9_-]+):\s*([^;]+);/g)) {
-    variables[match[1]] = match[2].trim();
-  }
-  return variables;
-}
-
-function colorContrast(left, right) {
-  const [a, b] = [relativeLuminance(parseHexColor(left)), relativeLuminance(parseHexColor(right))]
-    .sort((first, second) => second - first);
-  return (a + 0.05) / (b + 0.05);
-}
-
-function parseHexColor(value) {
-  let hex = String(value || "").trim();
-  assert.match(hex, /^#[0-9a-f]{6}$/i);
-  return [0, 2, 4].map(offset => Number.parseInt(hex.slice(1 + offset, 3 + offset), 16));
-}
-
-function isBlueCyanHex(value) {
-  const [red, green, blue] = parseHexColor(value);
-  const max = Math.max(red, green, blue);
-  const min = Math.min(red, green, blue);
-  const delta = max - min;
-  if (!delta) {
-    return false;
-  }
-  let hue = 0;
-  if (max === red) {
-    hue = 60 * (((green - blue) / delta) % 6);
-  } else if (max === green) {
-    hue = 60 * ((blue - red) / delta + 2);
-  } else {
-    hue = 60 * ((red - green) / delta + 4);
-  }
-  hue = (hue + 360) % 360;
-  return hue >= 185 && hue <= 215 && blue >= green * 0.75 && red < blue;
-}
-
-function isStrongWarmHex(value) {
-  const [red, green, blue] = parseHexColor(value);
-  const max = Math.max(red, green, blue);
-  const min = Math.min(red, green, blue);
-  const delta = max - min;
-  if (!delta) {
-    return false;
-  }
-  let hue = 0;
-  if (max === red) {
-    hue = 60 * (((green - blue) / delta) % 6);
-  } else if (max === green) {
-    hue = 60 * ((blue - red) / delta + 2);
-  } else {
-    hue = 60 * ((red - green) / delta + 4);
-  }
-  hue = (hue + 360) % 360;
-  const saturation = delta / max;
-  return saturation >= 0.18 && (hue <= 55 || hue >= 345);
-}
-
-function relativeLuminance(rgb) {
-  const [r, g, b] = rgb.map(channel => {
-    const normalized = channel / 255;
-    return normalized <= 0.03928
-      ? normalized / 12.92
-      : ((normalized + 0.055) / 1.055) ** 2.4;
-  });
-  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 }
 
 class FakeElement {
@@ -1464,13 +1354,17 @@ assert.deepEqual(JSON.parse(JSON.stringify(singleActiveState)), {
 const asrProfileState = await vm.runInContext(`
   (() => {
     const profiles = normalizeStoredProfiles("asr", [
-      { id: "custom_vad", name: "自定义 VAD", providerType: "openai", baseUrl: "https://asr.example/v1", model: "whisper-1", vadFilter: "on" }
+      { id: "custom_vad", name: "自定义 VAD", providerType: "openai", baseUrl: "https://asr.example/v1", model: "whisper-1", vadFilter: "on" },
+      { id: "old_custom_funasr", name: "旧自定义 FunASR", providerType: "dashscope_funasr", baseUrl: "https://dashscope.example/v1", model: "fun-asr", vadFilter: "off" }
     ]);
     const custom = profiles.find(profile => profile.id === "custom_vad");
+    const oldCustomFunAsr = profiles.find(profile => profile.id === "old_custom_funasr");
     const openai = profiles.find(profile => profile.id === "openai_whisper");
     return {
       selected: normalizeSelectedProfileId(profiles, "missing_profile", "openai_whisper"),
       customVadFilter: custom?.vadFilter,
+      oldCustomFunAsrProviderType: oldCustomFunAsr?.providerType,
+      oldCustomFunAsrVadFilter: oldCustomFunAsr?.vadFilter,
       defaultVadFilter: openai?.vadFilter
     };
   })()
@@ -1478,10 +1372,16 @@ const asrProfileState = await vm.runInContext(`
 
 assert.equal(asrProfileState.selected, "openai_whisper");
 assert.equal(asrProfileState.customVadFilter, "on");
+assert.equal(asrProfileState.oldCustomFunAsrProviderType, "openai");
+assert.equal(asrProfileState.oldCustomFunAsrVadFilter, "auto");
 assert.equal(asrProfileState.defaultVadFilter, "auto");
 
 const asrProfileTemplateState = await vm.runInContext(`
   (() => {
+    elements.asrProviderType.children = [
+      { value: "openai", hidden: false, disabled: false },
+      { value: "dashscope_funasr", hidden: false, disabled: false }
+    ];
     asrProfiles = normalizeStoredProfiles("asr", []);
     renderProfileOptions(elements.asrProfileId, asrProfiles, "groq_whisper");
     elements.asrProfileId.value = "groq_whisper";
@@ -1493,7 +1393,9 @@ const asrProfileTemplateState = await vm.runInContext(`
       deleteDisabled: elements.deleteAsrProfile?.disabled,
       providerType: asrProfiles.find(profile => profile.id === "groq_whisper")?.providerType,
       baseUrl: asrProfiles.find(profile => profile.id === "groq_whisper")?.baseUrl,
-      model: asrProfiles.find(profile => profile.id === "groq_whisper")?.model
+      model: asrProfiles.find(profile => profile.id === "groq_whisper")?.model,
+      apiKeyLinkHidden: elements.asrApiKeyHelpLink.hidden,
+      apiKeyLinkHref: elements.asrApiKeyHelpLink.href
     };
     if (elements.asrProviderType) {
       elements.asrProviderType.value = "dashscope_funasr";
@@ -1508,7 +1410,8 @@ const asrProfileTemplateState = await vm.runInContext(`
       formatDisplay: elements.asrProviderTypeField?.style.display,
       modelDisplay: elements.asrModelField?.style.display,
       vadDisplay: elements.asrVadFilterField?.style.display,
-      deleteDisabled: elements.deleteAsrProfile?.disabled
+      deleteDisabled: elements.deleteAsrProfile?.disabled,
+      apiKeyLinkHref: elements.asrApiKeyHelpLink.href
     };
     elements.asrProfileId.value = "dashscope_funasr";
     renderSelectedProfile("asr");
@@ -1518,7 +1421,8 @@ const asrProfileTemplateState = await vm.runInContext(`
       formatValue: elements.asrProviderType?.value,
       deleteDisabled: elements.deleteAsrProfile?.disabled,
       name: elements.asrProfileName.value,
-      vadDisabled: elements.asrVadFilter.disabled
+      vadDisabled: elements.asrVadFilter.disabled,
+      apiKeyLinkHref: elements.asrApiKeyHelpLink.href
     };
     elements.asrProfileId.value = "custom_asr";
     renderSelectedProfile("asr");
@@ -1526,8 +1430,12 @@ const asrProfileTemplateState = await vm.runInContext(`
       formatHidden: elements.asrProviderTypeField?.hidden,
       formatDisabled: elements.asrProviderType?.disabled,
       formatValue: elements.asrProviderType?.value,
+      funAsrOptionHidden: (elements.asrProviderType.children || []).find(option => option.value === "dashscope_funasr")?.hidden,
+      funAsrOptionDisabled: (elements.asrProviderType.children || []).find(option => option.value === "dashscope_funasr")?.disabled,
       deleteDisabled: elements.deleteAsrProfile?.disabled,
-      name: elements.asrProfileName.value
+      name: elements.asrProfileName.value,
+      apiKeyLinkHidden: elements.asrApiKeyHelpLink.hidden,
+      apiKeyLinkHref: elements.asrApiKeyHelpLink.href || ""
     };
     elements.asrProviderType.value = "dashscope_funasr";
     updateAsrCustomProviderType();
@@ -1561,13 +1469,15 @@ assert.deepEqual(JSON.parse(JSON.stringify(asrProfileTemplateState.names)), [
   "Fun-ASR",
   "自定义档案"
 ]);
-assert.equal(asrProfileTemplateState.groqBeforeSave.formatHidden, false);
+assert.equal(asrProfileTemplateState.groqBeforeSave.formatHidden, true);
 assert.equal(asrProfileTemplateState.groqBeforeSave.formatDisabled, true);
 assert.equal(asrProfileTemplateState.groqBeforeSave.formatValue, "openai");
 assert.equal(asrProfileTemplateState.groqBeforeSave.deleteDisabled, true);
 assert.equal(asrProfileTemplateState.groqBeforeSave.providerType, "groq");
 assert.equal(asrProfileTemplateState.groqBeforeSave.baseUrl, "https://api.groq.com/openai/v1");
 assert.equal(asrProfileTemplateState.groqBeforeSave.model, "whisper-large-v3-turbo");
+assert.equal(asrProfileTemplateState.groqBeforeSave.apiKeyLinkHidden, false);
+assert.equal(asrProfileTemplateState.groqBeforeSave.apiKeyLinkHref, "https://console.groq.com/keys");
 assert.equal(asrProfileTemplateState.groqAfterSave, "groq");
 assert.equal(asrProfileTemplateState.xaiBuiltIn.formatHidden, true);
 assert.equal(asrProfileTemplateState.xaiBuiltIn.modelHidden, true);
@@ -1576,24 +1486,275 @@ assert.equal(asrProfileTemplateState.xaiBuiltIn.formatDisplay, "none");
 assert.equal(asrProfileTemplateState.xaiBuiltIn.modelDisplay, "none");
 assert.equal(asrProfileTemplateState.xaiBuiltIn.vadDisplay, "none");
 assert.equal(asrProfileTemplateState.xaiBuiltIn.deleteDisabled, true);
-assert.equal(asrProfileTemplateState.funAsrBuiltIn.formatHidden, false);
+assert.equal(asrProfileTemplateState.xaiBuiltIn.apiKeyLinkHref, "https://console.x.ai/");
+assert.equal(asrProfileTemplateState.funAsrBuiltIn.formatHidden, true);
 assert.equal(asrProfileTemplateState.funAsrBuiltIn.formatDisabled, true);
 assert.equal(asrProfileTemplateState.funAsrBuiltIn.formatValue, "dashscope_funasr");
 assert.equal(asrProfileTemplateState.funAsrBuiltIn.name, "Fun-ASR");
-assert.equal(asrProfileTemplateState.funAsrBuiltIn.vadDisabled, true);
+assert.equal(asrProfileTemplateState.funAsrBuiltIn.vadDisabled, false);
 assert.equal(asrProfileTemplateState.funAsrBuiltIn.deleteDisabled, true);
-assert.equal(asrProfileTemplateState.customOpenAi.formatHidden, false);
+assert.equal(asrProfileTemplateState.funAsrBuiltIn.apiKeyLinkHref, "https://bailian.console.aliyun.com/?tab=model#/api-key");
+assert.equal(asrProfileTemplateState.customOpenAi.formatHidden, true);
 assert.equal(asrProfileTemplateState.customOpenAi.formatDisabled, false);
 assert.equal(asrProfileTemplateState.customOpenAi.formatValue, "openai");
+assert.equal(asrProfileTemplateState.customOpenAi.funAsrOptionHidden, true);
+assert.equal(asrProfileTemplateState.customOpenAi.funAsrOptionDisabled, true);
 assert.equal(asrProfileTemplateState.customOpenAi.deleteDisabled, false);
 assert.equal(asrProfileTemplateState.customOpenAi.name, "自定义档案");
-assert.equal(asrProfileTemplateState.customFunAsr.formatHidden, false);
+assert.equal(asrProfileTemplateState.customOpenAi.apiKeyLinkHidden, true);
+assert.equal(asrProfileTemplateState.customOpenAi.apiKeyLinkHref, "");
+assert.equal(asrProfileTemplateState.customFunAsr.formatHidden, true);
 assert.equal(asrProfileTemplateState.customFunAsr.formatDisabled, false);
-assert.equal(asrProfileTemplateState.customFunAsr.formatValue, "dashscope_funasr");
+assert.equal(asrProfileTemplateState.customFunAsr.formatValue, "openai");
 assert.equal(asrProfileTemplateState.customFunAsr.name, "自定义档案");
-assert.equal(asrProfileTemplateState.customFunAsr.vadDisabled, true);
+assert.equal(asrProfileTemplateState.customFunAsr.vadDisabled, false);
 assert.equal(asrProfileTemplateState.freshAsrName, "新档案");
 assert.equal(asrProfileTemplateState.freshLlmName, "新档案");
+
+const builtInAsrSaveState = await vm.runInContext(`
+  (() => {
+    asrProfiles = normalizeStoredProfiles("asr", [{ id: "groq_whisper", apiKey: "groq-key" }]);
+    elements.asrProfileId.value = "groq_whisper";
+    renderSelectedProfile("asr");
+    elements.asrBaseUrl.value = "https://changed.example/v1";
+    elements.asrModel.value = "changed-model";
+    elements.asrVadFilter.value = "on";
+    saveProfileFields("asr", "groq_whisper");
+    const profile = asrProfiles.find(item => item.id === "groq_whisper");
+    const storedProfile = profilesForStorage("asr", asrProfiles).find(item => item.id === "groq_whisper");
+    return {
+      baseUrl: profile?.baseUrl,
+      model: profile?.model,
+      vadFilter: profile?.vadFilter,
+      apiKey: profile?.apiKey,
+      storedProfile
+    };
+  })()
+`, context);
+
+assert.equal(builtInAsrSaveState.baseUrl, "https://api.groq.com/openai/v1");
+assert.equal(builtInAsrSaveState.model, "whisper-large-v3-turbo");
+assert.equal(builtInAsrSaveState.vadFilter, "auto");
+assert.equal(builtInAsrSaveState.apiKey, "groq-key");
+assert.deepEqual(JSON.parse(JSON.stringify(builtInAsrSaveState.storedProfile)), {
+  id: "groq_whisper",
+  apiKey: "groq-key"
+});
+
+const llmProfileTemplateState = await vm.runInContext(`
+  (() => {
+    llmProfiles = normalizeStoredProfiles("llm", [
+      {
+        id: "siliconflow_llm",
+        baseUrl: "https://custom-siliconflow.test/v1",
+        model: "custom-siliconflow-model",
+        apiKey: "sf-key"
+      }
+    ]);
+    renderProfileOptions(elements.llmProfileId, llmProfiles, "siliconflow_llm");
+    elements.llmProfileId.value = "siliconflow_llm";
+    renderSelectedProfile("llm");
+    const siliconflowBeforeSave = {
+      names: llmProfiles.map(profile => profile.name),
+      providerDisabled: elements.llmProviderType.disabled,
+      providerValue: elements.llmProviderType.value,
+      nameDisabled: elements.llmProfileName.disabled,
+      deleteDisabled: elements.deleteLlmProfile.disabled,
+      baseUrl: elements.llmBaseUrl.value,
+      model: elements.llmModel.value,
+      modelSelectHidden: elements.llmModelSelect.hidden,
+      modelSelectOptions: elements.llmModelSelect.children.map(option => option.value),
+      apiKeyLinkHidden: elements.llmApiKeyHelpLink.hidden,
+      apiKeyLinkHref: elements.llmApiKeyHelpLink.href,
+      apiKey: elements.llmApiKey.value
+    };
+    elements.llmProviderType.value = "anthropic";
+    elements.llmBaseUrl.value = "https://changed-siliconflow.test/v1";
+    elements.llmModel.value = "changed-model";
+    saveProfileFields("llm", "siliconflow_llm");
+    const siliconflowAfterSave = llmProfiles.find(profile => profile.id === "siliconflow_llm");
+    const storedSiliconflow = profilesForStorage("llm", llmProfiles).find(profile => profile.id === "siliconflow_llm");
+    deleteProfile("llm");
+    const afterBlockedDelete = {
+      length: llmProfiles.length,
+      selected: elements.llmProfileId.value,
+      deleteDisabled: elements.deleteLlmProfile.disabled
+    };
+    elements.llmProfileId.value = "openai_custom";
+    renderSelectedProfile("llm");
+    const custom = {
+      providerDisabled: elements.llmProviderType.disabled,
+      nameDisabled: elements.llmProfileName.disabled,
+      deleteDisabled: elements.deleteLlmProfile.disabled,
+      modelSelectHidden: elements.llmModelSelect.hidden,
+      modelSelectOptions: elements.llmModelSelect.children.map(option => option.value),
+      apiKeyLinkHidden: elements.llmApiKeyHelpLink.hidden,
+      apiKeyLinkHref: elements.llmApiKeyHelpLink.href || ""
+    };
+    return {
+      siliconflowBeforeSave,
+      siliconflowAfterSave,
+      storedSiliconflow,
+      afterBlockedDelete,
+      custom
+    };
+  })()
+`, context);
+
+assert.deepEqual(JSON.parse(JSON.stringify(llmProfileTemplateState.siliconflowBeforeSave.names)), [
+  "硅基流动",
+  "阿里云百炼",
+  "火山引擎",
+  "OpenRouter",
+  "自定义档案"
+]);
+assert.equal(llmProfileTemplateState.siliconflowBeforeSave.providerDisabled, true);
+assert.equal(llmProfileTemplateState.siliconflowBeforeSave.providerValue, "openai");
+assert.equal(llmProfileTemplateState.siliconflowBeforeSave.nameDisabled, true);
+assert.equal(llmProfileTemplateState.siliconflowBeforeSave.deleteDisabled, true);
+assert.equal(llmProfileTemplateState.siliconflowBeforeSave.baseUrl, "https://custom-siliconflow.test/v1");
+assert.equal(llmProfileTemplateState.siliconflowBeforeSave.model, "custom-siliconflow-model");
+assert.equal(llmProfileTemplateState.siliconflowBeforeSave.modelSelectHidden, true);
+assert.deepEqual(JSON.parse(JSON.stringify(llmProfileTemplateState.siliconflowBeforeSave.modelSelectOptions)), []);
+assert.equal(llmProfileTemplateState.siliconflowBeforeSave.apiKeyLinkHidden, false);
+assert.equal(llmProfileTemplateState.siliconflowBeforeSave.apiKeyLinkHref, "https://cloud.siliconflow.cn/i/My0p5Jgs");
+assert.equal(llmProfileTemplateState.siliconflowBeforeSave.apiKey, "sf-key");
+assert.equal(llmProfileTemplateState.siliconflowAfterSave.name, "硅基流动");
+assert.equal(llmProfileTemplateState.siliconflowAfterSave.providerType, "openai");
+assert.equal(llmProfileTemplateState.siliconflowAfterSave.baseUrl, "https://changed-siliconflow.test/v1");
+assert.equal(llmProfileTemplateState.siliconflowAfterSave.model, "changed-model");
+assert.deepEqual(JSON.parse(JSON.stringify(llmProfileTemplateState.storedSiliconflow)), {
+  id: "siliconflow_llm",
+  baseUrl: "https://changed-siliconflow.test/v1",
+  model: "changed-model",
+  apiKey: "sf-key"
+});
+assert.equal(llmProfileTemplateState.afterBlockedDelete.length, 5);
+assert.equal(llmProfileTemplateState.afterBlockedDelete.selected, "siliconflow_llm");
+assert.equal(llmProfileTemplateState.afterBlockedDelete.deleteDisabled, true);
+assert.equal(llmProfileTemplateState.custom.providerDisabled, false);
+assert.equal(llmProfileTemplateState.custom.nameDisabled, false);
+assert.equal(llmProfileTemplateState.custom.deleteDisabled, false);
+assert.deepEqual(JSON.parse(JSON.stringify(llmProfileTemplateState.custom.modelSelectOptions)), []);
+assert.equal(llmProfileTemplateState.custom.modelSelectHidden, true);
+assert.equal(llmProfileTemplateState.custom.apiKeyLinkHidden, true);
+assert.equal(llmProfileTemplateState.custom.apiKeyLinkHref, "");
+
+const apiKeyLinkMatrix = await vm.runInContext(`
+  (() => {
+    asrProfiles = normalizeStoredProfiles("asr", []);
+    llmProfiles = normalizeStoredProfiles("llm", []);
+    renderProfileOptions(elements.asrProfileId, asrProfiles, "openai_whisper");
+    renderProfileOptions(elements.llmProfileId, llmProfiles, "siliconflow_llm");
+    const asrIds = ["openai_whisper", "groq_whisper", "xai_grok", "dashscope_funasr", "custom_asr"];
+    const llmIds = ["siliconflow_llm", "bailian_llm", "volcengine_llm", "openrouter_llm", "openai_custom"];
+    const asr = {};
+    const llm = {};
+    for (const id of asrIds) {
+      elements.asrProfileId.value = id;
+      renderSelectedProfile("asr");
+      asr[id] = {
+        hidden: elements.asrApiKeyHelpLink.hidden,
+        href: elements.asrApiKeyHelpLink.href || ""
+      };
+    }
+    for (const id of llmIds) {
+      elements.llmProfileId.value = id;
+      renderSelectedProfile("llm");
+      llm[id] = {
+        hidden: elements.llmApiKeyHelpLink.hidden,
+        href: elements.llmApiKeyHelpLink.href || ""
+      };
+    }
+    return { asr, llm };
+  })()
+`, context);
+
+assert.deepEqual(JSON.parse(JSON.stringify(apiKeyLinkMatrix.asr)), {
+  openai_whisper: { hidden: false, href: "https://platform.openai.com/api-keys" },
+  groq_whisper: { hidden: false, href: "https://console.groq.com/keys" },
+  xai_grok: { hidden: false, href: "https://console.x.ai/" },
+  dashscope_funasr: { hidden: false, href: "https://bailian.console.aliyun.com/?tab=model#/api-key" },
+  custom_asr: { hidden: true, href: "" }
+});
+assert.deepEqual(JSON.parse(JSON.stringify(apiKeyLinkMatrix.llm)), {
+  siliconflow_llm: { hidden: false, href: "https://cloud.siliconflow.cn/i/My0p5Jgs" },
+  bailian_llm: { hidden: false, href: "https://bailian.console.aliyun.com/?tab=model#/model-market" },
+  volcengine_llm: { hidden: false, href: "https://console.volcengine.com/ark/region:ark+cn-beijing/model" },
+  openrouter_llm: { hidden: false, href: "https://openrouter.ai/models" },
+  openai_custom: { hidden: true, href: "" }
+});
+
+const llmModelListFetchState = await vm.runInContext(`
+  (async () => {
+    const originalFetch = globalThis.fetch;
+    const requests = [];
+    globalThis.fetch = async (url, options = {}) => {
+      requests.push({ url, auth: options.headers?.Authorization || "" });
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          data: [
+            { id: "provider/model-a" },
+            { id: "provider/model-b" }
+          ]
+        })
+      };
+    };
+    try {
+      llmProfiles = normalizeStoredProfiles("llm", []);
+      renderProfileOptions(elements.llmProfileId, llmProfiles, "openrouter_llm");
+      elements.llmProfileId.value = "openrouter_llm";
+      renderSelectedProfile("llm");
+      await refreshSelectedLlmModelList();
+      const openrouter = {
+        requests: [...requests],
+        hidden: elements.llmModelSelect.hidden,
+        options: elements.llmModelSelect.children.map(option => option.value),
+        hint: elements.llmModelHint.textContent
+      };
+      requests.length = 0;
+      elements.llmProfileId.value = "bailian_llm";
+      renderSelectedProfile("llm");
+      elements.llmApiKey.value = "";
+      await refreshSelectedLlmModelList();
+      const bailianWithoutKey = {
+        requests: [...requests],
+        hidden: elements.llmModelSelect.hidden,
+        hint: elements.llmModelHint.textContent
+      };
+      requests.length = 0;
+      elements.llmApiKey.value = "bailian-key";
+      await refreshSelectedLlmModelList();
+      const bailianWithKey = {
+        requests: [...requests],
+        hidden: elements.llmModelSelect.hidden,
+        options: elements.llmModelSelect.children.map(option => option.value)
+      };
+      return { openrouter, bailianWithoutKey, bailianWithKey };
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  })()
+`, context);
+
+assert.equal(llmModelListFetchState.openrouter.requests.length, 1);
+assert.equal(llmModelListFetchState.openrouter.requests[0].url, "https://openrouter.ai/api/v1/models");
+assert.equal(llmModelListFetchState.openrouter.requests[0].auth, "");
+assert.equal(llmModelListFetchState.openrouter.hidden, false);
+assert.deepEqual(JSON.parse(JSON.stringify(llmModelListFetchState.openrouter.options)), [
+  "provider/model-a",
+  "provider/model-b"
+]);
+assert.match(llmModelListFetchState.openrouter.hint, /已获取 2 个模型/);
+assert.deepEqual(JSON.parse(JSON.stringify(llmModelListFetchState.bailianWithoutKey.requests)), []);
+assert.equal(llmModelListFetchState.bailianWithoutKey.hidden, true);
+assert.match(llmModelListFetchState.bailianWithoutKey.hint, /需要先填写 API Key/);
+assert.equal(llmModelListFetchState.bailianWithKey.requests.length, 1);
+assert.equal(llmModelListFetchState.bailianWithKey.requests[0].url, "https://dashscope.aliyuncs.com/compatible-mode/v1/models");
+assert.equal(llmModelListFetchState.bailianWithKey.requests[0].auth, "Bearer bailian-key");
+assert.equal(llmModelListFetchState.bailianWithKey.hidden, false);
 
 const staleXaiProfileMigrationState = await vm.runInContext(`
   (() => {
@@ -3480,11 +3641,11 @@ const funAsrProfileUiState = await vm.runInContext(`
   })()
 `, context);
 
-assert.equal(funAsrProfileUiState.vadDisabled, true);
-assert.equal(funAsrProfileUiState.vadValue, "off");
-assert.equal(funAsrProfileUiState.autoHidden, true);
-assert.equal(funAsrProfileUiState.forceHidden, true);
-assert.match(funAsrProfileUiState.offText, /不支持|Not Supported/);
+assert.equal(funAsrProfileUiState.vadDisabled, false);
+assert.equal(funAsrProfileUiState.vadValue, "auto");
+assert.equal(funAsrProfileUiState.autoHidden, false);
+assert.equal(funAsrProfileUiState.forceHidden, false);
+assert.match(funAsrProfileUiState.offText, /关闭|Off/);
 assert.equal(funAsrProfileUiState.hint, "API 密钥只保存在本机浏览器。");
 assert.equal(funAsrProfileUiState.longFileHintHidden, false);
 

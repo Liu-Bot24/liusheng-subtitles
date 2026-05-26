@@ -4728,6 +4728,9 @@ async function retryBrowserTranslationOnly(record, chunkIndexes = [], options = 
   record.job.status = "running";
   record.job.stage = "retry_translation";
   record.job.subtitleCleared = false;
+  const fallbackTranslationsByIndex = new Map(
+    indexes.map(index => [index, cloneBrowserSegments(record.translatedSegmentsByChunk?.get(index))])
+  );
   if (options.resetAttempts) {
     resetBrowserTranslationResults(record, indexes);
     publishBrowserSubtitle(record);
@@ -4735,7 +4738,8 @@ async function retryBrowserTranslationOnly(record, chunkIndexes = [], options = 
   publishBrowserPreloadJob(record);
   await runPool(indexes, Math.max(record.modelConfig.workers || 1, 1), async index => {
     await translateBrowserChunkFromSource(record, index, reusableBrowserSourceSegments(record, index), "只重翻译，不重新识别", {
-      replaceExisting: true
+      replaceExisting: true,
+      fallbackSegments: fallbackTranslationsByIndex.get(index) || []
     });
   });
   publishBrowserSubtitle(record);
@@ -4765,6 +4769,10 @@ function reusableBrowserSourceSegments(record, index) {
   return Array.isArray(segments) ? segments : [];
 }
 
+function cloneBrowserSegments(segments) {
+  return Array.isArray(segments) ? segments.map(segment => ({ ...segment })) : [];
+}
+
 async function translateBrowserChunkFromSource(record, index, sourceSegments, message, options = {}) {
   const statuses = record.job.translation?.chunkStatuses || [];
   const current = statuses[index] || {};
@@ -4772,6 +4780,7 @@ async function translateBrowserChunkFromSource(record, index, sourceSegments, me
   const asrErrors = Array.isArray(current.asrErrors) ? current.asrErrors : [];
   const attempt = (current.attempts || 0) + 1;
   const replaceExisting = Boolean(options.replaceExisting);
+  const fallbackSegments = cloneBrowserSegments(options.fallbackSegments);
   if (replaceExisting) {
     record.translatedSegmentsByChunk.set(index, []);
   }
@@ -4806,9 +4815,14 @@ async function translateBrowserChunkFromSource(record, index, sourceSegments, me
       }
     );
   } catch (error) {
-    const previous = replaceExisting ? [] : record.translatedSegmentsByChunk.get(index);
+    const previous = fallbackSegments.length
+      ? fallbackSegments
+      : replaceExisting
+        ? []
+        : cloneBrowserSegments(record.translatedSegmentsByChunk.get(index));
     if (Array.isArray(previous) && previous.length) {
       translatedSegments = previous;
+      record.translatedSegmentsByChunk.set(index, translatedSegments);
     } else {
       translatedSegments = [];
       record.translatedSegmentsByChunk.set(index, translatedSegments);

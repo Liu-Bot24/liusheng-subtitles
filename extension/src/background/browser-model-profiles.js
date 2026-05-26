@@ -52,6 +52,38 @@ export const FuguangBrowserModelProfiles = (() => {
   ];
   const KNOWN_LLM_PROFILES = [
     {
+      id: "siliconflow_llm",
+      name: "硅基流动",
+      providerType: "openai",
+      baseUrl: "https://api.siliconflow.cn/v1",
+      model: "deepseek-ai/DeepSeek-V4-Flash",
+      apiKey: ""
+    },
+    {
+      id: "bailian_llm",
+      name: "阿里云百炼",
+      providerType: "openai",
+      baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      model: "qwen3.7-max",
+      apiKey: ""
+    },
+    {
+      id: "volcengine_llm",
+      name: "火山引擎",
+      providerType: "openai",
+      baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
+      model: "doubao-seed-2-0-lite-260428",
+      apiKey: ""
+    },
+    {
+      id: "openrouter_llm",
+      name: "OpenRouter",
+      providerType: "openai",
+      baseUrl: "https://openrouter.ai/api/v1",
+      model: "deepseek/deepseek-v4-flash:free",
+      apiKey: ""
+    },
+    {
       id: "openai_custom",
       name: "自定义档案",
       providerType: "openai",
@@ -61,6 +93,7 @@ export const FuguangBrowserModelProfiles = (() => {
     }
   ];
   const BUILT_IN_ASR_PROFILE_IDS = new Set(["openai_whisper", "groq_whisper", "xai_grok", "dashscope_funasr"]);
+  const BUILT_IN_LLM_PROFILE_IDS = new Set(["siliconflow_llm", "bailian_llm", "volcengine_llm", "openrouter_llm"]);
 
   function findProfile(profiles, selectedId, fallbackId) {
     return profiles.find(profile => profile.id === selectedId) ||
@@ -90,7 +123,7 @@ export const FuguangBrowserModelProfiles = (() => {
       if (knownProfile) {
         profilesById.set(profile.id, mergeProfileDefaults(knownProfile, profile));
       } else if (hasProfileContent(profile)) {
-        profilesById.set(profile.id, profile);
+        profilesById.set(profile.id, normalizeCustomProfile(kind, profile));
       }
     }
     return uniqueProfiles([...profilesById.values()]);
@@ -113,10 +146,29 @@ export const FuguangBrowserModelProfiles = (() => {
     return ["openai", "groq", "xai", "anthropic", "dashscope_funasr"].includes(value) ? value : "openai";
   }
 
+  function normalizeCustomProfile(kind, profile) {
+    const providerType = normalizeCustomProfileProviderType(kind, profile.providerType);
+    return {
+      ...profile,
+      providerType,
+      vadFilter: kind === "asr" && profile.providerType === "dashscope_funasr"
+        ? "auto"
+        : profile.vadFilter
+    };
+  }
+
   function mergeProfileDefaults(defaultProfile, storedProfile) {
     if (isBuiltInAsrProfile(defaultProfile)) {
       return {
         ...cloneProfile(defaultProfile),
+        apiKey: storedProfile.apiKey || defaultProfile.apiKey || ""
+      };
+    }
+    if (isBuiltInLlmProfile(defaultProfile)) {
+      return {
+        ...cloneProfile(defaultProfile),
+        baseUrl: storedProfile.baseUrl || defaultProfile.baseUrl || "",
+        model: storedProfile.model || defaultProfile.model || "",
         apiKey: storedProfile.apiKey || defaultProfile.apiKey || ""
       };
     }
@@ -135,6 +187,10 @@ export const FuguangBrowserModelProfiles = (() => {
     return BUILT_IN_ASR_PROFILE_IDS.has(profile?.id);
   }
 
+  function isBuiltInLlmProfile(profile) {
+    return BUILT_IN_LLM_PROFILE_IDS.has(profile?.id);
+  }
+
   function profilesForStorage(kind, profiles) {
     return uniqueProfiles(profiles).map(profile => profileForStorage(kind, profile));
   }
@@ -148,16 +204,31 @@ export const FuguangBrowserModelProfiles = (() => {
       }
       return storedProfile;
     }
+    if (kind === "llm" && isBuiltInLlmProfile(profile)) {
+      const defaultProfile = KNOWN_LLM_PROFILES.find(item => item.id === profile.id) || {};
+      const storedProfile = { id: profile.id };
+      if (profile.baseUrl && profile.baseUrl !== defaultProfile.baseUrl) {
+        storedProfile.baseUrl = profile.baseUrl;
+      }
+      if (profile.model && profile.model !== defaultProfile.model) {
+        storedProfile.model = profile.model;
+      }
+      if (profile.apiKey) {
+        storedProfile.apiKey = profile.apiKey;
+      }
+      return storedProfile;
+    }
+    const providerType = normalizeCustomProfileProviderType(kind, profile.providerType);
     const storedProfile = {
       id: profile.id,
       name: profile.name || "",
-      providerType: normalizeCustomProfileProviderType(kind, profile.providerType),
+      providerType,
       baseUrl: profile.baseUrl || "",
       model: profile.model || "",
       apiKey: profile.apiKey || ""
     };
     if (kind === "asr") {
-      storedProfile.vadFilter = profile.providerType === "dashscope_funasr"
+      storedProfile.vadFilter = providerType === "dashscope_funasr"
         ? "off"
         : FuguangBrowserAsrProvider.normalizeAsrVadFilterMode(profile.vadFilter);
     }
@@ -200,7 +271,7 @@ export const FuguangBrowserModelProfiles = (() => {
     if (kind === "llm") {
       return normalized === "anthropic" ? "anthropic" : "openai";
     }
-    return normalized === "dashscope_funasr" ? "dashscope_funasr" : "openai";
+    return "openai";
   }
 
   function cloneProfile(profile) {

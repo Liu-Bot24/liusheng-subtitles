@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>翻译模型配置说明 - 流声字幕</title>
+    <link rel="stylesheet" href="help.css">
+    <script src="help.js" defer></script>
+  </head>
+  <body data-title-key="llmDocumentTitle">
+    <main class="help-page">
+      <header class="help-header">
+        <a class="back-link" href="../sidepanel/sidepanel.html#settings" data-i18n="backSettings">返回设置</a>
+        <h1 data-i18n="llmTitle">翻译模型配置说明</h1>
+        <p class="lead" data-i18n="llmLead">翻译模型 API 用来把原文字幕翻译成目标语言。设置完成后，回到“任务与字幕”页开始抽取，或对已有原文重新翻译。</p>
+      </header>
+
+      <section aria-labelledby="llm-templates">
+        <h2 id="llm-templates" data-i18n="llmTemplatesTitle">内置模板</h2>
+        <p class="section-intro" data-i18n="llmTemplateIntro">插件内置硅基流动、阿里云百炼、火山引擎和 OpenRouter 档案。选择对应模板并填入 API Key 即可使用；默认模型已填好，也可以在“模型名称”中选择或输入平台支持的模型 ID。</p>
+        <div class="api-grid">
+          <article class="card">
+            <h3><a href="https://cloud.siliconflow.cn/i/My0p5Jgs" target="_blank" rel="noreferrer" data-i18n="siliconflow">硅基流动</a></h3>
+            <ol>
+              <li><span data-i18n="siliconflowKeyStep">在硅基流动控制台创建 API Key。</span></li>
+              <li data-i18n="chooseSiliconflowStep">在插件“翻译模型”里选择“硅基流动”。</li>
+              <li data-i18n="fillLlmKeyStep">把 API Key 填入“API 密钥”。</li>
+              <li data-i18n="chooseLlmModelStep">需要更换模型时，在“模型名称”里选择或填写模型 ID。</li>
+              <li data-i18n="saveSettingsStep">保存设置。</li>
+            </ol>
+          </article>
+
+          <article class="card">
+            <h3><a href="https://bailian.console.aliyun.com/?tab=model#/model-market" target="_blank" rel="noreferrer" data-i18n="bailian">阿里云百炼</a></h3>
+            <ol>
+              <li><span data-i18n="bailianLlmKeyStep">在百炼控制台创建 API Key。</span></li>
+              <li data-i18n="chooseBailianLlmStep">在插件“翻译模型”里选择“阿里云百炼”。</li>
+              <li data-i18n="fillLlmKeyStep">把 API Key 填入“API 密钥”。</li>
+              <li data-i18n="chooseLlmModelStep">需要更换模型时，在“模型名称”里选择或填写模型 ID。</li>
+              <li data-i18n="saveSettingsStep">保存设置。</li>
+            </ol>
+          </article>
+
+          <article class="card">
+            <h3><a href="https://console.volcengine.com/ark/region:ark+cn-beijing/model" target="_blank" rel="noreferrer" data-i18n="volcengine">火山引擎</a></h3>
+            <ol>
+              <li><span data-i18n="volcengineKeyStep">在火山引擎方舟控制台创建 API Key。</span></li>
+              <li data-i18n="chooseVolcengineStep">在插件“翻译模型”里选择“火山引擎”。</li>
+              <li data-i18n="fillLlmKeyStep">把 API Key 填入“API 密钥”。</li>
+              <li data-i18n="chooseLlmModelStep">需要更换模型时，在“模型名称”里选择或填写模型 ID。</li>
+              <li data-i18n="saveSettingsStep">保存设置。</li>
+            </ol>
+          </article>
+
+          <article class="card">
+            <h3><a href="https://openrouter.ai/models" target="_blank" rel="noreferrer">OpenRouter</a></h3>
+            <ol>
+              <li><span data-i18n="openrouterKeyStep">在 OpenRouter 创建 API Key。</span></li>
+              <li data-i18n="chooseOpenrouterStep">在插件“翻译模型”里选择“OpenRouter”。</li>
+              <li data-i18n="fillLlmKeyStep">把 API Key 填入“API 密钥”。</li>
+              <li data-i18n="chooseLlmModelStep">需要更换模型时，在“模型名称”里选择或填写模型 ID。</li>
+              <li data-i18n="saveSettingsStep">保存设置。</li>
+            </ol>
+          </article>
+        </div>
+        <p class="notice" data-i18n="llmTemplateFreeNote">以上均有新用户免费额度或免费模型，有效期以官方页面为准。</p>
+      </section>
+
+      <section aria-labelledby="llm-fields">
+        <h2 id="llm-fields" data-i18n="customLlmTitle">自定义档案</h2>
+        <p class="section-intro" data-i18n="llmCustomIntro">自定义档案用于接入其他翻译模型服务。新增档案后，按服务商文档填写接口格式、接口地址、模型名称和 API Key。LM Studio、Ollama 或其他 llama 本地模型工具只要提供兼容接口，也可以用自定义档案接入。</p>
+        <table>
+          <tbody>
+            <tr>
+              <th data-i18n="profileName">档案名称</th>
+              <td data-i18n="llmProfileNameValue">写一个自己能认出来的名称，只影响档案列表显示。</td>
+            </tr>
+            <tr>
+              <th data-i18n="llmFormatField">接口格式</th>
+              <td data-i18n="llmFormatValue">接入 Chat Completions 风格接口时选择“OpenAI 兼容格式”；接入 Anthropic Messages 风格接口时选择“Anthropic 兼容格式”。</td>
+            </tr>
+            <tr>
+              <th data-i18n="llmBaseUrlField">接口地址</th>
+              <td data-i18n="llmBaseUrlValue">填写服务商提供的 API Base URL。本机模型服务也填写它自己的本机地址，例如 http://127.0.0.1:1234/v1 或 http://127.0.0.1:11434/v1。</td>
+            </tr>
+            <tr>
+              <th data-i18n="llmModelField">模型名称</th>
+              <td data-i18n="modelValue">填写平台控制台、文档或本地模型工具里显示的模型 ID。</td>
+            </tr>
+            <tr>
+              <th data-i18n="llmApiKeyField">API 密钥</th>
+              <td data-i18n="apiKeyValue">填写该服务创建的 API Key；本地模型工具如果不校验密钥，可以填写任意占位文本。</td>
+            </tr>
+            <tr>
+              <th data-i18n="targetLanguage">目标语言</th>
+              <td data-i18n="llmTargetLanguageValue">选择字幕要翻译成的语言。保存后，新任务和“重新翻译字幕”都会使用当前目标语言。</td>
+            </tr>
+            <tr>
+              <th data-i18n="translationWorkers">翻译并发</th>
+              <td data-i18n="llmWorkersValue">控制同时请求翻译模型的字幕分组数量。遇到限流或返回不稳定时调低。</td>
+            </tr>
+            <tr>
+              <th data-i18n="afterSave">保存后</th>
+              <td data-i18n="llmAfterSaveValue">新任务会使用当前翻译档案；已有原文字幕可以点击“重新翻译字幕”。</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section aria-labelledby="llm-notes">
+        <h2 id="llm-notes" data-i18n="notes">注意事项</h2>
+        <div class="card">
+          <ul class="compact">
+            <li data-i18n="llmJsonNote">翻译模型需要稳定按插件要求返回结构化结果；部分模型的内容审查可能较严格，如果经常失败，可以更换模型或降低翻译并发。</li>
+            <li data-i18n="llmRetranslateNote">“重新翻译字幕”只会使用已有原文重新调用翻译模型，不会重新调用 ASR。</li>
+            <li data-i18n="llmServerNote">如果使用本机模型服务，翻译字幕时保持该服务运行。</li>
+          </ul>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

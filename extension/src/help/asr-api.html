@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>语音识别 API 指南 - 流声字幕</title>
+    <link rel="stylesheet" href="help.css">
+    <script src="help.js" defer></script>
+  </head>
+  <body data-title-key="asrDocumentTitle">
+    <main class="help-page">
+      <header class="help-header">
+        <a class="back-link" href="../sidepanel/sidepanel.html#settings" data-i18n="backSettings">← 返回设置</a>
+        <h1 data-i18n="asrTitle">语音识别 API 指南</h1>
+        <p class="lead" data-i18n="asrLead">语音识别 API 用来把视频声音转成原文字幕。设置完成后，回到“任务与字幕”页选择原音频语言并开始抽取。</p>
+      </header>
+
+      <section aria-labelledby="online-api">
+        <h2 id="online-api" data-i18n="onlineApi">在线 API</h2>
+        <p class="section-intro" data-i18n="asrOnlineIntro">插件内置以下平台 ASR 配置档案，选择对应档案模板填入 API Key 即可直接使用。也可自行添加 Whisper 兼容接口档案，需要填写接口地址、模型名称和 API Key。</p>
+        <div class="api-grid">
+          <article class="card">
+            <h3><a href="https://bailian.console.aliyun.com/?tab=model#/api-key" target="_blank" rel="noreferrer" data-i18n="bailianFunAsr">阿里云百炼 Fun-ASR</a></h3>
+            <ol>
+              <li>在 <a href="https://bailian.console.aliyun.com/?tab=model#/api-key" target="_blank" rel="noreferrer" data-i18n="bailianConsole">百炼控制台</a><span data-i18n="createApiKeySuffix">创建 API Key。</span></li>
+              <li data-i18n="chooseFunAsrStep">在插件“语音识别”里选择“Fun-ASR”。</li>
+              <li data-i18n="fillAsrKeyStep">把 API Key 填入“API 密钥”。</li>
+              <li data-i18n="saveSettingsStep">保存设置。</li>
+            </ol>
+            <p class="price">价格：约 <strong data-i18n="funAsrPriceValue">0.0132 元/分钟</strong>。<span data-i18n="funAsrPriceNote">新用户免费额度和有效期以官方页面为准。</span></p>
+          </article>
+
+          <article class="card">
+            <h3><a href="https://console.groq.com/keys" target="_blank" rel="noreferrer">Groq Whisper</a></h3>
+            <ol>
+              <li>在 <a href="https://console.groq.com/keys" target="_blank" rel="noreferrer" data-i18n="groqConsole">Groq 控制台</a><span data-i18n="createApiKeySuffix">创建 API Key。</span></li>
+              <li data-i18n="chooseGroqStep">在插件“语音识别”里选择“Groq Whisper”。</li>
+              <li data-i18n="fillAsrKeyStep">把 API Key 填入“API 密钥”。</li>
+              <li data-i18n="saveSettingsStep">保存设置。</li>
+            </ol>
+            <p class="price">价格：约 <strong data-i18n="groqPriceValue">0.00067 美元/分钟</strong>（<strong data-i18n="groqPriceHourly">0.04 美元/小时</strong>）。</p>
+          </article>
+
+          <article class="card">
+            <h3><a href="https://platform.openai.com/api-keys" target="_blank" rel="noreferrer">OpenAI Whisper</a></h3>
+            <ol>
+              <li>在 <a href="https://platform.openai.com/api-keys" target="_blank" rel="noreferrer" data-i18n="openaiPlatform">OpenAI 平台</a><span data-i18n="createApiKeySuffix">创建 API Key。</span></li>
+              <li data-i18n="chooseOpenAiStep">在插件“语音识别”里选择“OpenAI Whisper”。</li>
+              <li data-i18n="fillAsrKeyStep">把 API Key 填入“API 密钥”。</li>
+              <li data-i18n="saveSettingsStep">保存设置。</li>
+            </ol>
+            <p class="price">价格：<strong data-i18n="openaiPriceValue">0.006 美元/分钟</strong>。</p>
+          </article>
+
+          <article class="card">
+            <h3><a href="https://console.x.ai/" target="_blank" rel="noreferrer">xAI Grok</a></h3>
+            <ol>
+              <li>在 <a href="https://console.x.ai/" target="_blank" rel="noreferrer" data-i18n="xaiConsole">xAI 控制台</a><span data-i18n="createApiKeySuffix">创建 API Key。</span></li>
+              <li data-i18n="chooseXaiStep">在插件“语音识别”里选择“xAI Grok”。</li>
+              <li data-i18n="fillAsrKeyStep">把 API Key 填入“API 密钥”。</li>
+              <li data-i18n="saveSettingsStep">保存设置。</li>
+            </ol>
+            <p class="price">价格：约 <strong data-i18n="xaiPriceValue">0.00167 美元/分钟</strong>（<strong data-i18n="xaiPriceHourly">0.10 美元/小时</strong>）。</p>
+          </article>
+        </div>
+        <p class="notice" data-i18n="priceNotice">以上价格按 2026 年 5 月公开页面换算，可能发生变动；实际费用以各平台控制台和账单为准。</p>
+      </section>
+
+      <section aria-labelledby="local-deploy">
+        <h2 id="local-deploy" data-i18n="localDeploy">本地部署</h2>
+        <p class="lead"><span data-i18n="asrLocalLead">本地 Speaches 启动后，插件接口地址填写 http://127.0.0.1:8000/v1。</span></p>
+
+        <div class="steps">
+          <article class="card">
+            <h3 data-i18n="windows">Windows</h3>
+            <ol>
+              <li data-i18n="installDocker">安装 Docker Desktop。</li>
+              <li data-i18n="installNvidiaDriver">安装或更新 NVIDIA 驱动。</li>
+              <li data-i18n="waitDocker">打开 Docker Desktop，等待 Docker 开始运行。</li>
+              <li data-i18n="openPowershell">打开 PowerShell。</li>
+              <li data-i18n="runCommand">执行下面的命令。</li>
+            </ol>
+            <div class="code-block">
+              <button class="copy-button" type="button" data-copy-target="windows-command" data-i18n-aria-label="copyCommand" data-i18n-title="copyCommand" aria-label="复制命令" title="复制命令">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <rect x="9" y="9" width="11" height="11" rx="2"></rect>
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                </svg>
+              </button>
+              <pre><code id="windows-command">docker rm -f speaches
+docker run --detach `
+  --publish 8000:8000 `
+  --name speaches `
+  --volume speaches-hf-cache:/home/ubuntu/.cache/huggingface/hub `
+  --gpus=all `
+  ghcr.io/speaches-ai/speaches:latest-cuda</code></pre>
+            </div>
+            <ol start="6">
+              <li data-i18n="openSpeachesDocs">浏览器打开 http://127.0.0.1:8000/docs，能看到 Speaches 页面后继续。</li>
+              <li data-i18n="keepSpeachesRunning">识别字幕时保持 Docker Desktop 和 speaches 容器运行。</li>
+            </ol>
+          </article>
+
+          <article class="card">
+            <h3 data-i18n="mac">Mac</h3>
+            <ol>
+              <li data-i18n="installDocker">安装 Docker Desktop。</li>
+              <li data-i18n="waitDocker">打开 Docker Desktop，等待 Docker 开始运行。</li>
+              <li data-i18n="openTerminal">打开终端。</li>
+              <li data-i18n="runCommand">执行下面的命令。</li>
+            </ol>
+            <div class="code-block">
+              <button class="copy-button" type="button" data-copy-target="mac-command" data-i18n-aria-label="copyCommand" data-i18n-title="copyCommand" aria-label="复制命令" title="复制命令">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <rect x="9" y="9" width="11" height="11" rx="2"></rect>
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                </svg>
+              </button>
+              <pre><code id="mac-command">docker rm -f speaches 2&gt;/dev/null || true
+docker run --detach \
+  --publish 8000:8000 \
+  --name speaches \
+  --volume speaches-hf-cache:/home/ubuntu/.cache/huggingface/hub \
+  ghcr.io/speaches-ai/speaches:latest-cpu</code></pre>
+            </div>
+            <ol start="5">
+              <li data-i18n="openSpeachesDocs">浏览器打开 http://127.0.0.1:8000/docs，能看到 Speaches 页面后继续。</li>
+              <li data-i18n="keepSpeachesRunning">识别字幕时保持 Docker Desktop 和 speaches 容器运行。</li>
+            </ol>
+          </article>
+        </div>
+
+        <div class="subsection" aria-labelledby="plugin-fields">
+          <h3 id="plugin-fields" data-i18n="pluginSettings">插件设置</h3>
+          <table>
+            <tbody>
+              <tr>
+                <th data-i18n="editing">正在编辑</th>
+                <td data-i18n="asrEditingValue">选择“自定义档案”，或点击“新增档案”。</td>
+              </tr>
+              <tr>
+                <th data-i18n="profileName">档案名称</th>
+                <td data-i18n="localSpeachesAsr">本机 Speaches ASR</td>
+              </tr>
+              <tr>
+                <th data-i18n="apiType">接口类型</th>
+                <td data-i18n="whisperCompatible">Whisper 兼容接口</td>
+              </tr>
+              <tr>
+                <th data-i18n="apiBaseUrl">接口地址</th>
+                <td><code>http://127.0.0.1:8000/v1</code></td>
+              </tr>
+              <tr>
+                <th data-i18n="modelName">模型名称</th>
+                <td><code>Systran/faster-whisper-large-v3</code></td>
+              </tr>
+              <tr>
+                <th data-i18n="vadFilter">VAD 过滤</th>
+                <td data-i18n="auto">自动</td>
+              </tr>
+              <tr>
+                <th data-i18n="apiKey">API 密钥</th>
+                <td><code>local</code></td>
+              </tr>
+              <tr>
+                <th data-i18n="afterSave">保存后</th>
+                <td data-i18n="asrAfterSaveValue">回到“任务与字幕”，选择原音频语言，然后开始抽取。</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="subsection" aria-labelledby="notes">
+          <h3 id="notes" data-i18n="notes">注意事项</h3>
+          <div class="card">
+            <ul class="compact">
+              <li data-i18n="speachesFirstDownload">第一次启动 Speaches 时会下载模型，等待时间会更长。</li>
+              <li data-i18n="speachesReuseModel">再次使用会复用已经下载的模型。</li>
+              <li data-i18n="doNotCloseDocker">识别时不要关闭 Docker Desktop。</li>
+              <li data-i18n="wrongSubtitleLanguage">字幕语种不对时，先选择正确的原音频语言，再重新 ASR。</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

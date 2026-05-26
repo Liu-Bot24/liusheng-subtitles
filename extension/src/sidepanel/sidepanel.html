@@ -90,7 +90,10 @@
       </section>
 
       <section id="settingsPanel" class="panel" role="tabpanel" aria-labelledby="tabSettings">
-        <h2 data-i18n="asrSettings">语音识别</h2>
+        <div class="settings-section-heading">
+          <h2 data-i18n="asrSettings">语音识别</h2>
+          <a class="help-link" href="../help/asr-api.html"><span aria-hidden="true">（</span><span data-i18n="configHelpLink">配置说明</span><span aria-hidden="true">）</span></a>
+        </div>
         <div class="profile-row">
           <label>
             <span data-i18n="editingProfile">正在编辑</span>
@@ -109,7 +112,7 @@
           <span data-i18n="apiFormat">接口类型</span>
           <select id="asrProviderType">
             <option value="openai" data-i18n="whisperCompatibleAsr">Whisper 兼容接口</option>
-            <option value="dashscope_funasr" data-i18n="funAsrCompatibleAsr">FunASR 兼容接口</option>
+            <option value="dashscope_funasr" data-i18n="funAsrCompatibleAsr">Fun-ASR 接口</option>
           </select>
         </label>
         <label>
@@ -129,12 +132,20 @@
           </select>
         </label>
         <label>
-          <span data-i18n="apiKey">API 密钥</span>
+          <span class="field-label-row">
+            <span data-i18n="apiKey">API 密钥</span>
+            <a id="asrApiKeyHelpLink" class="field-help-link" target="_blank" rel="noopener noreferrer" hidden>
+              <span aria-hidden="true">（</span><span data-i18n="getApiKeyLink">获取 API 密钥</span><span aria-hidden="true">）</span>
+            </a>
+          </span>
           <input id="asrApiKey" type="password" spellcheck="false" autocomplete="off">
         </label>
         <p id="asrApiKeyHint" class="settings-hint"></p>
 
-        <h2 data-i18n="translationModel">翻译模型</h2>
+        <div class="settings-section-heading">
+          <h2 data-i18n="translationModel">翻译模型</h2>
+          <a class="help-link" href="../help/llm-api.html"><span aria-hidden="true">（</span><span data-i18n="configHelpLink">配置说明</span><span aria-hidden="true">）</span></a>
+        </div>
         <div class="profile-row">
           <label>
             <span data-i18n="editingProfile">正在编辑</span>
@@ -162,10 +173,17 @@
         </label>
         <label>
           <span data-i18n="modelName">模型名称</span>
-          <input id="llmModel" type="text" spellcheck="false">
+          <input id="llmModel" type="text" spellcheck="false" autocomplete="off" list="llmModelSelect">
+          <datalist id="llmModelSelect"></datalist>
         </label>
+        <p id="llmModelHint" class="settings-hint" hidden></p>
         <label>
-          <span data-i18n="apiKey">API 密钥</span>
+          <span class="field-label-row">
+            <span data-i18n="apiKey">API 密钥</span>
+            <a id="llmApiKeyHelpLink" class="field-help-link" target="_blank" rel="noopener noreferrer" hidden>
+              <span aria-hidden="true">（</span><span data-i18n="getApiKeyLink">获取 API 密钥</span><span aria-hidden="true">）</span>
+            </a>
+          </span>
           <input id="llmApiKey" type="password" spellcheck="false" autocomplete="off">
         </label>
         <p id="llmApiKeyHint" class="settings-hint"></p>
