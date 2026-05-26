@@ -38,7 +38,7 @@ const smokeSource = fs.readFileSync(smokePath, "utf8");
     timeout: 10_000
   });
   assert.notEqual(result.status, 0);
-  assert.match(`${result.stdout}\n${result.stderr}`, /LLM_API_KEY is required/);
+  assert.match(`${result.stdout}\n${result.stderr}`, /LLM_BASE_URL, LLM_MODEL, and LLM_API_KEY are required/);
   assert.doesNotMatch(result.stdout, /REAL_HLS_SMOKE_STATUS=/);
   assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /Speaches models check failed|ECONNREFUSED|playwright|chromium/i);
 }

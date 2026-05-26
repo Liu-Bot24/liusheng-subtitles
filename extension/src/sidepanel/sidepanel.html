@@ -105,15 +105,22 @@
           <span data-i18n="profileName">档案名称</span>
           <input id="asrProfileName" type="text" spellcheck="false">
         </label>
+        <label id="asrProviderTypeField">
+          <span data-i18n="apiFormat">接口类型</span>
+          <select id="asrProviderType">
+            <option value="openai" data-i18n="whisperCompatibleAsr">Whisper 兼容接口</option>
+            <option value="dashscope_funasr" data-i18n="funAsrCompatibleAsr">FunASR 兼容接口</option>
+          </select>
+        </label>
         <label>
           <span data-i18n="apiBaseUrl">接口地址</span>
           <input id="asrBaseUrl" type="url" spellcheck="false">
         </label>
-        <label>
+        <label id="asrModelField">
           <span data-i18n="modelName">模型名称</span>
           <input id="asrModel" type="text" spellcheck="false">
         </label>
-        <label>
+        <label id="asrVadFilterField">
           <span data-i18n="vadFilter">VAD 过滤</span>
           <select id="asrVadFilter">
             <option value="auto" data-i18n="auto">自动</option>
@@ -145,8 +152,8 @@
         <label>
           <span data-i18n="apiFormat">接口格式</span>
           <select id="llmProviderType">
-            <option value="openai" data-i18n="openaiFormat">OpenAI 格式</option>
-            <option value="anthropic" data-i18n="anthropicFormat">Anthropic 格式</option>
+            <option value="openai" data-i18n="openaiFormat">OpenAI 兼容格式</option>
+            <option value="anthropic" data-i18n="anthropicFormat">Anthropic 兼容格式</option>
           </select>
         </label>
         <label>

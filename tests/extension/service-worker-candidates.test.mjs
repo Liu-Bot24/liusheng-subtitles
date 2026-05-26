@@ -688,9 +688,16 @@ vm.runInContext(source, context, { filename: "service-worker.js" });
 
 {
   const asrProfiles = context.normalizeStoredProfiles("asr", [
-    { id: "custom_vad", name: "自定义 VAD", providerType: "openai", baseUrl: "https://asr.example/v1", model: "whisper-1", vadFilter: "on" }
+    { id: "custom_vad", name: "自定义 VAD", providerType: "openai", baseUrl: "https://asr.example/v1", model: "whisper-1", vadFilter: "on" },
+    { id: "xai_grok", name: "xAI Grok", providerType: "openai", baseUrl: "https://api.x.ai/v1", model: "stale-xai-model", vadFilter: "on", apiKey: "xai-key" }
   ]);
   assert.equal(asrProfiles.find(profile => profile.id === "custom_vad")?.vadFilter, "on");
+  assert.equal(asrProfiles.find(profile => profile.id === "xai_grok")?.providerType, "xai");
+  assert.equal(asrProfiles.find(profile => profile.id === "xai_grok")?.model, "");
+  assert.deepEqual(JSON.parse(JSON.stringify(context.profilesForStorage("asr", asrProfiles).find(profile => profile.id === "xai_grok"))), {
+    id: "xai_grok",
+    apiKey: "xai-key"
+  });
   assert.equal(context.normalizeSelectedProfileId(asrProfiles, "missing_profile", "openai_whisper"), "openai_whisper");
   assert.equal(context.browserAsrEndpoint({ providerType: "xai", baseUrl: "https://api.x.ai/v1" }), "https://api.x.ai/v1/stt");
   assert.equal(context.browserAsrEndpoint({ providerType: "openai", baseUrl: "http://127.0.0.1:8000/v1" }), "http://127.0.0.1:8000/v1/audio/transcriptions");
@@ -1065,6 +1072,53 @@ vm.runInContext(source, context, { filename: "service-worker.js" });
     const autoConfig = await context.getModelConfig();
     assert.equal(Object.hasOwn(autoConfig.asr, "language"), false);
     assert.equal(context.browserAsrRequestFields(autoConfig.asr, autoConfig.asr.language).some(([name]) => name === "language"), false);
+  } finally {
+    chrome.storage.local.get = originalLocalGet;
+    chrome.storage.local.set = originalLocalSet;
+    chrome.storage.sync.remove = originalSyncRemove;
+  }
+}
+
+{
+  const modelSettingsVersion = vm.runInContext("MODEL_SETTINGS_VERSION", context);
+  const originalLocalGet = chrome.storage.local.get;
+  const originalLocalSet = chrome.storage.local.set;
+  const originalSyncRemove = chrome.storage.sync.remove;
+  let savedPayload = null;
+  chrome.storage.local.get = async () => ({
+    modelSettingsVersion,
+    selectedAsrProfileId: "xai_grok",
+    selectedLlmProfileId: "test_llm",
+    sourceLanguage: "ja",
+    targetLanguage: "zh-CN",
+    asrProfiles: [
+      {
+        id: "xai_grok",
+        name: "xAI Grok",
+        providerType: "openai",
+        baseUrl: "https://api.x.ai/v1",
+        model: "stale-xai-model",
+        vadFilter: "on",
+        apiKey: "asr-key"
+      }
+    ],
+    llmProfiles: [
+      { id: "test_llm", name: "Test LLM", providerType: "openai", baseUrl: "https://llm.test/v1", model: "test-llm", apiKey: "llm-key" }
+    ]
+  });
+  chrome.storage.local.set = async payload => {
+    savedPayload = payload;
+  };
+  chrome.storage.sync.remove = async () => {};
+  try {
+    const config = await context.getModelConfig();
+    assert.equal(config.asr.providerType, "xai");
+    assert.equal(config.asr.baseUrl, "https://api.x.ai/v1");
+    assert.equal(Object.hasOwn(config.asr, "model"), false);
+    assert.deepEqual(JSON.parse(JSON.stringify(savedPayload.asrProfiles.find(profile => profile.id === "xai_grok"))), {
+      id: "xai_grok",
+      apiKey: "asr-key"
+    });
   } finally {
     chrome.storage.local.get = originalLocalGet;
     chrome.storage.local.set = originalLocalSet;

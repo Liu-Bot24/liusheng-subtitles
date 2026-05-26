@@ -1480,6 +1480,228 @@ assert.equal(asrProfileState.selected, "openai_whisper");
 assert.equal(asrProfileState.customVadFilter, "on");
 assert.equal(asrProfileState.defaultVadFilter, "auto");
 
+const asrProfileTemplateState = await vm.runInContext(`
+  (() => {
+    asrProfiles = normalizeStoredProfiles("asr", []);
+    renderProfileOptions(elements.asrProfileId, asrProfiles, "groq_whisper");
+    elements.asrProfileId.value = "groq_whisper";
+    renderSelectedProfile("asr");
+    const groqBeforeSave = {
+      formatHidden: elements.asrProviderTypeField?.hidden,
+      formatDisabled: elements.asrProviderType?.disabled,
+      formatValue: elements.asrProviderType?.value,
+      deleteDisabled: elements.deleteAsrProfile?.disabled,
+      providerType: asrProfiles.find(profile => profile.id === "groq_whisper")?.providerType,
+      baseUrl: asrProfiles.find(profile => profile.id === "groq_whisper")?.baseUrl,
+      model: asrProfiles.find(profile => profile.id === "groq_whisper")?.model
+    };
+    if (elements.asrProviderType) {
+      elements.asrProviderType.value = "dashscope_funasr";
+    }
+    saveProfileFields("asr", "groq_whisper");
+    elements.asrProfileId.value = "xai_grok";
+    renderSelectedProfile("asr");
+    const xaiBuiltIn = {
+      formatHidden: elements.asrProviderTypeField?.hidden,
+      modelHidden: elements.asrModelField?.hidden,
+      vadHidden: elements.asrVadFilterField?.hidden,
+      formatDisplay: elements.asrProviderTypeField?.style.display,
+      modelDisplay: elements.asrModelField?.style.display,
+      vadDisplay: elements.asrVadFilterField?.style.display,
+      deleteDisabled: elements.deleteAsrProfile?.disabled
+    };
+    elements.asrProfileId.value = "dashscope_funasr";
+    renderSelectedProfile("asr");
+    const funAsrBuiltIn = {
+      formatHidden: elements.asrProviderTypeField?.hidden,
+      formatDisabled: elements.asrProviderType?.disabled,
+      formatValue: elements.asrProviderType?.value,
+      deleteDisabled: elements.deleteAsrProfile?.disabled,
+      name: elements.asrProfileName.value,
+      vadDisabled: elements.asrVadFilter.disabled
+    };
+    elements.asrProfileId.value = "custom_asr";
+    renderSelectedProfile("asr");
+    const customOpenAi = {
+      formatHidden: elements.asrProviderTypeField?.hidden,
+      formatDisabled: elements.asrProviderType?.disabled,
+      formatValue: elements.asrProviderType?.value,
+      deleteDisabled: elements.deleteAsrProfile?.disabled,
+      name: elements.asrProfileName.value
+    };
+    elements.asrProviderType.value = "dashscope_funasr";
+    updateAsrCustomProviderType();
+    const customFunAsr = {
+      formatHidden: elements.asrProviderTypeField?.hidden,
+      formatDisabled: elements.asrProviderType?.disabled,
+      formatValue: elements.asrProviderType?.value,
+      name: elements.asrProfileName.value,
+      vadDisabled: elements.asrVadFilter.disabled
+    };
+    const freshAsr = createEmptyProfile("asr");
+    const freshLlm = createEmptyProfile("llm");
+    return {
+      names: asrProfiles.map(profile => profile.name),
+      groqBeforeSave,
+      groqAfterSave: asrProfiles.find(profile => profile.id === "groq_whisper")?.providerType,
+      xaiBuiltIn,
+      funAsrBuiltIn,
+      customOpenAi,
+      customFunAsr,
+      freshAsrName: freshAsr.name,
+      freshLlmName: freshLlm.name
+    };
+  })()
+`, context);
+
+assert.deepEqual(JSON.parse(JSON.stringify(asrProfileTemplateState.names)), [
+  "OpenAI Whisper",
+  "Groq Whisper",
+  "xAI Grok",
+  "Fun-ASR",
+  "自定义档案"
+]);
+assert.equal(asrProfileTemplateState.groqBeforeSave.formatHidden, false);
+assert.equal(asrProfileTemplateState.groqBeforeSave.formatDisabled, true);
+assert.equal(asrProfileTemplateState.groqBeforeSave.formatValue, "openai");
+assert.equal(asrProfileTemplateState.groqBeforeSave.deleteDisabled, true);
+assert.equal(asrProfileTemplateState.groqBeforeSave.providerType, "groq");
+assert.equal(asrProfileTemplateState.groqBeforeSave.baseUrl, "https://api.groq.com/openai/v1");
+assert.equal(asrProfileTemplateState.groqBeforeSave.model, "whisper-large-v3-turbo");
+assert.equal(asrProfileTemplateState.groqAfterSave, "groq");
+assert.equal(asrProfileTemplateState.xaiBuiltIn.formatHidden, true);
+assert.equal(asrProfileTemplateState.xaiBuiltIn.modelHidden, true);
+assert.equal(asrProfileTemplateState.xaiBuiltIn.vadHidden, true);
+assert.equal(asrProfileTemplateState.xaiBuiltIn.formatDisplay, "none");
+assert.equal(asrProfileTemplateState.xaiBuiltIn.modelDisplay, "none");
+assert.equal(asrProfileTemplateState.xaiBuiltIn.vadDisplay, "none");
+assert.equal(asrProfileTemplateState.xaiBuiltIn.deleteDisabled, true);
+assert.equal(asrProfileTemplateState.funAsrBuiltIn.formatHidden, false);
+assert.equal(asrProfileTemplateState.funAsrBuiltIn.formatDisabled, true);
+assert.equal(asrProfileTemplateState.funAsrBuiltIn.formatValue, "dashscope_funasr");
+assert.equal(asrProfileTemplateState.funAsrBuiltIn.name, "Fun-ASR");
+assert.equal(asrProfileTemplateState.funAsrBuiltIn.vadDisabled, true);
+assert.equal(asrProfileTemplateState.funAsrBuiltIn.deleteDisabled, true);
+assert.equal(asrProfileTemplateState.customOpenAi.formatHidden, false);
+assert.equal(asrProfileTemplateState.customOpenAi.formatDisabled, false);
+assert.equal(asrProfileTemplateState.customOpenAi.formatValue, "openai");
+assert.equal(asrProfileTemplateState.customOpenAi.deleteDisabled, false);
+assert.equal(asrProfileTemplateState.customOpenAi.name, "自定义档案");
+assert.equal(asrProfileTemplateState.customFunAsr.formatHidden, false);
+assert.equal(asrProfileTemplateState.customFunAsr.formatDisabled, false);
+assert.equal(asrProfileTemplateState.customFunAsr.formatValue, "dashscope_funasr");
+assert.equal(asrProfileTemplateState.customFunAsr.name, "自定义档案");
+assert.equal(asrProfileTemplateState.customFunAsr.vadDisabled, true);
+assert.equal(asrProfileTemplateState.freshAsrName, "新档案");
+assert.equal(asrProfileTemplateState.freshLlmName, "新档案");
+
+const staleXaiProfileMigrationState = await vm.runInContext(`
+  (() => {
+    asrProfiles = normalizeStoredProfiles("asr", [
+      {
+        id: "xai_grok",
+        name: "xAI Grok",
+        providerType: "openai",
+        baseUrl: "https://api.x.ai/v1",
+        model: "stale-xai-model",
+        vadFilter: "on",
+        apiKey: "xai-key"
+      }
+    ]);
+    renderProfileOptions(elements.asrProfileId, asrProfiles, "xai_grok");
+    elements.asrProfileId.value = "xai_grok";
+    renderSelectedProfile("asr");
+    const xaiProfile = asrProfiles.find(profile => profile.id === "xai_grok");
+    const xaiStoredProfile = profilesForStorage("asr", asrProfiles).find(profile => profile.id === "xai_grok");
+    return {
+      providerType: xaiProfile?.providerType,
+      model: xaiProfile?.model,
+      vadFilter: xaiProfile?.vadFilter,
+      apiKey: xaiProfile?.apiKey,
+      formatHidden: elements.asrProviderTypeField?.hidden,
+      modelHidden: elements.asrModelField?.hidden,
+      vadHidden: elements.asrVadFilterField?.hidden,
+      formatDisplay: elements.asrProviderTypeField?.style.display,
+      modelDisplay: elements.asrModelField?.style.display,
+      vadDisplay: elements.asrVadFilterField?.style.display,
+      storedProfile: xaiStoredProfile
+    };
+  })()
+`, context);
+
+assert.equal(staleXaiProfileMigrationState.providerType, "xai");
+assert.equal(staleXaiProfileMigrationState.model, "");
+assert.equal(staleXaiProfileMigrationState.vadFilter, "auto");
+assert.equal(staleXaiProfileMigrationState.apiKey, "xai-key");
+assert.equal(staleXaiProfileMigrationState.formatHidden, true);
+assert.equal(staleXaiProfileMigrationState.modelHidden, true);
+assert.equal(staleXaiProfileMigrationState.vadHidden, true);
+assert.equal(staleXaiProfileMigrationState.formatDisplay, "none");
+assert.equal(staleXaiProfileMigrationState.modelDisplay, "none");
+assert.equal(staleXaiProfileMigrationState.vadDisplay, "none");
+assert.deepEqual(JSON.parse(JSON.stringify(staleXaiProfileMigrationState.storedProfile)), {
+  id: "xai_grok",
+  apiKey: "xai-key"
+});
+
+const staleXaiLoadSettingsMigrationState = await vm.runInContext(`
+  (async () => {
+    const originalSyncGet = chrome.storage.sync.get;
+    const originalLocalGet = chrome.storage.local.get;
+    const originalLocalSet = chrome.storage.local.set;
+    let savedPayload = null;
+    chrome.storage.sync.get = async () => ({});
+    chrome.storage.local.get = async () => ({
+      modelSettingsVersion: MODEL_SETTINGS_VERSION,
+      selectedAsrProfileId: "xai_grok",
+      selectedLlmProfileId: "openai_custom",
+      asrProfiles: [
+        {
+          id: "xai_grok",
+          name: "xAI Grok",
+          providerType: "openai",
+          baseUrl: "https://api.x.ai/v1",
+          model: "stale-xai-model",
+          vadFilter: "on",
+          apiKey: "xai-key"
+        }
+      ],
+      llmProfiles: [
+        {
+          id: "openai_custom",
+          name: "自定义档案",
+          providerType: "openai",
+          baseUrl: "",
+          model: "",
+          apiKey: ""
+        }
+      ]
+    });
+    chrome.storage.local.set = async payload => {
+      savedPayload = payload;
+    };
+    try {
+      await loadSettings();
+      return {
+        selectedAsrId: currentAsrProfileId,
+        selectedLlmId: currentLlmProfileId,
+        savedPayload
+      };
+    } finally {
+      chrome.storage.sync.get = originalSyncGet;
+      chrome.storage.local.get = originalLocalGet;
+      chrome.storage.local.set = originalLocalSet;
+    }
+  })()
+`, context);
+
+assert.equal(staleXaiLoadSettingsMigrationState.selectedAsrId, "xai_grok");
+assert.equal(staleXaiLoadSettingsMigrationState.selectedLlmId, "openai_custom");
+assert.deepEqual(JSON.parse(JSON.stringify(staleXaiLoadSettingsMigrationState.savedPayload.asrProfiles.find(profile => profile.id === "xai_grok"))), {
+  id: "xai_grok",
+  apiKey: "xai-key"
+});
+
 const targetLanguageState = await vm.runInContext(`
   (() => {
     setTargetLanguageValue("en");
@@ -1604,7 +1826,7 @@ assert.deepEqual(JSON.parse(JSON.stringify(localeSwitchState)), {
     retryText: "Continue",
     overlayText: "Overlay On",
     candidateSummary: "Reading media sources from this page.",
-    asrKeyHint: "The API key stays in this browser. Auto VAD is enabled only for compatible self-hosted endpoints.",
+    asrKeyHint: "The API key stays in this browser.",
     asrKeyPlaceholder: "Stored in this browser only",
     llmKeyHint: "The API key stays in this browser.",
     llmKeyPlaceholder: "Stored in this browser only"
@@ -1617,7 +1839,7 @@ assert.deepEqual(JSON.parse(JSON.stringify(localeSwitchState)), {
     retryText: "继续",
     overlayText: "浮层开",
     candidateSummary: "正在读取当前页面媒体源。",
-    asrKeyHint: "API 密钥只保存在本机浏览器。自动 VAD 只对兼容的自建接口启用。",
+    asrKeyHint: "API 密钥只保存在本机浏览器。",
     asrKeyPlaceholder: "只保存在本机浏览器",
     llmKeyHint: "API 密钥只保存在本机浏览器。",
     llmKeyPlaceholder: "只保存在本机浏览器"
@@ -3263,7 +3485,7 @@ assert.equal(funAsrProfileUiState.vadValue, "off");
 assert.equal(funAsrProfileUiState.autoHidden, true);
 assert.equal(funAsrProfileUiState.forceHidden, true);
 assert.match(funAsrProfileUiState.offText, /不支持|Not Supported/);
-assert.match(funAsrProfileUiState.hint, /不需要手动配置|no vocabulary ID/);
+assert.equal(funAsrProfileUiState.hint, "API 密钥只保存在本机浏览器。");
 assert.equal(funAsrProfileUiState.longFileHintHidden, false);
 
 const xaiProfileUiState = await vm.runInContext(`
@@ -3280,7 +3502,18 @@ const xaiProfileUiState = await vm.runInContext(`
     ];
     elements.asrProfileId.value = "xai_asr";
     renderSelectedProfile("asr");
+    if (elements.asrProviderType) {
+      elements.asrProviderType.value = "openai";
+    }
+    saveProfileFields("asr", "xai_asr");
     return {
+      formatHidden: elements.asrProviderTypeField?.hidden,
+      modelHidden: elements.asrModelField?.hidden,
+      vadHidden: elements.asrVadFilterField?.hidden,
+      formatDisplay: elements.asrProviderTypeField?.style.display,
+      modelDisplay: elements.asrModelField?.style.display,
+      vadDisplay: elements.asrVadFilterField?.style.display,
+      providerType: asrProfiles[0].providerType,
       disabled: elements.asrModel.disabled,
       placeholder: elements.asrModel.placeholder,
       hint: elements.asrApiKeyHint.textContent,
@@ -3292,9 +3525,16 @@ const xaiProfileUiState = await vm.runInContext(`
   })()
 `, context);
 
+assert.equal(xaiProfileUiState.formatHidden, true);
+assert.equal(xaiProfileUiState.modelHidden, true);
+assert.equal(xaiProfileUiState.vadHidden, true);
+assert.equal(xaiProfileUiState.formatDisplay, "none");
+assert.equal(xaiProfileUiState.modelDisplay, "none");
+assert.equal(xaiProfileUiState.vadDisplay, "none");
+assert.equal(xaiProfileUiState.providerType, "xai");
 assert.equal(xaiProfileUiState.disabled, true);
-assert.match(xaiProfileUiState.placeholder, /不会发送|可选/);
-assert.match(xaiProfileUiState.hint, /配置备注/);
+assert.equal(xaiProfileUiState.placeholder, "");
+assert.doesNotMatch(xaiProfileUiState.hint, /配置备注|profile note/);
 assert.equal(xaiProfileUiState.vadFilter, "auto");
 assert.equal(xaiProfileUiState.autoHidden, false);
 assert.match(xaiProfileUiState.offText, /关闭|Off/);

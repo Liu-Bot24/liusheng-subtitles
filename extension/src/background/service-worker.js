@@ -55,6 +55,7 @@ var findProfile = FuguangBrowserModelProfiles.findProfile;
 var normalizeProviderType = FuguangBrowserModelProfiles.normalizeProviderType;
 var normalizeSelectedProfileId = FuguangBrowserModelProfiles.normalizeSelectedProfileId;
 var normalizeStoredProfiles = FuguangBrowserModelProfiles.normalizeStoredProfiles;
+var profilesForStorage = FuguangBrowserModelProfiles.profilesForStorage;
 var isDashScopeFunAsrConfig = FuguangBrowserFunAsrProvider.isDashScopeFunAsrConfig;
 var dashScopeFunAsrChunkSeconds = FuguangBrowserFunAsrProvider.dashScopeFunAsrChunkSeconds;
 var dashScopeFunAsrShouldDiarize = FuguangBrowserFunAsrProvider.dashScopeFunAsrShouldDiarize;
@@ -5907,18 +5908,23 @@ function validateSelectedModelProfiles(asrProfile, llmProfile) {
 }
 
 function persistMigratedModelSettings(stored, asrProfiles, llmProfiles, selectedAsrId, selectedLlmId) {
+  const nextAsrProfiles = profilesForStorage("asr", asrProfiles);
+  const nextLlmProfiles = profilesForStorage("llm", llmProfiles);
   const needsVersionMigration = stored.modelSettingsVersion !== MODEL_SETTINGS_VERSION;
   const needsSelectionMigration =
     stored.selectedAsrProfileId !== selectedAsrId || stored.selectedLlmProfileId !== selectedLlmId;
-  if (!needsVersionMigration && !needsSelectionMigration) {
+  const needsProfileMigration =
+    JSON.stringify(stored.asrProfiles || []) !== JSON.stringify(nextAsrProfiles) ||
+    JSON.stringify(stored.llmProfiles || []) !== JSON.stringify(nextLlmProfiles);
+  if (!needsVersionMigration && !needsSelectionMigration && !needsProfileMigration) {
     return;
   }
   chrome.storage.local.set({
     selectedAsrProfileId: selectedAsrId,
     selectedLlmProfileId: selectedLlmId,
     modelSettingsVersion: MODEL_SETTINGS_VERSION,
-    asrProfiles,
-    llmProfiles
+    asrProfiles: nextAsrProfiles,
+    llmProfiles: nextLlmProfiles
   }).catch(() => {});
 }
 

@@ -103,9 +103,11 @@ const I18N = {
     off: "关闭",
     unsupported: "不支持",
     apiKey: "API 密钥",
-    apiFormat: "接口格式",
-    openaiFormat: "OpenAI 格式",
-    anthropicFormat: "Anthropic 格式",
+    apiFormat: "接口类型",
+    openaiFormat: "OpenAI 兼容格式",
+    anthropicFormat: "Anthropic 兼容格式",
+    whisperCompatibleAsr: "Whisper 兼容接口",
+    funAsrCompatibleAsr: "FunASR 兼容接口",
     targetLanguage: "目标语言",
     translationWorkers: "翻译并发",
     chunkMinutes: "字幕分组时长（分钟）",
@@ -245,14 +247,11 @@ const I18N = {
     backgroundClearFailed: "后台没有完成字幕状态清理。",
     noSavedCacheAndDisplayCleared: "当前页面没有已保存的字幕缓存，已清除当前显示。",
     settingsSaved: "设置已保存。新任务会使用当前配置。",
-    profileAdded: "已新增空白档案。请填写接口地址、模型名称和 API 密钥后保存。",
+    profileAdded: "已新增档案，请按需要修改并保存。",
     profileDeleted: "已删除当前档案。保存设置后会更新本机存储。",
     unnamedProfile: "未命名档案",
     localOnlyPlaceholder: "只保存在本机浏览器",
-    xaiModelPlaceholder: "可选备注",
-    xaiHint: "xAI ASR 调用 /stt；模型名称只作为配置备注。API 密钥只保存在本机浏览器。",
-    funAsrKeyHint: "Fun-ASR 使用 DashScope 长文件转写；敏感词过滤使用系统默认，热词表不需要手动配置。",
-    asrKeyHint: "API 密钥只保存在本机浏览器。自动 VAD 只对兼容的自建接口启用。",
+    asrKeyHint: "API 密钥只保存在本机浏览器。",
     llmKeyHint: "API 密钥只保存在本机浏览器。",
     startTitle: "从当前媒体源抽取音频并生成字幕。",
     restartTitle: "从选中的媒体源重新抽取音频并创建新任务。",
@@ -361,9 +360,11 @@ const I18N = {
     off: "Off",
     unsupported: "Not Supported",
     apiKey: "API Key",
-    apiFormat: "API Format",
+    apiFormat: "API Type",
     openaiFormat: "OpenAI Compatible",
-    anthropicFormat: "Anthropic",
+    anthropicFormat: "Anthropic Compatible",
+    whisperCompatibleAsr: "Whisper-compatible API",
+    funAsrCompatibleAsr: "FunASR-compatible API",
     targetLanguage: "Target Language",
     translationWorkers: "Translation Workers",
     chunkMinutes: "Subtitle Group Length (min)",
@@ -503,14 +504,11 @@ const I18N = {
     backgroundClearFailed: "The background service did not clear subtitle state.",
     noSavedCacheAndDisplayCleared: "No saved subtitle cache was found; current display was cleared.",
     settingsSaved: "Settings saved. New tasks will use this configuration.",
-    profileAdded: "Added a blank profile. Fill in the API URL, model, and key, then save.",
+    profileAdded: "Profile added. Edit it as needed, then save.",
     profileDeleted: "Deleted the current profile. Save settings to update local storage.",
     unnamedProfile: "Untitled profile",
     localOnlyPlaceholder: "Stored in this browser only",
-    xaiModelPlaceholder: "Optional note",
-    xaiHint: "xAI ASR uses /stt; the model field is only a profile note. The API key stays in this browser.",
-    funAsrKeyHint: "Fun-ASR uses DashScope long-file transcription. Built-in sensitive filtering stays enabled; no vocabulary ID is required.",
-    asrKeyHint: "The API key stays in this browser. Auto VAD is enabled only for compatible self-hosted endpoints.",
+    asrKeyHint: "The API key stays in this browser.",
     llmKeyHint: "The API key stays in this browser.",
     startTitle: "Extract audio from the selected source and generate subtitles.",
     restartTitle: "Extract audio again from the selected source and create a new task.",
@@ -580,13 +578,15 @@ const normalizeSourceLanguageValue = FuguangSidepanelLanguage.normalizeSourceLan
 const DEFAULT_ASR_PROFILE_ID = FuguangSidepanelProfiles.DEFAULT_ASR_PROFILE_ID;
 const DEFAULT_LLM_PROFILE_ID = FuguangSidepanelProfiles.DEFAULT_LLM_PROFILE_ID;
 const createEmptyProfile = FuguangSidepanelProfiles.createEmptyProfile;
+const defaultCustomProfileName = FuguangSidepanelProfiles.defaultCustomProfileName;
 const defaultProfiles = FuguangSidepanelProfiles.defaultProfiles;
 const normalizeAsrVadFilterMode = FuguangSidepanelProfiles.normalizeAsrVadFilterMode;
+const normalizeCustomProfileProviderType = FuguangSidepanelProfiles.normalizeCustomProfileProviderType;
 const normalizeSelectedProfileId = FuguangSidepanelProfiles.normalizeSelectedProfileId;
 const normalizeStoredProfiles = FuguangSidepanelProfiles.normalizeStoredProfiles;
 const placeholderBaseUrl = FuguangSidepanelProfiles.placeholderBaseUrl;
 const profileById = FuguangSidepanelProfiles.profileById;
-const uniqueProfiles = FuguangSidepanelProfiles.uniqueProfiles;
+const profilesForStorage = FuguangSidepanelProfiles.profilesForStorage;
 
 const elements = {
   pageTitle: document.querySelector("#pageTitle"),
@@ -626,8 +626,12 @@ const elements = {
   asrProfileName: document.querySelector("#asrProfileName"),
   addAsrProfile: document.querySelector("#addAsrProfile"),
   deleteAsrProfile: document.querySelector("#deleteAsrProfile"),
+  asrProviderTypeField: document.querySelector("#asrProviderTypeField"),
+  asrProviderType: document.querySelector("#asrProviderType"),
   asrBaseUrl: document.querySelector("#asrBaseUrl"),
+  asrModelField: document.querySelector("#asrModelField"),
   asrModel: document.querySelector("#asrModel"),
+  asrVadFilterField: document.querySelector("#asrVadFilterField"),
   asrVadFilter: document.querySelector("#asrVadFilter"),
   asrApiKey: document.querySelector("#asrApiKey"),
   asrApiKeyHint: document.querySelector("#asrApiKeyHint"),
@@ -748,6 +752,7 @@ elements.asrProfileId.addEventListener("change", () => {
 });
 elements.addAsrProfile.addEventListener("click", () => addProfile("asr"));
 elements.deleteAsrProfile.addEventListener("click", () => deleteProfile("asr"));
+elements.asrProviderType.addEventListener("change", () => updateAsrCustomProviderType());
 elements.llmProfileId.addEventListener("change", () => {
   saveProfileFields("llm", currentLlmProfileId);
   currentLlmProfileId = elements.llmProfileId.value;
@@ -917,23 +922,25 @@ async function loadSettings() {
   const subtitleSyncSettings = pickDefined(syncStored, SUBTITLE_SYNC_KEYS);
   asrProfiles = normalizeStoredProfiles("asr", useStoredProfiles ? localStored.asrProfiles : []);
   llmProfiles = normalizeStoredProfiles("llm", useStoredProfiles ? localStored.llmProfiles : []);
+  const selectedAsrId = normalizeSelectedProfileId(
+    asrProfiles,
+    localStored.selectedAsrProfileId || DEFAULT_ASR_PROFILE_ID,
+    DEFAULT_ASR_PROFILE_ID
+  );
+  const selectedLlmId = normalizeSelectedProfileId(
+    llmProfiles,
+    localStored.selectedLlmProfileId || DEFAULT_LLM_PROFILE_ID,
+    DEFAULT_LLM_PROFILE_ID
+  );
   renderProfileOptions(
     elements.asrProfileId,
     asrProfiles,
-    normalizeSelectedProfileId(
-      asrProfiles,
-      localStored.selectedAsrProfileId || DEFAULT_ASR_PROFILE_ID,
-      DEFAULT_ASR_PROFILE_ID
-    )
+    selectedAsrId
   );
   renderProfileOptions(
     elements.llmProfileId,
     llmProfiles,
-    normalizeSelectedProfileId(
-      llmProfiles,
-      localStored.selectedLlmProfileId || DEFAULT_LLM_PROFILE_ID,
-      DEFAULT_LLM_PROFILE_ID
-    )
+    selectedLlmId
   );
   currentAsrProfileId = elements.asrProfileId.value;
   currentLlmProfileId = elements.llmProfileId.value;
@@ -944,7 +951,33 @@ async function loadSettings() {
   });
   renderSelectedProfile("asr");
   renderSelectedProfile("llm");
+  await persistNormalizedModelProfilesIfNeeded(localStored, selectedAsrId, selectedLlmId);
   await clearLegacySyncSettingsIfNeeded(syncStored);
+}
+
+async function persistNormalizedModelProfilesIfNeeded(stored, selectedAsrId, selectedLlmId) {
+  const nextAsrProfiles = profilesForStorage("asr", asrProfiles);
+  const nextLlmProfiles = profilesForStorage("llm", llmProfiles);
+  const needsMigration =
+    stored.modelSettingsVersion !== MODEL_SETTINGS_VERSION ||
+    stored.selectedAsrProfileId !== selectedAsrId ||
+    stored.selectedLlmProfileId !== selectedLlmId ||
+    !storagePayloadsEqual(stored.asrProfiles, nextAsrProfiles) ||
+    !storagePayloadsEqual(stored.llmProfiles, nextLlmProfiles);
+  if (!needsMigration) {
+    return;
+  }
+  await chrome.storage.local.set({
+    modelSettingsVersion: MODEL_SETTINGS_VERSION,
+    selectedAsrProfileId: selectedAsrId,
+    selectedLlmProfileId: selectedLlmId,
+    asrProfiles: nextAsrProfiles,
+    llmProfiles: nextLlmProfiles
+  }).catch(() => {});
+}
+
+function storagePayloadsEqual(left, right) {
+  return JSON.stringify(left || []) === JSON.stringify(right || []);
 }
 
 function applyStoredSettings(data) {
@@ -998,7 +1031,7 @@ function renderProfileOptions(select, profiles, selectedId) {
   for (const profile of profiles) {
     const option = document.createElement("option");
     option.value = profile.id;
-    option.textContent = profile.name;
+    option.textContent = profile.name || profile.model || t("unnamedProfile");
     select.appendChild(option);
   }
   select.value = profiles.some(profile => profile.id === selectedId) ? selectedId : profiles[0]?.id || "";
@@ -1030,11 +1063,58 @@ function updateAsrVadFilterAvailability(usesFunAsr) {
   select.disabled = usesFunAsr;
 }
 
+function isBuiltInAsrTemplate(profile) {
+  return new Set(["openai_whisper", "groq_whisper", "xai_grok", "dashscope_funasr"]).has(profile?.id);
+}
+
+function isLockedAsrProviderType(profile) {
+  return isBuiltInAsrTemplate(profile) || ["groq", "xai"].includes(profile?.providerType);
+}
+
+function shouldHideAsrProviderType(profile) {
+  return profile?.id === "xai_grok" || profile?.providerType === "xai";
+}
+
+function setFieldHidden(field, hidden) {
+  if (!field) {
+    return;
+  }
+  field.hidden = hidden;
+  field.style.display = hidden ? "none" : "";
+  field.setAttribute("aria-hidden", String(Boolean(hidden)));
+}
+
+function updateAsrCustomProviderType() {
+  const profile = selectedProfile("asr");
+  if (isLockedAsrProviderType(profile)) {
+    renderSelectedProfile("asr");
+    return;
+  }
+  const providerType = normalizeCustomProfileProviderType("asr", elements.asrProviderType.value);
+  profile.providerType = providerType;
+  const currentName = elements.asrProfileName.value.trim();
+  if (!currentName || currentName === "自定义 ASR" || currentName === "未命名档案" || currentName === "Untitled profile") {
+    profile.name = defaultCustomProfileName("asr", providerType);
+  } else {
+    profile.name = currentName;
+  }
+  profile.model = elements.asrModel.value.trim() || (providerType === "dashscope_funasr" ? "fun-asr" : "");
+  profile.vadFilter = providerType === "dashscope_funasr" ? "off" : normalizeAsrVadFilterMode(elements.asrVadFilter.value);
+  renderProfileOptions(elements.asrProfileId, asrProfiles, profile.id);
+  renderSelectedProfile("asr");
+}
+
 function renderSelectedProfile(kind) {
   const profile = selectedProfile(kind);
   if (kind === "asr") {
-    const usesXaiAsr = profile.providerType === "xai";
+    const usesXaiAsr = profile.id === "xai_grok" || profile.providerType === "xai";
     const usesFunAsr = profile.providerType === "dashscope_funasr";
+    const builtInTemplate = isBuiltInAsrTemplate(profile);
+    setFieldHidden(elements.asrProviderTypeField, shouldHideAsrProviderType(profile));
+    if (elements.asrProviderType) {
+      elements.asrProviderType.value = normalizeCustomProfileProviderType("asr", profile.providerType);
+      elements.asrProviderType.disabled = builtInTemplate;
+    }
     elements.asrProfileName.value = profile.name || "";
     elements.asrBaseUrl.value = profile.baseUrl || "";
     elements.asrModel.value = profile.model || "";
@@ -1042,19 +1122,18 @@ function renderSelectedProfile(kind) {
     elements.asrApiKey.value = profile.apiKey || "";
     elements.asrBaseUrl.disabled = false;
     elements.asrApiKey.disabled = false;
+    setFieldHidden(elements.asrModelField, usesXaiAsr);
+    setFieldHidden(elements.asrVadFilterField, usesXaiAsr);
     elements.asrModel.disabled = usesXaiAsr;
     updateAsrVadFilterAvailability(usesFunAsr);
     if (elements.funAsrLongFileHint) {
       elements.funAsrLongFileHint.hidden = !usesFunAsr;
     }
     elements.asrBaseUrl.placeholder = placeholderBaseUrl(profile.providerType);
-    elements.asrModel.placeholder = usesXaiAsr ? t("xaiModelPlaceholder") : "";
+    elements.asrModel.placeholder = "";
     elements.asrApiKey.placeholder = t("localOnlyPlaceholder");
-    elements.asrApiKeyHint.textContent = usesXaiAsr
-        ? t("xaiHint")
-        : usesFunAsr
-          ? t("funAsrKeyHint")
-        : t("asrKeyHint");
+    elements.asrApiKeyHint.textContent = t("asrKeyHint");
+    elements.deleteAsrProfile.disabled = builtInTemplate;
     return;
   }
   elements.llmProviderType.value = ["openai", "anthropic"].includes(profile.providerType) ? profile.providerType : "openai";
@@ -1070,7 +1149,10 @@ function renderSelectedProfile(kind) {
 function saveProfileFields(kind, profileId) {
   if (kind === "asr") {
     const profile = profileById(asrProfiles, profileId || elements.asrProfileId.value);
-    profile.name = elements.asrProfileName.value.trim() || profile.name || profile.model || t("unnamedProfile");
+    if (!isLockedAsrProviderType(profile)) {
+      profile.providerType = normalizeCustomProfileProviderType("asr", elements.asrProviderType.value || profile.providerType);
+    }
+    profile.name = elements.asrProfileName.value.trim() || profile.name || profile.model || defaultCustomProfileName("asr", profile.providerType);
     profile.baseUrl = elements.asrBaseUrl.value.trim();
     profile.model = elements.asrModel.value.trim();
     profile.vadFilter = profile.providerType === "dashscope_funasr" ? "off" : normalizeAsrVadFilterMode(elements.asrVadFilter.value);
@@ -1106,6 +1188,11 @@ function deleteProfile(kind) {
   const select = kind === "asr" ? elements.asrProfileId : elements.llmProfileId;
   const selectedId = select.value;
   const index = profiles.findIndex(profile => profile.id === selectedId);
+  if (kind === "asr" && isBuiltInAsrTemplate(profiles[index])) {
+    renderSelectedProfile(kind);
+    setMessage(t("profileDeleted"));
+    return;
+  }
   if (index >= 0) {
     profiles.splice(index, 1);
   }
@@ -1140,8 +1227,8 @@ async function saveSettings() {
     modelSettingsVersion: MODEL_SETTINGS_VERSION,
     selectedAsrProfileId: elements.asrProfileId.value || DEFAULT_ASR_PROFILE_ID,
     selectedLlmProfileId: elements.llmProfileId.value || DEFAULT_LLM_PROFILE_ID,
-    asrProfiles: uniqueProfiles(asrProfiles),
-    llmProfiles: uniqueProfiles(llmProfiles),
+    asrProfiles: profilesForStorage("asr", asrProfiles),
+    llmProfiles: profilesForStorage("llm", llmProfiles),
     sourceLanguage: getSourceLanguageValue(),
     targetLanguage: getTargetLanguageValue(),
     translationWorkers: clampSetting(elements.translationWorkers.value, 1, 6, DEFAULTS.translationWorkers),

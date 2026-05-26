@@ -10,8 +10,8 @@ const repoRoot = path.resolve(new URL("../..", import.meta.url).pathname);
 const extensionPath = path.join(repoRoot, "extension");
 const speachesBaseUrl = normalizeBaseUrl(process.env.SPEACHES_BASE_URL || "http://127.0.0.1:8000/v1");
 const speachesModel = process.env.SPEACHES_MODEL || "Systran/faster-whisper-large-v3";
-const llmBaseUrl = normalizeBaseUrl(process.env.LLM_BASE_URL || "https://llm.example.invalid/v1");
-const llmModel = process.env.LLM_MODEL || "test-llm";
+const llmBaseUrl = normalizeBaseUrl(process.env.LLM_BASE_URL || "");
+const llmModel = process.env.LLM_MODEL || "";
 const llmApiKey = process.env.LLM_API_KEY || "";
 const allowRealServices = process.env.FUGUANG_ALLOW_REAL_SERVICES === "1";
 const realSmokeVerbose = process.env.FUGUANG_REAL_SMOKE_VERBOSE === "1";
@@ -21,8 +21,8 @@ if (!allowRealServices) {
   throw new Error("FUGUANG_ALLOW_REAL_SERVICES=1 is required before running real Speaches/LLM smoke.");
 }
 
-if (!llmApiKey) {
-  throw new Error("LLM_API_KEY is required; do not put the key in this repository.");
+if (!llmBaseUrl || !llmModel || !llmApiKey) {
+  throw new Error("LLM_BASE_URL, LLM_MODEL, and LLM_API_KEY are required; do not put keys in this repository.");
 }
 
 const sayBin = resolveCommand("say");

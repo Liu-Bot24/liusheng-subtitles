@@ -27,13 +27,13 @@ export const FuguangBrowserModelProfiles = (() => {
       name: "xAI Grok",
       providerType: "xai",
       baseUrl: "https://api.x.ai/v1",
-      model: "grok-2-voice-1212",
+      model: "",
       vadFilter: "auto",
       apiKey: ""
     },
     {
       id: "dashscope_funasr",
-      name: "阿里云 Fun-ASR",
+      name: "Fun-ASR",
       providerType: "dashscope_funasr",
       baseUrl: "https://dashscope.aliyuncs.com/api/v1",
       model: "fun-asr",
@@ -42,7 +42,7 @@ export const FuguangBrowserModelProfiles = (() => {
     },
     {
       id: "custom_asr",
-      name: "自定义 ASR",
+      name: "自定义档案",
       providerType: "openai",
       baseUrl: "",
       model: "",
@@ -60,6 +60,7 @@ export const FuguangBrowserModelProfiles = (() => {
       apiKey: ""
     }
   ];
+  const BUILT_IN_ASR_PROFILE_IDS = new Set(["openai_whisper", "groq_whisper", "xai_grok", "dashscope_funasr"]);
 
   function findProfile(profiles, selectedId, fallbackId) {
     return profiles.find(profile => profile.id === selectedId) ||
@@ -113,6 +114,12 @@ export const FuguangBrowserModelProfiles = (() => {
   }
 
   function mergeProfileDefaults(defaultProfile, storedProfile) {
+    if (isBuiltInAsrProfile(defaultProfile)) {
+      return {
+        ...cloneProfile(defaultProfile),
+        apiKey: storedProfile.apiKey || defaultProfile.apiKey || ""
+      };
+    }
     return {
       id: storedProfile.id || defaultProfile.id,
       name: storedProfile.name || defaultProfile.name || "",
@@ -122,6 +129,39 @@ export const FuguangBrowserModelProfiles = (() => {
       vadFilter: storedProfile.vadFilter || defaultProfile.vadFilter || "auto",
       apiKey: storedProfile.apiKey || defaultProfile.apiKey || ""
     };
+  }
+
+  function isBuiltInAsrProfile(profile) {
+    return BUILT_IN_ASR_PROFILE_IDS.has(profile?.id);
+  }
+
+  function profilesForStorage(kind, profiles) {
+    return uniqueProfiles(profiles).map(profile => profileForStorage(kind, profile));
+  }
+
+  function profileForStorage(kind, rawProfile) {
+    const profile = normalizeProfile(rawProfile);
+    if (kind === "asr" && isBuiltInAsrProfile(profile)) {
+      const storedProfile = { id: profile.id };
+      if (profile.apiKey) {
+        storedProfile.apiKey = profile.apiKey;
+      }
+      return storedProfile;
+    }
+    const storedProfile = {
+      id: profile.id,
+      name: profile.name || "",
+      providerType: normalizeCustomProfileProviderType(kind, profile.providerType),
+      baseUrl: profile.baseUrl || "",
+      model: profile.model || "",
+      apiKey: profile.apiKey || ""
+    };
+    if (kind === "asr") {
+      storedProfile.vadFilter = profile.providerType === "dashscope_funasr"
+        ? "off"
+        : FuguangBrowserAsrProvider.normalizeAsrVadFilterMode(profile.vadFilter);
+    }
+    return storedProfile;
   }
 
   function hasProfileContent(profile) {
@@ -153,6 +193,14 @@ export const FuguangBrowserModelProfiles = (() => {
 
   function knownProfileDefaults(kind) {
     return kind === "asr" ? KNOWN_ASR_PROFILES : KNOWN_LLM_PROFILES;
+  }
+
+  function normalizeCustomProfileProviderType(kind, providerType) {
+    const normalized = normalizeProviderType(providerType);
+    if (kind === "llm") {
+      return normalized === "anthropic" ? "anthropic" : "openai";
+    }
+    return normalized === "dashscope_funasr" ? "dashscope_funasr" : "openai";
   }
 
   function cloneProfile(profile) {
@@ -189,6 +237,7 @@ export const FuguangBrowserModelProfiles = (() => {
     findProfile,
     normalizeProviderType,
     normalizeSelectedProfileId,
-    normalizeStoredProfiles
+    normalizeStoredProfiles,
+    profilesForStorage
   };
 })();

@@ -47,6 +47,10 @@ body::before {
   position: fixed;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 .side-shell {
   display: grid;
   gap: 14px;
