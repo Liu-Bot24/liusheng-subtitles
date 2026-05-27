@@ -663,6 +663,14 @@ button:disabled {
   gap: 8px;
 }
 
+.task-boundary-note {
+  color: var(--subtle);
+  font-size: 10px;
+  line-height: 1.45;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
 .subtitle-section .section-heading.compact {
   align-items: start;
   grid-template-columns: 1fr;

@@ -236,6 +236,63 @@ vm.runInContext(languageSource, context, { filename: "sidepanel-language.js" });
 vm.runInContext(profilesSource, context, { filename: "sidepanel-profiles.js" });
 vm.runInContext(source, context, { filename: "sidepanel.js" });
 
+const scopedStatusMessagesState = await vm.runInContext(`
+  (async () => {
+    const originalSendMessage = chrome.runtime.sendMessage;
+    activeTab = { id: 1, title: "Video", url: "https://example.test/watch/1" };
+    elements.message.textContent = "";
+    elements.taskMessage.textContent = "";
+    elements.taskMessage.hidden = true;
+
+    setSettingsMessage(t("settingsSaved"));
+    const afterSettings = {
+      settingsMessage: elements.message.textContent,
+      taskMessage: elements.taskMessage.textContent,
+      taskHidden: elements.taskMessage.hidden
+    };
+
+    elements.message.textContent = "设置已保存。新任务会使用当前配置。";
+    elements.taskMessage.textContent = "";
+    elements.taskMessage.hidden = true;
+    candidates = [];
+    renderedCandidateSignature = "";
+    chrome.runtime.sendMessage = async message => {
+      if (message.type === MESSAGE.GET_CANDIDATES) {
+        return { ok: true, candidates: [] };
+      }
+      return { ok: true };
+    };
+    try {
+      await refreshCandidates({ skipActivate: true });
+      return {
+        afterSettings,
+        afterTask: {
+          settingsMessage: elements.message.textContent,
+          taskMessage: elements.taskMessage.textContent,
+          taskHidden: elements.taskMessage.hidden,
+          summary: elements.candidateSummary.textContent
+        }
+      };
+    } finally {
+      chrome.runtime.sendMessage = originalSendMessage;
+    }
+  })()
+`, context);
+
+assert.deepEqual(JSON.parse(JSON.stringify(scopedStatusMessagesState)), {
+  afterSettings: {
+    settingsMessage: "设置已保存。新任务会使用当前配置。",
+    taskMessage: "",
+    taskHidden: true
+  },
+  afterTask: {
+    settingsMessage: "设置已保存。新任务会使用当前配置。",
+    taskMessage: "",
+    taskHidden: true,
+    summary: "还没有发现可抽取的媒体源。"
+  }
+});
+
 const result = await vm.runInContext(`
   (async () => {
     activeTab = { id: 1, title: "Video", url: "https://example.test/watch/1" };
@@ -918,13 +975,13 @@ const exportSubtitleState = await vm.runInContext(`
       ];
       subtitleDisplayMode = "bilingual";
       await exportCurrentSubtitle();
-      const exportedMessage = elements.message.textContent;
+      const exportedMessage = elements.taskMessage.textContent;
       subtitleCues = [];
       await exportCurrentSubtitle();
       return {
         downloads,
         exportedMessage,
-        emptyMessage: elements.message.textContent
+        emptyMessage: elements.taskMessage.textContent
       };
     } finally {
       downloadBlob = originalDownloadBlob;
@@ -1125,7 +1182,7 @@ const continueTaskButtonRouteState = await vm.runInContext(`
     };
     try {
       await retryPreloadFromSidePanel();
-      return { sent, message: elements.message.textContent };
+      return { sent, message: elements.taskMessage.textContent };
     } finally {
       chrome.tabs.query = originalTabsQuery;
       chrome.runtime.sendMessage = originalSendMessage;
@@ -1177,7 +1234,7 @@ const rerunAsrButtonRouteState = await vm.runInContext(`
     };
     try {
       await rerunAsrFromSidePanel([0]);
-      return { sent, message: elements.message.textContent };
+      return { sent, message: elements.taskMessage.textContent };
     } finally {
       chrome.tabs.query = originalTabsQuery;
       chrome.runtime.sendMessage = originalSendMessage;
@@ -1237,7 +1294,7 @@ const retranslateButtonTargetLanguageState = await vm.runInContext(`
     };
     try {
       await retryTranslationFromSidePanel([0]);
-      return { sent, message: elements.message.textContent };
+      return { sent, message: elements.taskMessage.textContent };
     } finally {
       chrome.tabs.query = originalTabsQuery;
       chrome.runtime.sendMessage = originalSendMessage;
@@ -4068,7 +4125,7 @@ const sourceOnlyTranslatedExportState = await vm.runInContext(`
     await exportCurrentSubtitle();
     return {
       downloads: downloads.length,
-      message: elements.message.textContent,
+      message: elements.taskMessage.textContent,
       text: downloads[0]?.text || ""
     };
   })()
@@ -4299,7 +4356,7 @@ const staleRetryResultIgnoredState = await vm.runInContext(`
         sent,
         activeTabId: activeTab.id,
         currentJobId,
-        message: elements.message.textContent
+        message: elements.taskMessage.textContent
       };
     } finally {
       chrome.tabs.query = originalTabsQuery;

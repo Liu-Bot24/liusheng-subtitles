@@ -89,6 +89,7 @@ const I18N = {
     taskDetails: "展开任务",
     collapseTask: "收起任务",
     subtitlePlaceholder: "字幕生成后会显示在这里。",
+    taskBoundaryNote: "* 受 DRM 或平台策略保护影响，Netflix、YouTube 等部分媒体可能无法在浏览器插件内完成音频识别。请将流声字幕用于支持的内容，或期待本地版本。",
     asrSettings: "语音识别",
     configHelpLink: "配置说明",
     translationModel: "翻译模型",
@@ -354,6 +355,7 @@ const I18N = {
     taskDetails: "Show Task",
     collapseTask: "Hide Task",
     subtitlePlaceholder: "Subtitles will appear here.",
+    taskBoundaryNote: "* DRM or platform policies may prevent audio recognition for some media, including Netflix and YouTube. Please use Liusheng Subtitles with supported content, or look forward to the local version.",
     asrSettings: "Speech Recognition",
     configHelpLink: "Configuration Guide",
     translationModel: "Translation Model",
@@ -1392,7 +1394,7 @@ function addProfile(kind) {
     currentLlmProfileId = profile.id;
   }
   renderSelectedProfile(kind);
-  setMessage(t("profileAdded"));
+  setSettingsMessage(t("profileAdded"));
 }
 
 function deleteProfile(kind) {
@@ -1405,7 +1407,7 @@ function deleteProfile(kind) {
     (kind === "llm" && isBuiltInLlmProfile(profiles[index]))
   ) {
     renderSelectedProfile(kind);
-    setMessage(t("profileDeleted"));
+    setSettingsMessage(t("profileDeleted"));
     return;
   }
   if (index >= 0) {
@@ -1421,7 +1423,7 @@ function deleteProfile(kind) {
     currentLlmProfileId = select.value;
   }
   renderSelectedProfile(kind);
-  setMessage(t("profileDeleted"));
+  setSettingsMessage(t("profileDeleted"));
 }
 
 async function saveSettings() {
@@ -1450,7 +1452,7 @@ async function saveSettings() {
     chunkMinutes: Math.round(clampSetting(elements.chunkMinutes.value, 1, 60, DEFAULTS.chunkMinutes))
   });
   await chrome.storage.local.remove(["asrApiKey", "llmApiKey", "asrBaseUrl", "asrModel", "llmBaseUrl", "llmModel", "llmProviderType", "asrWorkers"]).catch(() => {});
-  setMessage(t("settingsSaved"));
+  setSettingsMessage(t("settingsSaved"));
 }
 
 async function saveSourceLanguageSetting() {
@@ -1601,7 +1603,7 @@ async function refreshCandidates(options = {}) {
   ensureSelection();
   renderCandidates(candidates);
   if (!options.silent) {
-    setMessage(candidates.length ? t("sourcesRefreshed", { count: candidates.length }) : t("sourcesEmpty"));
+    setMessage(candidates.length ? t("sourcesRefreshed", { count: candidates.length }) : "");
   }
   return true;
 }
@@ -2025,6 +2027,9 @@ function renderCandidates(items) {
       hidden: hiddenCount ? t("sourcesHidden", { count: hiddenCount }) : ""
     })
     : t("sourcesEmpty");
+  if (items.length) {
+    clearCandidateEmptyTaskMessage();
+  }
   if (!items.length) {
     updateActionButtons(currentJob);
     return;
@@ -3773,10 +3778,32 @@ function pad(value) {
 }
 
 function setMessage(text = "") {
+  setTaskMessage(text);
+}
+
+function setTaskMessage(text = "") {
   const value = String(text || "").trim();
-  elements.message.textContent = value;
   elements.taskMessage.textContent = value;
   elements.taskMessage.hidden = !value;
+}
+
+function setSettingsMessage(text = "") {
+  elements.message.textContent = String(text || "").trim();
+}
+
+function clearCandidateEmptyTaskMessage() {
+  const value = String(elements.taskMessage.textContent || "").trim();
+  const emptyMessages = new Set([
+    t("sourcesEmpty"),
+    t("noCandidates"),
+    I18N.zh.sourcesEmpty,
+    I18N.zh.noCandidates,
+    I18N.en.sourcesEmpty,
+    I18N.en.noCandidates
+  ]);
+  if (emptyMessages.has(value)) {
+    setTaskMessage("");
+  }
 }
 
 function valueOrDefault(value, fallback) {
