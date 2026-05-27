@@ -1427,8 +1427,14 @@ function deleteProfile(kind) {
 }
 
 async function saveSettings() {
-  saveProfileFields("asr", elements.asrProfileId.value);
-  saveProfileFields("llm", elements.llmProfileId.value);
+  const selectedAsrProfileId = elements.asrProfileId.value || DEFAULT_ASR_PROFILE_ID;
+  const selectedLlmProfileId = elements.llmProfileId.value || DEFAULT_LLM_PROFILE_ID;
+  saveProfileFields("asr", selectedAsrProfileId);
+  saveProfileFields("llm", selectedLlmProfileId);
+  renderProfileOptions(elements.asrProfileId, asrProfiles, selectedAsrProfileId);
+  renderProfileOptions(elements.llmProfileId, llmProfiles, selectedLlmProfileId);
+  currentAsrProfileId = elements.asrProfileId.value;
+  currentLlmProfileId = elements.llmProfileId.value;
   await chrome.storage.sync.set({
     subtitleFontSize: clampSetting(elements.subtitleFontSize.value, 18, 48, DEFAULTS.subtitleFontSize),
     subtitleOverlayEnabled,
@@ -1442,8 +1448,8 @@ async function saveSettings() {
   });
   await chrome.storage.local.set({
     modelSettingsVersion: MODEL_SETTINGS_VERSION,
-    selectedAsrProfileId: elements.asrProfileId.value || DEFAULT_ASR_PROFILE_ID,
-    selectedLlmProfileId: elements.llmProfileId.value || DEFAULT_LLM_PROFILE_ID,
+    selectedAsrProfileId: currentAsrProfileId || DEFAULT_ASR_PROFILE_ID,
+    selectedLlmProfileId: currentLlmProfileId || DEFAULT_LLM_PROFILE_ID,
     asrProfiles: profilesForStorage("asr", asrProfiles),
     llmProfiles: profilesForStorage("llm", llmProfiles),
     sourceLanguage: getSourceLanguageValue(),

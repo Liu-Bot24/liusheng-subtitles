@@ -1568,6 +1568,37 @@ assert.equal(asrProfileTemplateState.customFunAsr.vadDisabled, false);
 assert.equal(asrProfileTemplateState.freshAsrName, "新档案");
 assert.equal(asrProfileTemplateState.freshLlmName, "新档案");
 
+const profileOptionRenameState = await vm.runInContext(`
+  (async () => {
+    asrProfiles = normalizeStoredProfiles("asr", []);
+    llmProfiles = normalizeStoredProfiles("llm", []);
+    const asrProfile = createEmptyProfile("asr");
+    const llmProfile = createEmptyProfile("llm");
+    asrProfiles.push(asrProfile);
+    llmProfiles.push(llmProfile);
+    renderProfileOptions(elements.asrProfileId, asrProfiles, asrProfile.id);
+    renderProfileOptions(elements.llmProfileId, llmProfiles, llmProfile.id);
+    currentAsrProfileId = elements.asrProfileId.value;
+    currentLlmProfileId = elements.llmProfileId.value;
+    renderSelectedProfile("asr");
+    renderSelectedProfile("llm");
+    elements.asrProfileName.value = "发";
+    elements.llmProfileName.value = "翻译档案";
+    await saveSettings();
+    return {
+      asrOptionText: elements.asrProfileId.children.find(option => option.value === asrProfile.id)?.textContent,
+      llmOptionText: elements.llmProfileId.children.find(option => option.value === llmProfile.id)?.textContent,
+      selectedAsrId: elements.asrProfileId.value,
+      selectedLlmId: elements.llmProfileId.value
+    };
+  })()
+`, context);
+
+assert.equal(profileOptionRenameState.asrOptionText, "发");
+assert.equal(profileOptionRenameState.llmOptionText, "翻译档案");
+assert.equal(profileOptionRenameState.selectedAsrId.startsWith("asr_profile_"), true);
+assert.equal(profileOptionRenameState.selectedLlmId.startsWith("llm_profile_"), true);
+
 const builtInAsrSaveState = await vm.runInContext(`
   (() => {
     asrProfiles = normalizeStoredProfiles("asr", [{ id: "groq_whisper", apiKey: "groq-key" }]);
