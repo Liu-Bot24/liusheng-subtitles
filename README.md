@@ -2,6 +2,8 @@
 
 # 流声字幕 - 基于 ASR 与 LLM 的流媒体视频字幕生成与翻译
 
+![流声字幕预览](docs/assets/github-preview.jpg)
+
 Languages: [简体中文](README.md) · [English](README-en.md)
 
 </div>

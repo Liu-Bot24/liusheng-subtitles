@@ -2,6 +2,8 @@
 
 # Liusheng Subtitles - Streaming Video Subtitle Generation and Translation with ASR and LLM
 
+![Liusheng Subtitles preview](docs/assets/github-preview.jpg)
+
 Languages: [简体中文](README.md) · [English](README-en.md)
 
 </div>
