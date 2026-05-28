@@ -24,6 +24,10 @@ build/
 DEVELOPMENT_LOG.md
 .playwright-cli/
 
+# Local project-internal planning and operator notes
+.project-internal/
+.worktrees/
+
 # JavaScript
 node_modules/
 

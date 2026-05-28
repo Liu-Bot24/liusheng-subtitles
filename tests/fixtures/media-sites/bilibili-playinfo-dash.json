@@ -1,0 +1,38 @@
+{
+  "dash": {
+    "duration": 423,
+    "audio": [
+      {
+        "id": 30216,
+        "baseUrl": "https://upos-sz-mirror.example.test/upgcxcode/00/11/389070477/389070477-1-30216.m4s",
+        "backupUrl": [
+          "https://backup.example.test/upgcxcode/00/11/389070477/389070477-1-30216.m4s"
+        ],
+        "mimeType": "audio/mp4",
+        "bandwidth": 64000
+      },
+      {
+        "id": 30232,
+        "baseUrl": "https://upos-sz-mirror.example.test/upgcxcode/00/11/389070477/389070477-1-30232.m4s",
+        "mimeType": "audio/mp4",
+        "bandwidth": 132000
+      },
+      {
+        "id": 30280,
+        "baseUrl": "https://upos-sz-mirror.example.test/upgcxcode/00/11/389070477/389070477-1-30280.m4s",
+        "mimeType": "audio/mp4",
+        "bandwidth": 192000
+      }
+    ],
+    "video": [
+      {
+        "id": 80,
+        "baseUrl": "https://upos-sz-mirror.example.test/upgcxcode/00/11/389070477/389070477-1-100080.m4s",
+        "mimeType": "video/mp4",
+        "bandwidth": 1200000,
+        "width": 1920,
+        "height": 1080
+      }
+    ]
+  }
+}

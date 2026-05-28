@@ -79,14 +79,18 @@ export function buildExtractAudioArgs({
   trimStart = 0,
   trimDuration = 0
 }) {
+  const hlsInputOptions = isHlsPlaylistInput(inputName)
+    ? ["-allowed_extensions", "ALL"]
+    : [];
   const args = [
+    ...hlsInputOptions,
     ...(Number(trimStart) > 0 ? ["-ss", formatFfmpegSeconds(trimStart)] : []),
     "-i",
     inputName,
     ...(Number(trimDuration) > 0 ? ["-t", formatFfmpegSeconds(trimDuration)] : []),
     "-vn",
     "-map",
-    "0:a:0?",
+    "0:a:0",
     "-ac",
     "1",
     "-ar",
@@ -99,14 +103,22 @@ export function buildExtractAudioArgs({
     args.push(
       "-f",
       "segment",
+      "-segment_format",
+      "mp3",
       "-segment_time",
       String(Math.max(1, Math.floor(Number(segmentSeconds)))),
       "-reset_timestamps",
       "1"
     );
+  } else {
+    args.push("-f", "mp3");
   }
   args.push(outputName);
   return args;
+}
+
+function isHlsPlaylistInput(inputName) {
+  return /\.m3u8(?:$|[?#])/i.test(String(inputName || ""));
 }
 
 function formatFfmpegSeconds(value) {
@@ -142,6 +154,8 @@ export function buildConcatAudioArgs({ inputNames, outputName }) {
     "16000",
     "-b:a",
     "64k",
+    "-f",
+    "mp3",
     outputName
   );
   return args;

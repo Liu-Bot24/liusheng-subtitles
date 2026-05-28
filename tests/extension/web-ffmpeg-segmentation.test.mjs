@@ -61,6 +61,15 @@ const appSource = fs.readFileSync(new URL("../../extension/web-ffmpeg/src/app.js
 
 vm.runInContext(appSource, context, { filename: "web-ffmpeg-app.js" });
 
+function makeMp3Bytes(seed = 0) {
+  return Uint8Array.from([
+    0x49, 0x44, 0x33, 4, 0, 0, 0, 0, 0, 4,
+    0, 0, 0, seed & 0x7f,
+    0xff, 0xfb, 0x90, 0x64,
+    ...new Array(256).fill(seed & 0xff)
+  ]);
+}
+
 {
   const specs = context.buildOverlappedSegmentSpecs("episode-%03d.mp3", 30, 65, 2);
   assert.deepEqual(JSON.parse(JSON.stringify(specs)), [
@@ -333,6 +342,7 @@ vm.runInContext(appSource, context, { filename: "web-ffmpeg-app.js" });
     detectSpeech: false
   });
   assert.deepEqual(args.slice(0, 6), ["-ss", "28", "-i", "input.mp4", "-t", "34"]);
+  assert.deepEqual(args.slice(args.indexOf("-b:a"), args.indexOf("-b:a") + 4), ["-b:a", "64k", "-f", "mp3"]);
   assert.equal(args.at(-1), "chunk-001.mp3");
 }
 
@@ -343,6 +353,65 @@ vm.runInContext(appSource, context, { filename: "web-ffmpeg-app.js" });
     detectSpeech: true
   });
   assert.ok(args.includes("silencedetect=n=-55dB:d=0.16"));
+  assert.deepEqual(args.slice(args.indexOf("-map"), args.indexOf("-map") + 2), ["-map", "0:a:0"]);
+  assert.equal(args.at(-3), "-f");
+  assert.equal(args.at(-2), "mp3");
+  assert.equal(args.at(-1), "audio.mp3");
+}
+
+{
+  const args = buildExtractAudioArgs({
+    inputName: "input-0.m3u8",
+    outputName: "chunk-001.mp3",
+    detectSpeech: true
+  });
+  assert.deepEqual(args.slice(0, 4), ["-allowed_extensions", "ALL", "-i", "input-0.m3u8"]);
+  assert.equal(args.includes("-allowed_extensions"), true);
+}
+
+{
+  const args = buildExtractAudioArgs({
+    inputName: "input.mp4",
+    outputName: "audio-%03d.mp3",
+    segmentSeconds: 30
+  });
+  assert.deepEqual(args.slice(args.indexOf("-f"), args.indexOf("-f") + 6), [
+    "-f",
+    "segment",
+    "-segment_format",
+    "mp3",
+    "-segment_time",
+    "30"
+  ]);
+}
+
+{
+  const args = buildConcatAudioArgs({
+    inputNames: ["a.mp3", "b.mp3"],
+    outputName: "merged.mp3"
+  });
+  assert.deepEqual(args.slice(-3), ["-f", "mp3", "merged.mp3"]);
+}
+
+{
+  const id3OnlyMp3 = new Uint8Array([0x49, 0x44, 0x33, 4, 0, 0, 0, 0, 2, 67, ...new Array(323).fill(0)]);
+  const validMp3 = makeMp3Bytes();
+  assert.equal(context.mp3BufferHasAudioFrame(id3OnlyMp3), false);
+  assert.equal(context.mp3BufferHasAudioFrame(validMp3), true);
+  assert.throws(
+    () => context.assertExtractedAudioOutputLooksDecodable(
+      "chunk-001.mp3",
+      id3OnlyMp3.buffer,
+      {
+        inputName: "input-0.m3u8",
+        outputName: "chunk-001.mp3",
+        command: ["-i", "input-0.m3u8", "-f", "mp3", "chunk-001.mp3"],
+        returnCode: 0,
+        logs: []
+      }
+    ),
+    /没有可解码音频帧/
+  );
 }
 
 {
@@ -369,13 +438,13 @@ vm.runInContext(appSource, context, { filename: "web-ffmpeg-app.js" });
 {
   const commands = [];
   const files = new Map([
-    ["audio.mp3", Uint8Array.from([1, 2, 3, 4])]
+    ["audio.mp3", makeMp3Bytes()]
   ]);
   const ffmpeg = {
     async exec(command) {
       commands.push([...command]);
       const outputName = command.at(-1);
-      files.set(outputName, Uint8Array.from([commands.length, commands.length + 1]));
+      files.set(outputName, makeMp3Bytes(commands.length));
       return 0;
     },
     async readFile(name) {
@@ -429,7 +498,7 @@ vm.runInContext(appSource, context, { filename: "web-ffmpeg-app.js" });
   const ffmpeg = {
     async exec(command) {
       commands.push([...command]);
-      files.set(command.at(-1), Uint8Array.from([commands.length, commands.length + 1]));
+      files.set(command.at(-1), makeMp3Bytes(commands.length));
       return 0;
     },
     async readFile(name) {
@@ -471,7 +540,7 @@ vm.runInContext(appSource, context, { filename: "web-ffmpeg-app.js" });
       return 0;
     },
     async readFile() {
-      return Uint8Array.from([1, 2]);
+      return makeMp3Bytes(commands.length);
     }
   };
   const chunks = await context.extractOverlappedSegmentOutputs(

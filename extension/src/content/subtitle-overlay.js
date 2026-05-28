@@ -93,7 +93,7 @@
   } catch {
     // Old content scripts may remain briefly after extension reload.
   }
-  document.addEventListener("fullscreenchange", moveOverlayToCurrentMount);
+  document.addEventListener("fullscreenchange", handleFullscreenChange);
 
   function cleanup() {
     try {
@@ -104,7 +104,7 @@
     }
     detachActiveVttController();
     clearCaption({ force: true });
-    document.removeEventListener("fullscreenchange", moveOverlayToCurrentMount);
+    document.removeEventListener("fullscreenchange", handleFullscreenChange);
     document.removeEventListener("pointermove", dragCaption);
     document.removeEventListener("pointerup", endDrag);
     document.removeEventListener("pointercancel", endDrag);
@@ -153,6 +153,7 @@
     if (textNode.textContent !== nextText) {
       textNode.textContent = nextText;
     }
+    delete overlay.dataset.dragHold;
     overlay.dataset.mode = nextMode;
     if (Number.isFinite(start)) {
       overlay.dataset.cueStart = String(start);
@@ -170,6 +171,12 @@
     }
     const overlay = document.getElementById(OVERLAY_ID);
     if (overlay) {
+      if (options.deferWhileDragging && isDragging) {
+        overlay.hidden = false;
+        overlay.dataset.dragHold = "true";
+        return;
+      }
+      delete overlay.dataset.dragHold;
       overlay.hidden = true;
       const textNode = overlay.querySelector("[data-fuguang-caption-text]");
       if (textNode) {
@@ -204,9 +211,10 @@
       </div>
       <div class="fuguang-caption-text" data-fuguang-caption-text></div>
     `;
-    applyCaptionPosition(overlay);
     bindOverlayEvents(overlay);
     getOverlayMount().appendChild(overlay);
+    moveOverlayToCurrentMount();
+    applyCaptionPosition(overlay);
     return overlay;
   }
 
@@ -285,6 +293,10 @@
       }
 
       #${OVERLAY_ID} .fuguang-caption-text {
+        display: block;
+        flex: 1 1 auto;
+        max-width: 100%;
+        min-width: 0;
         overflow-wrap: break-word;
         word-break: normal;
       }
@@ -323,6 +335,22 @@
           padding: 8px 14px 10px;
           width: 88vw;
         }
+      }
+
+      #${OVERLAY_ID}.is-fullscreen-mounted {
+        max-width: calc(100% - 32px);
+        position: absolute;
+        width: min(72%, 980px);
+      }
+
+      video::cue,
+      audio::cue {
+        background-color: rgba(22, 22, 24, var(--fuguang-caption-bg-opacity, 0.78));
+        color: #ffffff;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+        font-size: var(--fuguang-caption-font-size, 28px);
+        line-height: 1.25;
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.75);
       }
 
       #${LEGACY_OVERLAY_ID} {
@@ -375,16 +403,18 @@
     if (!isDragging) {
       return;
     }
+    const overlay = document.getElementById(OVERLAY_ID);
+    const bounds = getOverlayPositionBounds(overlay);
     const targetX = event.clientX - dragOffsetX;
     const targetY = event.clientY - dragOffsetY;
     captionPosition = clampPosition(
       {
-        x: targetX / Math.max(1, window.innerWidth),
-        y: targetY / Math.max(1, window.innerHeight)
+        x: (targetX - bounds.left) / bounds.width,
+        y: (targetY - bounds.top) / bounds.height
       },
-      document.getElementById(OVERLAY_ID)
+      overlay
     );
-    applyCaptionPosition(document.getElementById(OVERLAY_ID));
+    applyCaptionPosition(overlay);
     scheduleCaptionPositionSave();
   }
 
@@ -404,6 +434,7 @@
     document.removeEventListener("mousemove", dragCaption);
     document.removeEventListener("mouseup", endDrag);
     saveCaptionPosition();
+    activeVttController?.updateCaption?.();
   }
 
   function applyCaptionPosition(overlay) {
@@ -411,8 +442,9 @@
       return;
     }
     captionPosition = clampPosition(captionPosition, overlay);
-    overlay.style.left = `${captionPosition.x * 100}vw`;
-    overlay.style.top = `${captionPosition.y * 100}vh`;
+    const unit = getFullscreenOverlayMount(overlay) ? "%" : "vw";
+    overlay.style.left = `${captionPosition.x * 100}${unit}`;
+    overlay.style.top = `${captionPosition.y * 100}${unit === "%" ? "%" : "vh"}`;
   }
 
   async function loadCaptionPosition() {
@@ -459,7 +491,16 @@
   }
 
   function getOverlayMount() {
-    return document.fullscreenElement || document.documentElement;
+    const fullscreenElement = document.fullscreenElement;
+    if (fullscreenElement && !isMediaElement(fullscreenElement)) {
+      return fullscreenElement;
+    }
+    return document.documentElement;
+  }
+
+  function handleFullscreenChange() {
+    moveOverlayToCurrentMount();
+    activeVttController?.updateCaption?.();
   }
 
   function moveOverlayToCurrentMount() {
@@ -472,7 +513,21 @@
     if (overlay && overlay.parentElement !== mount) {
       mount.appendChild(overlay);
     }
+    syncOverlayMountState(overlay);
     applyCaptionPosition(overlay);
+  }
+
+  function syncOverlayMountState(overlay) {
+    if (!overlay) {
+      return;
+    }
+    if (getFullscreenOverlayMount(overlay)) {
+      overlay.classList.add("is-fullscreen-mounted");
+      overlay.dataset.fullscreenMounted = "true";
+    } else {
+      overlay.classList.remove("is-fullscreen-mounted");
+      delete overlay.dataset.fullscreenMounted;
+    }
   }
 
   async function loadCaptionSettings() {
@@ -540,13 +595,39 @@
   }
 
   function clampPosition(position, overlay) {
-    const width = Math.max(1, window.innerWidth);
-    const height = Math.max(1, window.innerHeight);
+    const { width, height } = getOverlayPositionBounds(overlay);
     const halfWidth = overlay ? overlay.offsetWidth / 2 / width : MIN_POSITION_RATIO;
     const halfHeight = overlay ? overlay.offsetHeight / 2 / height : MIN_POSITION_RATIO;
     return {
       x: clampNumber(Number(position.x), Math.max(MIN_POSITION_RATIO, halfWidth), Math.min(MAX_POSITION_RATIO, 1 - halfWidth)),
       y: clampNumber(Number(position.y), Math.max(MIN_POSITION_RATIO, halfHeight), Math.min(MAX_POSITION_RATIO, 1 - halfHeight))
+    };
+  }
+
+  function getFullscreenOverlayMount(overlay) {
+    const mount = document.fullscreenElement;
+    if (!overlay || !mount || isMediaElement(mount) || overlay.parentElement !== mount) {
+      return null;
+    }
+    return mount;
+  }
+
+  function getOverlayPositionBounds(overlay) {
+    const mount = getFullscreenOverlayMount(overlay);
+    if (!mount) {
+      return {
+        left: 0,
+        top: 0,
+        width: Math.max(1, window.innerWidth),
+        height: Math.max(1, window.innerHeight)
+      };
+    }
+    const rect = mount.getBoundingClientRect?.() || {};
+    return {
+      left: Number(rect.left || 0),
+      top: Number(rect.top || 0),
+      width: Math.max(1, Number(rect.width || mount.clientWidth || window.innerWidth)),
+      height: Math.max(1, Number(rect.height || mount.clientHeight || window.innerHeight))
     };
   }
 
@@ -580,16 +661,27 @@
       lastCue: null,
       pendingSeekCue: null,
       pendingSeekUntil: 0,
+      label: String(label || "流声字幕"),
       signature: String(signature || ""),
-      mediaSignature: ""
+      mediaSignature: "",
+      nativeTrack: null,
+      nativeTrackMedia: null,
+      nativeCues: []
     };
     const updateCaption = () => {
       const media = bindControllerToMedia(controller);
       if (!media) {
         controller.lastCue = null;
+        disableNativeSubtitleTrack(controller);
         clearCaption();
         return;
       }
+      if (syncNativeFullscreenSubtitles(controller, media)) {
+        controller.lastCue = findCueAt(cues, media.currentTime) || null;
+        clearCaption({ force: true });
+        return;
+      }
+      disableNativeSubtitleTrack(controller);
       const hasPendingSeekCue = controller.pendingSeekCue && performance.now() < controller.pendingSeekUntil;
       const cue = findCueAt(cues, media.currentTime);
       if (cue) {
@@ -601,7 +693,7 @@
         renderControllerCue(controller, controller.lastCue);
       } else {
         controller.lastCue = null;
-        clearCaption();
+        clearCaption({ deferWhileDragging: true });
       }
     };
     controller.updateCaption = updateCaption;
@@ -682,12 +774,98 @@
     if (!activeVttController) {
       return;
     }
+    disableNativeSubtitleTrack(activeVttController);
     const { media, events, updateCaption, interval } = activeVttController;
     if (media) {
       events.forEach(event => media.removeEventListener(event, updateCaption));
     }
     window.clearInterval(interval);
     activeVttController = null;
+  }
+
+  function syncNativeFullscreenSubtitles(controller, media) {
+    if (!controller || !isMediaElement(media) || document.fullscreenElement !== media) {
+      return false;
+    }
+    const Cue = window.VTTCue || window.TextTrackCue;
+    if (!Cue || typeof media.addTextTrack !== "function") {
+      return false;
+    }
+    ensureStyle();
+    if (controller.nativeTrackMedia !== media || !controller.nativeTrack) {
+      disableNativeSubtitleTrack(controller);
+      try {
+        controller.nativeTrack = media.addTextTrack("subtitles", controller.label || "流声字幕", "");
+        controller.nativeTrackMedia = media;
+      } catch {
+        controller.nativeTrack = null;
+        controller.nativeTrackMedia = null;
+        return false;
+      }
+    }
+    if (!controller.nativeCues.length) {
+      controller.cues.forEach(cue => {
+        try {
+          const nativeCue = new Cue(cue.start, cue.end, cue.text);
+          controller.nativeTrack.addCue(nativeCue);
+          controller.nativeCues.push(nativeCue);
+        } catch {
+          // Skip malformed cues; the custom overlay uses the same validated cue list when not in media fullscreen.
+        }
+      });
+    }
+    applyNativeCueLayout(controller);
+    try {
+      controller.nativeTrack.mode = "showing";
+    } catch {
+      return false;
+    }
+    return controller.nativeCues.length > 0;
+  }
+
+  function disableNativeSubtitleTrack(controller) {
+    const track = controller?.nativeTrack;
+    if (!track) {
+      return;
+    }
+    try {
+      track.mode = "disabled";
+    } catch {
+      // Some browser/player wrappers expose read-only track state.
+    }
+    const cues = Array.from(track.cues || controller.nativeCues || []);
+    cues.forEach(cue => {
+      try {
+        track.removeCue(cue);
+      } catch {
+        // The cue may already have been detached by the player.
+      }
+    });
+    controller.nativeTrack = null;
+    controller.nativeTrackMedia = null;
+    controller.nativeCues = [];
+  }
+
+  function applyNativeCueLayout(controller) {
+    const x = clampNumber(captionPosition.x * 100, 8, 92);
+    const y = clampNumber(captionPosition.y * 100, 8, 92);
+    controller.nativeCues.forEach(cue => {
+      try {
+        cue.snapToLines = false;
+        cue.line = y;
+        cue.position = x;
+        cue.size = 72;
+        cue.align = "center";
+        if ("lineAlign" in cue) {
+          cue.lineAlign = "center";
+        }
+        if ("positionAlign" in cue) {
+          cue.positionAlign = "center";
+        }
+      } catch {
+        // Native cue layout support differs by browser; the cue text still remains available.
+      }
+    });
   }
 
   function jumpToCurrentCue(event) {
@@ -907,6 +1085,11 @@
 
   function mediaStillUsable(media) {
     return Boolean(media && media.isConnected && typeof media.currentTime === "number");
+  }
+
+  function isMediaElement(element) {
+    const tagName = String(element?.tagName || "").toLowerCase();
+    return tagName === "video" || tagName === "audio";
   }
 
   function mediaIsVisible(element) {

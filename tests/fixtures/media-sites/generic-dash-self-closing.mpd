@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" mediaPresentationDuration="PT1M30S" type="static">
+  <Period>
+    <AdaptationSet mimeType="audio/mp4" contentType="audio" codecs="mp4a.40.2">
+      <SegmentTemplate initialization="audio/init.mp4" media="audio/seg-$Number$.m4s" startNumber="1" timescale="1000" />
+      <Representation id="audio-96k" bandwidth="96000" />
+      <Representation id="audio-128k" bandwidth="128000" />
+    </AdaptationSet>
+    <AdaptationSet mimeType="video/mp4" contentType="video" codecs="avc1.64001f">
+      <SegmentTemplate initialization="video/init.mp4" media="video/seg-$Number$.m4s" startNumber="1" timescale="1000" />
+      <Representation id="video-480p" bandwidth="900000" width="854" height="480" />
+    </AdaptationSet>
+  </Period>
+</MPD>

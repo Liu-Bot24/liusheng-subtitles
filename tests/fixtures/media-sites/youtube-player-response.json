@@ -1,0 +1,14 @@
+{
+  "streamingData": {
+    "adaptiveFormats": [
+      {
+        "itag": 140,
+        "mimeType": "audio/mp4; codecs=\"mp4a.40.2\"",
+        "bitrate": 128000,
+        "approxDurationMs": "219000",
+        "contentLength": "3500000",
+        "signatureCipher": "url=https%3A%2F%2Frr1---sn.example.googlevideo.com%2Fvideoplayback%3Fmime%3Daudio%252Fmp4%26clen%3D3500000&s=encrypted"
+      }
+    ]
+  }
+}

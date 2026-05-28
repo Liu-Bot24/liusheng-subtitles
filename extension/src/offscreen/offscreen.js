@@ -7,7 +7,7 @@ const MESSAGE = {
 };
 
 const WEB_FFMPEG_APP = "fuguang-web-ffmpeg";
-const WEB_FFMPEG_CACHE_VERSION = "20260522-webffmpeg-hls-playlist-safe";
+const WEB_FFMPEG_CACHE_VERSION = "20260528-hls-cmaf-allowed-extensions";
 const WEB_FFMPEG_AUDIO_CACHE = "fuguang-web-ffmpeg-audio";
 const WEB_FFMPEG_AUDIO_CACHE_ORIGIN = "https://fuguang.local";
 const WEB_FFMPEG_AUDIO_CACHE_PREFIX = "/__fuguang_audio_cache";
@@ -15,12 +15,14 @@ const WEB_FFMPEG_HLS_EXTRACT_CHUNK_SECONDS = 180;
 const WEB_FFMPEG_HLS_MAX_SEGMENTS_PER_CHUNK = 60;
 const WEB_FFMPEG_HLS_TS_MAX_SEGMENTS_PER_CHUNK = 360;
 const WEB_FFMPEG_HLS_SEGMENT_DOWNLOAD_CONCURRENCY = 10;
+const WEB_FFMPEG_HLS_FETCH_RETRY_ATTEMPTS = 4;
+const WEB_FFMPEG_HLS_FETCH_RETRY_BASE_DELAY_MS = 180;
+const WEB_FFMPEG_HLS_FETCH_RETRY_MAX_DELAY_MS = 1500;
 const WEB_FFMPEG_ASR_LOGICAL_CHUNK_MIN_SECONDS = 10;
 const WEB_FFMPEG_ASR_LOGICAL_CHUNK_MAX_SECONDS = 30 * 60;
 const WEB_FFMPEG_ASR_LONG_FILE_CHUNK_MAX_SECONDS = 2 * 60 * 60;
 const WEB_FFMPEG_ASR_CONTEXT_OVERLAP_SECONDS = 2;
 const WEB_FFMPEG_ASR_VAD_SPLIT_MIN_SILENCE_SECONDS = 2;
-const WEB_FFMPEG_HLS_DURATION_CLIP_MAX_DRIFT_SECONDS = 5 * 60;
 const WEB_FFMPEG_WORKER_RECYCLE_INTERNAL_CHUNKS = 48;
 const WEB_FFMPEG_READY_TIMEOUT_MS = 30 * 1000;
 const WEB_FFMPEG_IDLE_TIMEOUT_MS = 120 * 1000;
@@ -193,7 +195,8 @@ async function extractHlsAudioWithWebFfmpeg(message) {
     playlistUrl,
     ...buildLikelyAudioCompanionPlaylistUrls(playlistUrl)
   ]);
-  const companion = await fetchLikelyAudioCompanionPlaylist(playlistUrl, fetchOptions);
+  const companion = await fetchLikelyAudioCompanionPlaylist(playlistUrl, fetchOptions) ||
+    await fetchVideoTwimgPageMasterPlaylist(playlistUrl, message.pageUrl, fetchOptions);
   if (companion) {
     playlistUrl = companion.url;
     playlistText = companion.text;
@@ -291,9 +294,23 @@ async function extractHlsAudioWithWebFfmpeg(message) {
     }
     const groupDownload = nextGroupDownload || startGroupDownload(group, index);
     nextGroupDownload = null;
-    const groupDownloadResult = await groupDownload;
+    let groupDownloadResult = await groupDownload;
     if (!groupDownloadResult.ok) {
-      throw groupDownloadResult.error;
+      const originalDownloadError = groupDownloadResult.error;
+      reportWebFfmpegExtractionProgress(message, {
+        phase: "download",
+        percent: hlsExtractionPercent(index, 0, groups.length),
+        internalChunksDone: index,
+        internalChunksTotal: groups.length,
+        downloadedSegments,
+        totalSegments: media.segments.length,
+        readySeconds: internalChunksReadySeconds(internalChunks),
+        message: `第 ${index + 1}/${groups.length} 组媒体下载失败，正在重新下载该组`
+      });
+      groupDownloadResult = await startGroupDownload(group, index);
+      if (!groupDownloadResult.ok) {
+        throw new Error(`${groupDownloadResult.error?.message || groupDownloadResult.error}（已重新下载第 ${index + 1}/${groups.length} 组，仍然失败；原错误：${originalDownloadError?.message || originalDownloadError}）`);
+      }
     }
     const {
       files,
@@ -364,11 +381,29 @@ async function extractHlsAudioWithWebFfmpeg(message) {
         });
         try {
           await reloadWebFfmpegFrame(message.webFfmpegUrl);
+          const retryDownload = await downloadHlsGroupResources(group, fetchOptions, index);
+          const retryPlaylistSegments = [];
+          const retryFiles = [...retryDownload.files];
+          for (const download of retryDownload.segmentDownloads) {
+            retryFiles.push(download.segmentFile);
+            retryPlaylistSegments.push(download.localSegment);
+          }
+          const retryInput = buildHlsFfmpegInput({
+            index,
+            media,
+            keyFiles: retryDownload.keyFiles,
+            playlistSegments: retryPlaylistSegments,
+            segmentBuffers: [],
+            initName: "",
+            keyNames: retryDownload.keyNames,
+            mapNames: retryDownload.mapNames,
+            forcePlaylist: true
+          });
           result = await runHlsAudioExtraction(message, {
             index,
             groupCount: groups.length,
-            ffmpegInput,
-            files: [...ffmpegInput.files, ...files],
+            ffmpegInput: retryInput,
+            files: [...retryInput.files, ...retryFiles],
             outputName: `chunk-${String(index + 1).padStart(3, "0")}.mp3`,
             groupDuration: group.end - group.start,
             downloadedSegments,
@@ -718,11 +753,19 @@ function hlsShouldSplitLogicalChunkAtVadGap(pendingParts, nextSpeechIntervals) {
 }
 
 function buildHlsInternalExtractionGroups(media, logicalChunkSeconds, options = {}) {
+  const maxDurationSeconds = hlsInternalExtractChunkSeconds(logicalChunkSeconds, options);
   const coreGroups = groupHlsSegments(media.segments, {
-    maxDurationSeconds: WEB_FFMPEG_HLS_EXTRACT_CHUNK_SECONDS,
+    maxDurationSeconds,
     maxSegments: hlsMaxSegmentsPerExtractChunk(media)
   });
   return addHlsLogicalBoundaryContextToGroups(coreGroups, media.segments, logicalChunkSeconds, options);
+}
+
+function hlsInternalExtractChunkSeconds(logicalChunkSeconds, options = {}) {
+  return Math.min(
+    WEB_FFMPEG_HLS_EXTRACT_CHUNK_SECONDS,
+    normalizeHlsLogicalChunkSeconds(logicalChunkSeconds, options)
+  );
 }
 
 function addHlsLogicalBoundaryContextToGroups(groups, segments, logicalChunkSeconds, options = {}) {
@@ -1007,28 +1050,88 @@ function isLongFileAsrMode(message = {}) {
   return message.asrMode === "long-file" || message.longFileMode === true;
 }
 
-async function fetchText(url, options) {
-  const response = await fetch(url, options);
-  if (!response.ok) {
-    throw new Error(`HLS 播放列表下载失败：HTTP ${response.status}`);
-  }
-  return response.text();
+async function fetchText(url, options, label = "HLS 播放列表下载失败") {
+  return withMediaFetchRetry(label, async () => {
+    const response = await fetch(url, options);
+    if (!response.ok) {
+      throw createMediaFetchHttpError(response.status);
+    }
+    return response.text();
+  });
 }
 
-async function fetchBinary(url, options, byteRange = null) {
-  const response = await fetch(url, buildFetchOptionsWithByteRange(options, byteRange));
-  if (!response.ok) {
-    throw new Error(`媒体切片下载失败：HTTP ${response.status}`);
+async function fetchBinary(url, options, byteRange = null, label = "媒体切片下载失败") {
+  return withMediaFetchRetry(label, async () => {
+    const response = await fetch(url, buildFetchOptionsWithByteRange(options, byteRange));
+    if (!response.ok) {
+      throw createMediaFetchHttpError(response.status);
+    }
+    const buffer = await response.arrayBuffer();
+    if (!buffer?.byteLength) {
+      throw new Error("媒体切片下载结果为空。");
+    }
+    const contentType = String(response.headers?.get?.("content-type") || "").toLowerCase();
+    if ((contentType.includes("text/") || contentType.includes("json")) && looksLikeTextErrorBody(buffer)) {
+      throw new Error(`媒体切片下载结果不是二进制媒体：${contentType || "unknown"}`);
+    }
+    return applyFetchedByteRange(response, buffer, byteRange);
+  });
+}
+
+async function withMediaFetchRetry(label, operation) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= WEB_FFMPEG_HLS_FETCH_RETRY_ATTEMPTS; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      if (attempt >= WEB_FFMPEG_HLS_FETCH_RETRY_ATTEMPTS || !isRetryableMediaFetchError(error)) {
+        throw describeMediaFetchError(label, error);
+      }
+      await waitForMediaFetchRetry(attempt);
+    }
   }
-  const buffer = await response.arrayBuffer();
-  if (!buffer?.byteLength) {
-    throw new Error("媒体切片下载结果为空。");
+  throw describeMediaFetchError(label, lastError);
+}
+
+function createMediaFetchHttpError(status) {
+  const error = new Error(`HTTP ${status || 0}`);
+  error.status = status;
+  return error;
+}
+
+function describeMediaFetchError(label, error) {
+  const message = error?.message || String(error || "未知错误");
+  if (message.startsWith(`${label}：`)) {
+    return error;
   }
-  const contentType = String(response.headers?.get?.("content-type") || "").toLowerCase();
-  if ((contentType.includes("text/") || contentType.includes("json")) && looksLikeTextErrorBody(buffer)) {
-    throw new Error(`媒体切片下载结果不是二进制媒体：${contentType || "unknown"}`);
+  return new Error(`${label}：${message}`);
+}
+
+function isRetryableMediaFetchError(error) {
+  const status = Number(error?.status);
+  if (Number.isFinite(status) && status > 0) {
+    return status === 408 ||
+      status === 425 ||
+      status === 429 ||
+      (status >= 500 && status <= 599);
   }
-  return applyFetchedByteRange(response, buffer, byteRange);
+  if (error?.name === "AbortError" || error instanceof TypeError) {
+    return true;
+  }
+  const message = String(error?.message || error || "").toLowerCase();
+  return /failed to fetch|networkerror|load failed|network|timeout|aborted/.test(message);
+}
+
+async function waitForMediaFetchRetry(attempt) {
+  if (typeof setTimeout !== "function") {
+    return;
+  }
+  const delay = Math.min(
+    WEB_FFMPEG_HLS_FETCH_RETRY_MAX_DELAY_MS,
+    WEB_FFMPEG_HLS_FETCH_RETRY_BASE_DELAY_MS * (2 ** Math.max(0, attempt - 1))
+  );
+  await new Promise(resolve => setTimeout(resolve, delay));
 }
 
 function normalizeByteRange(byteRange) {
@@ -1145,6 +1248,35 @@ async function fetchLikelyAudioCompanionPlaylistCandidate(url, fetchOptions) {
   return media.segments.length ? { url, text } : null;
 }
 
+async function fetchVideoTwimgPageMasterPlaylist(sourceUrl, pageUrl, fetchOptions) {
+  const mediaId = videoTwimgAmplifyMediaId(sourceUrl);
+  const page = normalizeVideoTwimgSourcePageUrl(pageUrl);
+  if (!mediaId || !page) {
+    return null;
+  }
+  const html = await fetchText(page, {
+    credentials: "omit",
+    headers: { Accept: "text/html,application/xhtml+xml" }
+  }).catch(() => "");
+  if (!html) {
+    return null;
+  }
+  const playlistUrls = extractVideoTwimgPlaylistUrlsFromText(html)
+    .filter(url => videoTwimgAmplifyMediaId(url) === mediaId)
+    .filter(url => !/\/pl\/(?:avc1|h264|h265|hevc|vp9)\//i.test(new URL(url).pathname));
+  for (const url of playlistUrls) {
+    const text = await fetchText(url, fetchOptions).catch(() => "");
+    if (!text) {
+      continue;
+    }
+    const master = parseHlsMasterPlaylist(text, url);
+    if (master.variants.some(variant => variant.audioOnly)) {
+      return { url, text };
+    }
+  }
+  return null;
+}
+
 function buildLikelyAudioCompanionPlaylistUrls(sourceUrl) {
   const output = [];
   let url;
@@ -1176,6 +1308,7 @@ function buildLikelyAudioCompanionPlaylistUrls(sourceUrl) {
   if (/\/video\//i.test(url.pathname)) {
     addPath(url.pathname.replace(/\/video\//i, "/audio/"));
   }
+  addAudioTrackTokenCompanionPaths(url, addPath);
   if (/(^|\.)video\.twimg\.com$/i.test(url.hostname)) {
     const avcMatch = url.pathname.match(/^(.*\/pl\/)avc1\/[^/]+\/([^/]+\.m3u8)$/i);
     if (avcMatch) {
@@ -1185,6 +1318,101 @@ function buildLikelyAudioCompanionPlaylistUrls(sourceUrl) {
     }
   }
   return output;
+}
+
+function addAudioTrackTokenCompanionPaths(url, addPath) {
+  const pathname = String(url?.pathname || "");
+  const filename = pathname.split("/").pop() || "";
+  if (!/\.m3u8$/i.test(filename)) {
+    return;
+  }
+  const basePath = pathname.slice(0, pathname.length - filename.length);
+  const addFilename = nextFilename => {
+    if (nextFilename && nextFilename !== filename) {
+      addPath(`${basePath}${nextFilename}`);
+    }
+  };
+  const formatTrackMatch = filename.match(/([._-])f(\d+)([._-])v(\d+)(?=\.m3u8$|[._-])/i);
+  if (formatTrackMatch) {
+    const format = Number(formatTrackMatch[2]);
+    const track = Number(formatTrackMatch[4]) || 1;
+    const formats = [
+      Number.isFinite(format) && format > 1 ? format - 1 : 0,
+      format
+    ].filter(value => Number.isFinite(value) && value > 0);
+    for (const audioFormat of [...new Set(formats)]) {
+      addFilename(filename.replace(
+        /([._-])f\d+([._-])v\d+(?=\.m3u8$|[._-])/i,
+        `$1f${audioFormat}$2a${track || 1}`
+      ));
+    }
+  }
+  const numberedVideoTrackMatch = filename.match(/([._-])v(\d+)(?=\.m3u8$|[._-])/i);
+  if (numberedVideoTrackMatch) {
+    const track = Number(numberedVideoTrackMatch[2]) || 1;
+    for (const audioTrack of [...new Set([track, 1])]) {
+      addFilename(filename.replace(/([._-])v\d+(?=\.m3u8$|[._-])/i, `$1a${audioTrack}`));
+    }
+  }
+  addFilename(filename.replace(/([._-])video(?=\.m3u8$|[._-])/i, "$1audio"));
+}
+
+function extractVideoTwimgPlaylistUrlsFromText(text) {
+  const decoded = decodeHtmlEntitiesForUrlScan(String(text || ""))
+    .replace(/\\\//g, "/")
+    .replace(/\\u002f/gi, "/");
+  const urls = [];
+  const pattern = /https?:\/\/video\.twimg\.com[^\s"'<>\\)]+/gi;
+  let match;
+  while ((match = pattern.exec(decoded))) {
+    const url = cleanScannedVideoTwimgUrl(match[0]);
+    if (/\.m3u8(?:$|[?#])/i.test(url) && !urls.includes(url)) {
+      urls.push(url);
+    }
+  }
+  return urls;
+}
+
+function cleanScannedVideoTwimgUrl(value) {
+  return String(value || "").replace(/[.,;:!?]+$/g, "");
+}
+
+function decodeHtmlEntitiesForUrlScan(value) {
+  return String(value || "")
+    .replace(/&amp;/gi, "&")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&#x3d;|&#61;/gi, "=")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">");
+}
+
+function videoTwimgAmplifyMediaId(rawUrl) {
+  try {
+    const url = new URL(rawUrl);
+    if (!/(^|\.)video\.twimg\.com$/i.test(url.hostname)) {
+      return "";
+    }
+    return url.pathname.match(/\/amplify_video\/(\d+)\//i)?.[1] || "";
+  } catch {
+    return "";
+  }
+}
+
+function normalizeVideoTwimgSourcePageUrl(rawUrl) {
+  try {
+    const url = new URL(rawUrl);
+    if (!/(^|\.)x\.com$/i.test(url.hostname) && !/(^|\.)twitter\.com$/i.test(url.hostname)) {
+      return "";
+    }
+    if (!/\/status\/\d+/i.test(url.pathname)) {
+      return "";
+    }
+    url.hash = "";
+    return url.href;
+  } catch {
+    return "";
+  }
 }
 
 function isLikelyVideoQualityPathPart(value) {
@@ -1341,7 +1569,6 @@ function clipHlsMediaToRequestedDuration(media, requestedDuration) {
     || !duration
     || !mediaDuration
     || drift <= 0.25
-    || drift > WEB_FFMPEG_HLS_DURATION_CLIP_MAX_DRIFT_SECONDS
   ) {
     return media;
   }
@@ -1779,7 +2006,12 @@ async function downloadHlsKeysForGroup(group, fetchOptions, groupIndex, keyNames
   }
   return downloadHlsResources([...keys.values()], async (key, keyIndex) => {
     const keyName = `key-${groupIndex}-${keyIndex}.key`;
-    const buffer = await fetchBinary(key.uri, fetchOptions);
+    const buffer = await fetchBinary(
+      key.uri,
+      fetchOptions,
+      null,
+      `HLS 密钥下载失败（第 ${groupIndex + 1} 组，第 ${keyIndex + 1} 个）`
+    );
     keyNames.set(key.id, keyName);
     return { name: keyName, mime: "application/octet-stream", buffer };
   });
@@ -1794,7 +2026,12 @@ async function downloadHlsMapsForGroup(group, fetchOptions, groupIndex, mapNames
   }
   return downloadHlsResources([...maps.values()], async (map, mapIndex) => {
     const mapName = `map-${groupIndex}-${mapIndex}.mp4`;
-    const buffer = await fetchBinary(map.url, fetchOptions, map.byteRange);
+    const buffer = await fetchBinary(
+      map.url,
+      fetchOptions,
+      map.byteRange,
+      `HLS 初始化媒体切片下载失败（第 ${groupIndex + 1} 组，第 ${mapIndex + 1} 个）`
+    );
     mapNames.set(map.id, mapName);
     return { name: mapName, mime: "video/mp4", buffer };
   });
@@ -1836,9 +2073,15 @@ async function downloadHlsSegmentsForGroup(group, fetchOptions, groupIndex, onPr
       if (segment.gap) {
         throw new Error(`第 ${Number(segment.originalIndex || 0) + 1} 个 HLS 媒体切片被标记为 GAP，无法保证音频连续。`);
       }
-      const segmentBuffer = await fetchBinary(segment.url, fetchOptions, segment.byteRange);
-      const segmentName = `seg-${groupIndex}-${String(itemIndex).padStart(5, "0")}.${guessHlsSegmentExtension(segment.url)}`;
-      const segmentFile = { name: segmentName, mime: "video/mp2t", buffer: segmentBuffer };
+      const segmentBuffer = await fetchBinary(
+        segment.url,
+        fetchOptions,
+        segment.byteRange,
+        `HLS 媒体切片下载失败（第 ${groupIndex + 1} 组，第 ${itemIndex + 1}/${segments.length} 个）`
+      );
+      const segmentExtension = guessHlsSegmentExtension(segment.url);
+      const segmentName = `seg-${groupIndex}-${String(itemIndex).padStart(5, "0")}.${segmentExtension}`;
+      const segmentFile = { name: segmentName, mime: hlsSegmentMimeFromExtension(segmentExtension), buffer: segmentBuffer };
       const localSegment = { ...segment, name: segmentName, byteRange: null };
       results[itemIndex] = {
         itemIndex,
@@ -1997,7 +2240,21 @@ function guessHlsSegmentExtension(url) {
   }
   const match = pathname.match(/\.([a-z0-9]{1,8})$/);
   const ext = match?.[1] || "ts";
-  return ["m4s", "mp4", "ts", "aac", "mp3"].includes(ext) ? ext : "ts";
+  return ["m4s", "mp4", "m4a", "m4v", "cmfa", "cmfv", "cmf", "ts", "aac", "mp3"].includes(ext) ? ext : "ts";
+}
+
+function hlsSegmentMimeFromExtension(extension) {
+  const ext = String(extension || "").toLowerCase();
+  if (["m4s", "mp4", "m4a", "cmfa", "cmfv", "cmf"].includes(ext)) {
+    return ext === "m4a" || ext === "cmfa" ? "audio/mp4" : "video/mp4";
+  }
+  if (ext === "aac") {
+    return "audio/aac";
+  }
+  if (ext === "mp3") {
+    return "audio/mpeg";
+  }
+  return "video/mp2t";
 }
 
 function textToArrayBuffer(value) {

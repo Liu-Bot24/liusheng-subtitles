@@ -1,6 +1,9 @@
+import { FuguangMediaAssetModel } from "./media-asset-model.js";
+import { FuguangMediaSourceResolvers } from "./media-source-resolvers.js";
+
 export const FuguangBrowserMediaCandidates = (() => {
   const INTERNAL_REQUEST_HEADER_NAMES = new Set(["authorization"]);
-    const AUDIO_EXTENSIONS = new Set(["aac", "flac", "m4a", "mp3", "oga", "ogg", "opus", "wav", "weba"]);
+  const AUDIO_EXTENSIONS = new Set(["aac", "flac", "m4a", "mp3", "oga", "ogg", "opus", "wav", "weba"]);
   const MANIFEST_EXTENSIONS = new Set(["m3u8", "m3u", "mpd"]);
   const MEDIA_EXTENSIONS = new Set([...AUDIO_EXTENSIONS, ...MANIFEST_EXTENSIONS, "mp4", "m4s", "ts", "webm"]);
   const MEDIA_CONTENT_TYPES = [
@@ -18,6 +21,7 @@ export const FuguangBrowserMediaCandidates = (() => {
   const ASR_AUDIO_IDEAL_MAX_BPS = 160_000;
   const ASR_AUDIO_ACCEPTABLE_LOW_BPS = 48_000;
   const ASR_AUDIO_ACCEPTABLE_HIGH_BPS = 320_000;
+  const ASR_AUDIO_PLAUSIBLE_HIGH_BPS = 768_000;
   
   
   function candidateFingerprint(candidate) {
@@ -108,19 +112,17 @@ export const FuguangBrowserMediaCandidates = (() => {
   }
   
   function resolvePreloadCandidateForStart(state, candidate) {
-    const publicCandidate = stripCandidateRequestHeaders(candidate || {});
     const internalCandidate = getGroupedCandidatesForState(state)
       .find(item => candidatesReferToSamePreloadTarget(item, candidate));
     if (!internalCandidate) {
-      return publicCandidate;
+      return removeUntrustedStartFields(stripCandidateRequestHeaders(candidate || {}));
     }
+    const safeInternalCandidate = stripCandidateRequestHeaders(internalCandidate);
     return {
-      ...publicCandidate,
+      ...safeInternalCandidate,
       requestHeaders: internalCandidate.requestHeaders || null,
-      responseHeaders: {
-        ...(internalCandidate.responseHeaders || {}),
-        ...(publicCandidate.responseHeaders || {})
-      }
+      responseHeaders: internalCandidate.responseHeaders || {},
+      sourcePlanTrusted: Boolean(internalCandidate.sourcePlan)
     };
   }
   
@@ -143,11 +145,25 @@ export const FuguangBrowserMediaCandidates = (() => {
     if (!candidate || typeof candidate !== "object") {
       return candidate;
     }
-    const { requestHeaders, variants, ...safeCandidate } = candidate;
+    const { requestHeaders, variants, mediaAsset, ...safeCandidate } = candidate;
     return {
       ...safeCandidate,
+      mediaAsset: sanitizeMediaAssetForDisplay(mediaAsset),
       variants: Array.isArray(variants) ? variants.map(stripCandidateRequestHeaders) : variants
     };
+  }
+
+  function sanitizeMediaAssetForDisplay(mediaAsset) {
+    if (!mediaAsset || typeof mediaAsset !== "object") {
+      return mediaAsset;
+    }
+    const { requestContext, ...safeMediaAsset } = mediaAsset;
+    return safeMediaAsset;
+  }
+
+  function removeUntrustedStartFields(candidate = {}) {
+    const { sourcePlan, sourcePlanTrusted, sourcePlanUsed, ...safeCandidate } = candidate || {};
+    return safeCandidate;
   }
   
   function enrichCandidate(candidate, state) {
@@ -171,6 +187,21 @@ export const FuguangBrowserMediaCandidates = (() => {
     if (candidate.qualityLabel) {
       quality.label = candidate.qualityLabel;
     }
+    const mediaAsset = legacyCandidateToMediaAsset({
+      ...candidate,
+      pageUrl,
+      title: pageTitle,
+      filename: candidate.filename || urlInfo.filename,
+      origin: urlInfo.origin,
+      contentType,
+      size,
+      duration,
+      videoWidth,
+      videoHeight,
+      resolution,
+      role,
+      quality
+    }, state);
     return {
       ...candidate,
       pageUrl,
@@ -185,8 +216,162 @@ export const FuguangBrowserMediaCandidates = (() => {
       resolution,
       role,
       quality,
-      asrScore: scoreCandidateForAsr(candidate, role, quality, size, duration)
+      assetKind: mediaAsset.kind,
+      trackRole: mediaAsset.role,
+      durationEvidence: mediaAsset.durationEvidence,
+      mediaAsset,
+      asrScore: scoreCandidateForAsr(candidate, role, quality, size, duration, contentType, urlInfo, state)
     };
+  }
+
+  function legacyCandidateToMediaAsset(candidate, state = null) {
+    const kind = inferMediaAssetKind(candidate);
+    const role = inferMediaAssetRole(candidate);
+    const durationEvidence = inferDurationEvidence(candidate, state, kind);
+    const codecs = candidate.codecs || candidate.quality?.codecs || "";
+    return FuguangMediaAssetModel.createMediaAsset({
+      url: candidate.url,
+      finalUrl: candidate.finalUrl || candidate.url,
+      pageUrl: candidate.pageUrl,
+      title: candidate.title,
+      kind,
+      role,
+      container: inferMediaAssetContainer(candidate, kind),
+      codecs,
+      bitrate: candidate.audioBitrate || candidate.bitrate || candidate.averageBitrate || candidate.bandwidth || candidate.quality?.bandwidth,
+      duration: candidate.duration,
+      durationEvidence,
+      dimensions: {
+        width: candidate.videoWidth,
+        height: candidate.videoHeight
+      },
+      requestContext: candidate.requestHeaders ? { headerNames: Object.keys(sanitizeInternalRequestHeaders(candidate.requestHeaders)).sort() } : null,
+      relation: inferMediaAssetRelation(candidate),
+      siteAdapter: inferCandidateSiteAdapter(candidate),
+      evidence: inferMediaAssetEvidence(candidate, durationEvidence),
+      warnings: inferMediaAssetWarnings(candidate)
+    });
+  }
+
+  function inferMediaAssetKind(candidate = {}) {
+    if (candidate.kind === "hls") {
+      return candidate.playlistType === "master"
+        ? FuguangMediaAssetModel.ASSET_KIND.HLS_MASTER
+        : FuguangMediaAssetModel.ASSET_KIND.HLS_MEDIA;
+    }
+    if (candidate.kind === "dash" || candidate.ext === "mpd") {
+      return FuguangMediaAssetModel.ASSET_KIND.DASH_MPD;
+    }
+    if (candidate.ext === "m4s" || candidate.ext === "ts" || /\.(?:m4s|ts|cmfa|cmfv|cmf)$/i.test(candidate.url || "")) {
+      return FuguangMediaAssetModel.ASSET_KIND.SEGMENT;
+    }
+    return FuguangMediaAssetModel.ASSET_KIND.DIRECT;
+  }
+
+  function inferMediaAssetRole(candidate = {}) {
+    if (candidate.role === "audio") {
+      return FuguangMediaAssetModel.MEDIA_ROLE.AUDIO;
+    }
+    if (candidate.role === "video") {
+      return FuguangMediaAssetModel.MEDIA_ROLE.VIDEO;
+    }
+    if (candidate.role === "playlist") {
+      return FuguangMediaAssetModel.MEDIA_ROLE.PLAYLIST;
+    }
+    if (candidate.role === "media" || candidate.kind === "media") {
+      return FuguangMediaAssetModel.MEDIA_ROLE.MUXED;
+    }
+    return FuguangMediaAssetModel.MEDIA_ROLE.UNKNOWN;
+  }
+
+  function inferDurationEvidence(candidate = {}, state = null, kind = "") {
+    const duration = positiveNumber(candidate.duration);
+    if (!duration) {
+      return null;
+    }
+    if (candidate.durationEvidence) {
+      return FuguangMediaAssetModel.createDurationEvidence(candidate.durationEvidence.source || candidate.durationEvidence, duration, candidate.durationEvidence);
+    }
+    if (candidate.source === "media-element") {
+      return FuguangMediaAssetModel.createDurationEvidence(FuguangMediaAssetModel.DURATION_EVIDENCE_SOURCE.MEDIA_ELEMENT, duration);
+    }
+    if (candidate.source === "bilibili-playurl" || candidate.source === "json-parse" || candidate.source === "xhr-body" || candidate.source === "structured-media") {
+      return FuguangMediaAssetModel.createDurationEvidence(FuguangMediaAssetModel.DURATION_EVIDENCE_SOURCE.PLAYER_JSON, duration, { detail: candidate.source });
+    }
+    if (kind === FuguangMediaAssetModel.ASSET_KIND.HLS_MASTER || kind === FuguangMediaAssetModel.ASSET_KIND.HLS_MEDIA || kind === FuguangMediaAssetModel.ASSET_KIND.DASH_MPD) {
+      return FuguangMediaAssetModel.createDurationEvidence(FuguangMediaAssetModel.DURATION_EVIDENCE_SOURCE.MANIFEST, duration);
+    }
+    if (positiveNumber(state?.context?.duration) === duration) {
+      return FuguangMediaAssetModel.createDurationEvidence(FuguangMediaAssetModel.DURATION_EVIDENCE_SOURCE.PAGE_META, duration);
+    }
+    return FuguangMediaAssetModel.createDurationEvidence(FuguangMediaAssetModel.DURATION_EVIDENCE_SOURCE.INFERRED, duration);
+  }
+
+  function inferMediaAssetContainer(candidate = {}, kind = "") {
+    if (kind === FuguangMediaAssetModel.ASSET_KIND.HLS_MASTER || kind === FuguangMediaAssetModel.ASSET_KIND.HLS_MEDIA) {
+      return "hls";
+    }
+    if (kind === FuguangMediaAssetModel.ASSET_KIND.DASH_MPD) {
+      return "dash";
+    }
+    return candidate.ext || parseUrlInfo(candidate.url || "").filename.split(".").pop()?.toLowerCase() || "";
+  }
+
+  function inferMediaAssetRelation(candidate = {}) {
+    if (candidate.role === "audio") {
+      return { track: "audio" };
+    }
+    if (candidate.role === "video") {
+      return { track: "video" };
+    }
+    if (candidate.role === "playlist") {
+      return { track: "playlist" };
+    }
+    return null;
+  }
+
+  function inferCandidateSiteAdapter(candidate = {}) {
+    const info = parseUrlInfo(candidate.url || "");
+    if (isLikelyBilibiliMedia(info) || candidate.source === "bilibili-playurl") {
+      return "bilibili";
+    }
+    if (/(^|\.)video\.twimg\.com$/i.test(info.hostname) || /(^|\.)x\.com$/i.test(info.hostname) || /(^|\.)twitter\.com$/i.test(info.hostname)) {
+      return "x-twitter";
+    }
+    if (/(^|\.)googlevideo\.com$/i.test(info.hostname) || /(^|\.)youtube\.com$/i.test(info.hostname)) {
+      return "youtube";
+    }
+    return "";
+  }
+
+  function inferMediaAssetEvidence(candidate = {}, durationEvidence = null) {
+    const evidence = [];
+    if (candidate.source) {
+      evidence.push({
+        source: candidate.source,
+        strength: candidateSourceRank(candidate.source) * 10,
+        detail: candidate.contentType || candidate.ext || ""
+      });
+    }
+    if (durationEvidence) {
+      evidence.push({
+        source: durationEvidence.source,
+        strength: durationEvidence.strength,
+        detail: `${Math.round(durationEvidence.seconds * 1000) / 1000}s`
+      });
+    }
+    return evidence;
+  }
+
+  function inferMediaAssetWarnings(candidate = {}) {
+    const warnings = [];
+    if (candidate.requiresSignatureDeciphering) {
+      warnings.push({
+        code: "requires-signature-deciphering",
+        message: "YouTube candidate requires player signature deciphering before extraction."
+      });
+    }
+    return warnings;
   }
   
   function pickCandidateDisplayTitle(candidate, state) {
@@ -249,6 +434,12 @@ export const FuguangBrowserMediaCandidates = (() => {
     const hiddenCount = Math.max(variants.length - 1, 0);
     const variantStats = summarizeVariants(variants);
     const mergedHeaders = mergeVariantHeaders(variants);
+    const sourcePlan = summarizeAudioSourcePlan(
+      FuguangMediaSourceResolvers.resolveAudioSourcePlan({
+        candidates: variants,
+        duration: selected.duration || 0
+      })
+    );
     return {
       ...selected,
       requestHeaders: mergedHeaders.requestHeaders,
@@ -256,7 +447,36 @@ export const FuguangBrowserMediaCandidates = (() => {
       variants: variants.map(summarizeVariant),
       hiddenCount,
       variantStats,
+      sourcePlan,
       selectionReason: describeSelection(selected, hiddenCount, variantStats)
+    };
+  }
+
+  function summarizeAudioSourcePlan(plan) {
+    if (!plan?.primaryAsset) {
+      return null;
+    }
+    return {
+      kind: plan.kind,
+      reason: plan.reason,
+      confidence: plan.confidence,
+      primaryUrl: plan.primaryAsset.url,
+      primaryKind: plan.primaryAsset.kind,
+      primaryRole: plan.primaryAsset.role,
+      container: plan.primaryAsset.container,
+      codecs: plan.primaryAsset.codecs,
+      siteAdapter: plan.primaryAsset.siteAdapter || "",
+      ffmpegInput: {
+        type: plan.ffmpegInput?.type || "",
+        url: plan.ffmpegInput?.url || ""
+      },
+      expectedAudio: {
+        codec: plan.expectedAudio?.codec || "",
+        container: plan.expectedAudio?.container || "",
+        duration: plan.expectedAudio?.duration || 0
+      },
+      executable: plan.executable !== false,
+      warnings: plan.warnings?.length ? plan.warnings : (plan.primaryAsset.warnings || [])
     };
   }
   
@@ -300,6 +520,8 @@ export const FuguangBrowserMediaCandidates = (() => {
       size: candidate.size,
       contentType: candidate.contentType,
       quality: candidate.quality,
+      assetKind: candidate.assetKind,
+      trackRole: candidate.trackRole,
       filename: candidate.filename
     };
   }
@@ -355,8 +577,12 @@ export const FuguangBrowserMediaCandidates = (() => {
     return path;
   }
   
-  function scoreCandidateForAsr(candidate, role, quality, size, duration) {
+  function scoreCandidateForAsr(candidate, role, quality, size, duration, contentType = "", urlInfo = null, state = null) {
+    const info = urlInfo || parseUrlInfo(candidate.url || "");
     if (role === "audio") {
+      if (isLowConfidenceDirectAudioCandidate(candidate, contentType, info, size, state)) {
+        return 45 + audioContainerPenalty(candidate);
+      }
       return audioSuitabilityForAsr(candidate, quality, size, duration);
     }
     if (candidate.kind === "hls") {
@@ -405,6 +631,10 @@ export const FuguangBrowserMediaCandidates = (() => {
     if (bilibili) {
       return bilibili;
     }
+    const urlBitrate = inferAudioBitrateFromUrl(candidate);
+    if (urlBitrate) {
+      return urlBitrate;
+    }
     const explicit = positiveNumber(candidate.audioBitrate || candidate.bitrate || candidate.averageBitrate || quality?.bandwidth);
     if (explicit) {
       return explicit;
@@ -415,6 +645,16 @@ export const FuguangBrowserMediaCandidates = (() => {
       return (bytes * 8) / seconds;
     }
     return 0;
+  }
+
+  function inferAudioBitrateFromUrl(candidate) {
+    const urlInfo = parseUrlInfo(candidate.url || "");
+    const text = `${urlInfo.pathname || ""} ${urlInfo.filename || ""}`.toLowerCase();
+    const match = text.match(/(?:^|[^\d])([1-9]\d{1,3})(?:k|kbps)(?:[^\d]|$)/i);
+    if (!match) {
+      return 0;
+    }
+    return Number(match[1]) * 1000;
   }
   
   function inferBilibiliAudioBitrate(candidate) {
@@ -490,6 +730,9 @@ export const FuguangBrowserMediaCandidates = (() => {
     if (candidate.kind === "audio" || AUDIO_EXTENSIONS.has(candidate.ext)) {
       return "audio";
     }
+    if ((candidate.kind === "hls" || candidate.kind === "dash") && isLikelyAudioOnlyManifest(candidate, urlInfo)) {
+      return "audio";
+    }
     if (candidate.kind === "hls" || candidate.kind === "dash") {
       return "playlist";
     }
@@ -503,6 +746,19 @@ export const FuguangBrowserMediaCandidates = (() => {
       return "audio";
     }
     return "media";
+  }
+
+  function isLikelyAudioOnlyManifest(candidate, urlInfo) {
+    if (candidate.audioOnly === true) {
+      return true;
+    }
+    const codecs = String(candidate.codecs || candidate.quality?.codecs || "").toLowerCase();
+    if (codecs && /(?:mp4a|aac|opus|vorbis)/i.test(codecs) && !/(?:avc|hvc|hev|vp8|vp9|av01)/i.test(codecs)) {
+      return true;
+    }
+    const path = `${urlInfo.pathname || ""} ${urlInfo.filename || ""}`;
+    return /(?:^|[-_/])(?:audio|aac|m4a|mp3|opus)(?:[-_.]|$)/i.test(path) ||
+      /(?:^|[-_/])(?:f\d+[-_.])?a\d+(?=[-_.\/]|$)/i.test(path);
   }
   
   function shouldInheritPageDuration(candidate, contentType, urlInfo, state = null) {
@@ -521,10 +777,75 @@ export const FuguangBrowserMediaCandidates = (() => {
     if (candidate.ext === "m4s" || isLikelyBilibiliMedia(urlInfo)) {
       return true;
     }
+    if (
+      isDirectAudioCandidate(candidate, contentType, urlInfo) &&
+      !hasTrustedFullLengthAudioEvidence(candidate, contentType, urlInfo, candidateKnownSize(candidate), state)
+    ) {
+      return false;
+    }
     if (hasTrustedPageMediaContext(candidate, contentType, urlInfo, state)) {
       return true;
     }
     return false;
+  }
+
+  function isLowConfidenceDirectAudioCandidate(candidate, contentType, urlInfo, size, state) {
+    if (!isDirectAudioCandidate(candidate, contentType, urlInfo)) {
+      return false;
+    }
+    return !hasTrustedFullLengthAudioEvidence(candidate, contentType, urlInfo, size, state);
+  }
+
+  function isDirectAudioCandidate(candidate, contentType, urlInfo) {
+    if (isManifestCandidate(candidate)) {
+      return false;
+    }
+    return candidate.kind === "audio" ||
+      contentType.startsWith("audio/") ||
+      AUDIO_EXTENSIONS.has(candidate.ext) ||
+      /\.(?:aac|flac|m4a|mp3|oga|ogg|opus|wav|weba)$/i.test(urlInfo.pathname || "");
+  }
+
+  function hasTrustedFullLengthAudioEvidence(candidate, contentType, urlInfo, size, state) {
+    if (!isDirectAudioCandidate(candidate, contentType, urlInfo)) {
+      return true;
+    }
+    if (positiveNumber(candidate.duration)) {
+      return true;
+    }
+    if (candidate.source === "media-element") {
+      return true;
+    }
+    if (candidate.source === "bilibili-playurl" || isLikelyBilibiliMedia(urlInfo)) {
+      return true;
+    }
+    if (hasPlausibleAudioSizeForPageDuration(size || candidateKnownSize(candidate), state)) {
+      return true;
+    }
+    return isStructuredAudioSource(candidate.source) && hasExplicitAudioBitrate(candidate);
+  }
+
+  function hasPlausibleAudioSizeForPageDuration(size, state) {
+    const bytes = positiveNumber(size);
+    const duration = positiveNumber(state?.context?.duration);
+    if (!bytes || !duration) {
+      return false;
+    }
+    const bitrate = (bytes * 8) / duration;
+    return bitrate >= ASR_AUDIO_ACCEPTABLE_LOW_BPS && bitrate <= ASR_AUDIO_PLAUSIBLE_HIGH_BPS;
+  }
+
+  function isStructuredAudioSource(source) {
+    return source === "json-parse" || source === "xhr-body";
+  }
+
+  function hasExplicitAudioBitrate(candidate) {
+    return positiveNumber(candidate.audioBitrate || candidate.bitrate || candidate.averageBitrate || candidate.bandwidth) > 0;
+  }
+
+  function candidateKnownSize(candidate) {
+    const responseHeaders = candidate.responseHeaders || {};
+    return positiveNumber(responseHeaders.size || candidate.size);
   }
   
   function hasTrustedPageMediaContext(candidate, contentType, urlInfo, state) {
@@ -664,6 +985,10 @@ export const FuguangBrowserMediaCandidates = (() => {
       if (bandwidthMatch) {
         quality.bandwidth = Number(bandwidthMatch[1]);
       }
+      const audioBitrateMatch = text.match(/(?:^|[^\d])([1-9]\d{1,3})(?:k|kbps)(?:[^\d]|$)/);
+      if (!quality.bandwidth && audioBitrateMatch) {
+        quality.bandwidth = Number(audioBitrateMatch[1]) * 1000;
+      }
     } catch {
       return quality;
     }
@@ -721,6 +1046,8 @@ export const FuguangBrowserMediaCandidates = (() => {
     return path
       .replace(/\/\d{3,5}x\d{3,5}(?=\/)/g, "/{resolution}")
       .replace(/\/(?:\d{3,4}p|[1-9]\d{1,3}k|[48]k)(?=\/)/gi, "/{quality}")
+      .replace(/(?:^|[-_/])f\d+[-_.][av]\d+(?=[-_/.]|$)/gi, "-{track}")
+      .replace(/(?:^|[-_/])[av]\d+(?=[-_/.]|$)/gi, "-{track}")
       .replace(/(?:^|[-_/])\d{3,4}p(?=[-_/.]|$)/gi, "-{quality}")
       .replace(/(?:^|[-_/])(?:[1-9]\d{1,3}k|[48]k)(?=[-_/.])/gi, "-{quality}");
   }
@@ -729,6 +1056,8 @@ export const FuguangBrowserMediaCandidates = (() => {
     return pathname
       .replace(/\/\d{3,5}x\d{3,5}(?=\/)/g, "/{resolution}")
       .replace(/\/(?:\d{3,4}p|[1-9]\d{1,3}k|[48]k)(?=\/)/gi, "/{quality}")
+      .replace(/(?:^|[-_/])f\d+[-_.][av]\d+(?=[-_/.]|$)/gi, "-{track}")
+      .replace(/(?:^|[-_/])[av]\d+(?=[-_/.]|$)/gi, "-{track}")
       .replace(/(?:^|[-_/])\d{3,4}p(?=[-_/.]|$)/gi, "-{quality}")
       .replace(/(?:^|[-_/])(?:[1-9]\d{1,3}k|[48]k)(?=[-_/.])/gi, "-{quality}")
       .replace(/-\d{5,6}(?=\.m4s$)/i, "-{track}");

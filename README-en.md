@@ -24,6 +24,20 @@ After opening a video page, Liusheng Subtitles shows available media sources in 
 - Support OpenAI Whisper, Groq Whisper, xAI Grok, Fun-ASR, and custom ASR endpoints.
 - Support OpenAI-compatible, Anthropic-compatible, and custom LLM translation endpoints.
 
+## Demo Screenshots
+
+![Settings Interface Bilibili](docs/assets/readme/bilibili-settings-demo.jpg)
+
+*Settings Interface Bilibili*
+
+![Task Interface TED](docs/assets/readme/ted-task-demo.jpg)
+
+*Task Interface TED*
+
+![Fullscreen Playback NicoNico](docs/assets/readme/niconico-fullscreen-demo.jpg)
+
+*Fullscreen Playback NicoNico*
+
 ## Installation
 
 1. Open `chrome://extensions` in Chrome.

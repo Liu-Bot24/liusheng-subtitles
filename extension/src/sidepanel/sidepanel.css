@@ -418,14 +418,14 @@ button:disabled {
 }
 
 .candidate-card {
-  align-content: center;
+  align-content: start;
   background: rgba(251, 253, 255, 0.92);
   border: 1px solid var(--border);
   border-radius: 8px;
   color: inherit;
   display: grid;
   gap: 4px;
-  min-height: 66px;
+  min-height: 88px;
   min-width: min(100%, 340px);
   overflow: hidden;
   padding: 9px 10px;
@@ -450,23 +450,26 @@ button:disabled {
 }
 
 .candidate-meta,
-.candidate-reason {
+.candidate-reason,
+.candidate-diagnostic {
   color: var(--muted);
-  display: block;
+  display: -webkit-box;
   font-size: 11px;
   line-height: 1.35;
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .candidate-reason {
   color: var(--muted);
-  display: -webkit-box;
-  white-space: normal;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+}
+
+.candidate-diagnostic {
+  color: color-mix(in srgb, var(--accent) 55%, var(--muted));
 }
 
 #candidateSummary {

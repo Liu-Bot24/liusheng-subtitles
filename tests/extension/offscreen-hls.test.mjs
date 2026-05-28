@@ -132,7 +132,7 @@ vm.runInContext(source, context, { filename: "offscreen.js" });
 
 {
   const url = context.normalizeWebFfmpegUrl("chrome-extension://fuguang-test/web-ffmpeg/index.html");
-  assert.equal(url, "chrome-extension://fuguang-test/web-ffmpeg/index.html?fgv=20260522-webffmpeg-hls-playlist-safe");
+  assert.equal(url, "chrome-extension://fuguang-test/web-ffmpeg/index.html?fgv=20260528-hls-cmaf-allowed-extensions");
   assert.throws(
     () => context.normalizeWebFfmpegUrl("https://ffmpeg.example.test/index.html"),
     /Web FFmpeg 必须使用扩展内置页面/
@@ -383,6 +383,55 @@ audio-stream-inf.m3u8
 
 {
   const originalFetch = context.fetch;
+  let attempts = 0;
+  context.fetch = async () => {
+    attempts += 1;
+    if (attempts < 3) {
+      throw new Error("Failed to fetch");
+    }
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: () => "video/mp4" },
+      arrayBuffer: async () => Uint8Array.from([21, 22]).buffer
+    };
+  };
+
+  try {
+    const buffer = await context.fetchBinary("https://cdn.example.test/retry.mp4", {});
+    assert.equal(attempts, 3);
+    assert.deepEqual(Array.from(new Uint8Array(buffer)), [21, 22]);
+  } finally {
+    context.fetch = originalFetch;
+  }
+}
+
+{
+  const originalFetch = context.fetch;
+  let attempts = 0;
+  context.fetch = async () => {
+    attempts += 1;
+    return {
+      ok: false,
+      status: 404,
+      headers: { get: () => "text/plain" },
+      arrayBuffer: async () => Uint8Array.from([]).buffer
+    };
+  };
+
+  try {
+    await assert.rejects(
+      () => context.fetchBinary("https://cdn.example.test/missing.mp4", {}),
+      /HTTP 404/
+    );
+    assert.equal(attempts, 1);
+  } finally {
+    context.fetch = originalFetch;
+  }
+}
+
+{
+  const originalFetch = context.fetch;
   context.fetch = async () => ({
     ok: true,
     status: 200,
@@ -573,6 +622,109 @@ seg-001.ts
 }
 
 {
+  const originalFetch = context.fetch;
+  const originalRequestWebFfmpeg = context.requestWebFfmpeg;
+  const originalReloadWebFfmpegFrame = context.reloadWebFfmpegFrame;
+  const originalCaches = context.caches;
+  const originalResponse = context.Response;
+  const requests = [];
+  const segmentBuffers = [];
+  const fetchCounts = { key: 0, segment: 0 };
+  const cache = new Map();
+  context.Response = class {
+    constructor(body) {
+      this.body = body;
+    }
+
+    async arrayBuffer() {
+      return this.body;
+    }
+  };
+  context.caches = {
+    open: async () => ({
+      put: async (url, response) => {
+        cache.set(url, response);
+      },
+      match: async url => cache.get(url) || null,
+      delete: async url => cache.delete(url)
+    })
+  };
+  context.fetch = async url => {
+    const text = `#EXTM3U
+#EXT-X-TARGETDURATION:4
+#EXT-X-KEY:METHOD=AES-128,URI="audio.key",IV=0x00000000000000000000000000000001
+#EXTINF:4.000,
+seg-000.cmfa
+#EXT-X-ENDLIST`;
+    if (String(url).endsWith(".m3u8")) {
+      return {
+        ok: true,
+        text: async () => text,
+        arrayBuffer: async () => vm.runInContext("new Uint8Array([]).buffer", context),
+        headers: { get: () => "application/vnd.apple.mpegurl" }
+      };
+    }
+    if (String(url).endsWith(".key")) {
+      fetchCounts.key += 1;
+      return {
+        ok: true,
+        text: async () => "",
+        arrayBuffer: async () => vm.runInContext("new Uint8Array([1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]).buffer", context),
+        headers: { get: () => "application/octet-stream" }
+      };
+    }
+    fetchCounts.segment += 1;
+    return {
+      ok: true,
+      text: async () => "",
+      arrayBuffer: async () => vm.runInContext(`new Uint8Array([${fetchCounts.segment}, 2, 3]).buffer`, context),
+      headers: { get: () => "audio/mp4" }
+    };
+  };
+  context.reloadWebFfmpegFrame = async () => {};
+  context.requestWebFfmpeg = async payload => {
+    requests.push(payload);
+    assert.equal(payload.inputName, "input-0.m3u8");
+    const segmentFile = payload.files.find(file => String(file.name).endsWith(".cmfa"));
+    assert.ok(segmentFile);
+    segmentBuffers.push(segmentFile.buffer);
+    if (requests.length === 1) {
+      throw new Error("simulated playlist failure");
+    }
+    return {
+      file: {
+        name: payload.outputName,
+        mime: "audio/mpeg",
+        buffer: vm.runInContext("new Uint8Array([7, 8]).buffer", context)
+      },
+      bytes: 2
+    };
+  };
+
+  try {
+    const result = await context.extractHlsAudioWithWebFfmpeg({
+      tabId: 3,
+      jobId: "hls-playlist-retry-test",
+      sourceUrl: "https://cdn.example.test/audio.m3u8",
+      cacheNamespace: "hls-playlist-retry-test",
+      asrChunkSeconds: 900,
+      webFfmpegUrl: "chrome-extension://fuguang-test/web-ffmpeg/index.html"
+    });
+    assert.equal(requests.length, 2);
+    assert.notEqual(segmentBuffers[0], segmentBuffers[1]);
+    assert.equal(fetchCounts.segment, 2);
+    assert.equal(fetchCounts.key, 2);
+    assert.equal(result.chunks.length, 1);
+  } finally {
+    context.fetch = originalFetch;
+    context.requestWebFfmpeg = originalRequestWebFfmpeg;
+    context.reloadWebFfmpegFrame = originalReloadWebFfmpegFrame;
+    context.caches = originalCaches;
+    context.Response = originalResponse;
+  }
+}
+
+{
   const segmentBuffer = vm.runInContext("new Uint8Array([1]).buffer", context);
   const input = context.buildHlsFfmpegInput({
     index: 2,
@@ -721,13 +873,13 @@ seg-001.ts
     segments
   }, 30);
   assert.equal(
-    internalGroups.length,
-    4,
-    "兼容 vad_filter-only 的 30 秒 ASR 窗口不应把 HLS 下载/内部提取也碎成 30 秒"
+    internalGroups.every(group => group.coreEnd - group.coreStart <= 30),
+    true,
+    "30 秒 ASR 窗口应参与 HLS 内部提取分组，避免先生成长中间 MP3 再二次切窗"
   );
   assert.equal(internalGroups[0].coreStart, 0);
-  assert.equal(internalGroups[0].coreEnd, 180);
-  assert.equal(internalGroups[1].coreStart, 180);
+  assert.equal(internalGroups[0].coreEnd <= 30, true);
+  assert.equal(internalGroups[1].coreStart < 30, true);
 }
 
 {
@@ -1389,6 +1541,102 @@ https://segment-cdn.example.test/seg-001.ts
 
 {
   const originalFetch = context.fetch;
+  const originalRequestWebFfmpeg = context.requestWebFfmpeg;
+  const originalCaches = context.caches;
+  const originalResponse = context.Response;
+  const originalSendMessage = chrome.runtime.sendMessage;
+  let seg001Attempts = 0;
+  let ffmpegCalls = 0;
+  let firstFfmpegResolve = null;
+  const cache = new Map();
+  context.Response = class {
+    constructor(body) {
+      this.body = body;
+    }
+
+    async arrayBuffer() {
+      return this.body;
+    }
+  };
+  context.caches = {
+    open: async () => ({
+      put: async (url, response) => cache.set(url, response),
+      match: async url => cache.get(url) || null,
+      delete: async url => cache.delete(url)
+    })
+  };
+  context.fetch = async url => {
+    const href = String(url);
+    if (href === "https://cdn.example.test/two-groups-prefetch-retry.m3u8") {
+      return {
+        ok: true,
+        text: async () => `#EXTM3U
+#EXTINF:180.000,
+https://segment-cdn.example.test/seg-000.ts
+#EXTINF:180.000,
+https://segment-cdn.example.test/seg-001.ts
+#EXT-X-ENDLIST`,
+        arrayBuffer: async () => Uint8Array.from([]).buffer,
+        headers: { get: () => "application/vnd.apple.mpegurl" }
+      };
+    }
+    if (href.endsWith("seg-001.ts")) {
+      seg001Attempts += 1;
+      if (seg001Attempts <= 4) {
+        throw new Error("Failed to fetch");
+      }
+    }
+    return {
+      ok: true,
+      status: 200,
+      text: async () => "",
+      arrayBuffer: async () => Uint8Array.from([1, 2, 3]).buffer,
+      headers: { get: () => "video/mp2t" }
+    };
+  };
+  context.requestWebFfmpeg = async payload => {
+    ffmpegCalls += 1;
+    if (ffmpegCalls === 1) {
+      return await new Promise(resolve => {
+        firstFfmpegResolve = () => resolve({
+          file: { name: payload.outputName, mime: "audio/mpeg", buffer: Uint8Array.from([7, 8]).buffer },
+          bytes: 2
+        });
+      });
+    }
+    return {
+      file: { name: payload.outputName, mime: "audio/mpeg", buffer: Uint8Array.from([9, 10]).buffer },
+      bytes: 2
+    };
+  };
+  chrome.runtime.sendMessage = async message => ({ domains: testDomainsFromUrls(message.urls) });
+  try {
+    const extractionPromise = context.extractHlsAudioWithWebFfmpeg({
+      tabId: 3,
+      jobId: "hls-prefetch-failed-group-redownload-test",
+      sourceUrl: "https://cdn.example.test/two-groups-prefetch-retry.m3u8",
+      cacheNamespace: "hls-prefetch-failed-group-redownload-test",
+      asrChunkSeconds: 180
+    });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(ffmpegCalls, 1);
+    assert.equal(seg001Attempts > 0, true);
+    firstFfmpegResolve();
+    const result = await extractionPromise;
+    assert.equal(seg001Attempts > 4, true);
+    assert.equal(ffmpegCalls, 2);
+    assert.equal(result.chunks.length > 0, true);
+  } finally {
+    context.fetch = originalFetch;
+    context.requestWebFfmpeg = originalRequestWebFfmpeg;
+    context.caches = originalCaches;
+    context.Response = originalResponse;
+    chrome.runtime.sendMessage = originalSendMessage;
+  }
+}
+
+{
+  const originalFetch = context.fetch;
   let active = 0;
   let maxActive = 0;
   const completed = [];
@@ -1598,6 +1846,242 @@ https://segment-cdn.example.test/seg-001.ts
     "https://media.example.test/sample-hls/audio/index.m3u8",
     "https://media.example.test/sample-hls/audio/playlist.m3u8"
   ]));
+  const tedUrls = context.buildLikelyAudioCompanionPlaylistUrls(
+    "https://hls.ted.com/project_masters/1253/index-f9-v1.m3u8?intro_master_id=9294&preview=true"
+  );
+  assert.equal(
+    tedUrls[0],
+    "https://hls.ted.com/project_masters/1253/index-f8-a1.m3u8?intro_master_id=9294&preview=true"
+  );
+  assert.ok(tedUrls.includes(
+    "https://hls.ted.com/project_masters/1253/index-f9-a1.m3u8?intro_master_id=9294&preview=true"
+  ));
+}
+
+{
+  const originalFetch = context.fetch;
+  const originalRequestWebFfmpeg = context.requestWebFfmpeg;
+  const originalCaches = context.caches;
+  const originalResponse = context.Response;
+  const originalSendMessage = chrome.runtime.sendMessage;
+  const fetched = [];
+  const cache = new Map();
+  const sourceVideo = "https://video.twimg.com/amplify_video/2049886560490053635/pl/avc1/480x270/A-rRO8JxdrgyScb.m3u8?tag=27";
+  const guessedAudio = "https://video.twimg.com/amplify_video/2049886560490053635/pl/mp4a/128000/A-rRO8JxdrgyScb.m3u8?tag=27";
+  const pageMaster = "https://video.twimg.com/amplify_video/2049886560490053635/pl/EfJCfVGPgvF963Yl.m3u8?tag=27";
+  const pageAudio = "https://video.twimg.com/amplify_video/2049886560490053635/pl/mp4a/128000/DhnK2ArBcP44Ib0O.m3u8?tag=27";
+  const audioSegment = "https://video.twimg.com/amplify_video/2049886560490053635/pl/mp4a/128000/audio-000.m4s";
+  const videoSegment = "https://video.twimg.com/amplify_video/2049886560490053635/pl/avc1/480x270/video-000.m4s";
+  context.Response = class {
+    constructor(body) {
+      this.body = body;
+    }
+
+    async arrayBuffer() {
+      return this.body;
+    }
+  };
+  context.caches = {
+    open: async () => ({
+      put: async (url, response) => cache.set(url, response),
+      match: async url => cache.get(url) || null,
+      delete: async url => cache.delete(url)
+    })
+  };
+  context.fetch = async url => {
+    const href = String(url);
+    fetched.push(href);
+    if (href === guessedAudio || href.includes("/pl/mp4a/64000/A-rRO8JxdrgyScb.m3u8") || href.includes("/pl/mp4a/32000/A-rRO8JxdrgyScb.m3u8")) {
+      return {
+        ok: false,
+        status: 404,
+        text: async () => "",
+        arrayBuffer: async () => vm.runInContext("new Uint8Array([]).buffer", context),
+        headers: { get: () => "text/plain" }
+      };
+    }
+    if (href === "https://x.com/AndrewYNg/status/2049886895530967534") {
+      return {
+        ok: true,
+        status: 200,
+        text: async () => `<html><script>{"playlist":"${pageMaster.replace("=", "&#x3D;")}"}</script></html>`,
+        arrayBuffer: async () => vm.runInContext("new Uint8Array([]).buffer", context),
+        headers: { get: () => "text/html" }
+      };
+    }
+    if (href === pageMaster) {
+      return {
+        ok: true,
+        status: 200,
+        text: async () => `#EXTM3U
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="Audio",DEFAULT=YES,AUTOSELECT=YES,URI="/amplify_video/2049886560490053635/pl/mp4a/128000/DhnK2ArBcP44Ib0O.m3u8?tag=27"
+#EXT-X-STREAM-INF:BANDWIDTH=832000,RESOLUTION=480x270,CODECS="avc1.4d001e,mp4a.40.2",AUDIO="audio"
+/amplify_video/2049886560490053635/pl/avc1/480x270/A-rRO8JxdrgyScb.m3u8?tag=27`,
+        arrayBuffer: async () => vm.runInContext("new Uint8Array([]).buffer", context),
+        headers: { get: () => "application/vnd.apple.mpegurl" }
+      };
+    }
+    if (href === pageAudio) {
+      return {
+        ok: true,
+        status: 200,
+        text: async () => `#EXTM3U
+#EXT-X-MAP:URI="/amplify_video/2049886560490053635/pl/mp4a/128000/audio-init.mp4"
+#EXTINF:4.000,
+${audioSegment}
+#EXT-X-ENDLIST`,
+        arrayBuffer: async () => vm.runInContext("new Uint8Array([]).buffer", context),
+        headers: { get: () => "application/vnd.apple.mpegurl" }
+      };
+    }
+    if (href === sourceVideo) {
+      return {
+        ok: true,
+        status: 200,
+        text: async () => `#EXTM3U
+#EXT-X-MAP:URI="/amplify_video/2049886560490053635/pl/avc1/480x270/video-init.mp4"
+#EXTINF:4.000,
+${videoSegment}
+#EXT-X-ENDLIST`,
+        arrayBuffer: async () => vm.runInContext("new Uint8Array([]).buffer", context),
+        headers: { get: () => "application/vnd.apple.mpegurl" }
+      };
+    }
+    return {
+      ok: true,
+      status: 200,
+      text: async () => "",
+      arrayBuffer: async () => vm.runInContext("new Uint8Array([1, 2, 3]).buffer", context),
+      headers: { get: () => "video/mp4" }
+    };
+  };
+  context.requestWebFfmpeg = async payload => ({
+    file: {
+      name: payload.outputName,
+      mime: "audio/mpeg",
+      buffer: vm.runInContext("new Uint8Array([7, 8]).buffer", context)
+    },
+    bytes: 2
+  });
+  chrome.runtime.sendMessage = async message => ({ domains: testDomainsFromUrls(message.urls) });
+
+  try {
+    await context.extractHlsAudioWithWebFfmpeg({
+      tabId: 3,
+      jobId: "x-video-twimg-page-master-fallback-test",
+      sourceUrl: sourceVideo,
+      pageUrl: "https://x.com/AndrewYNg/status/2049886895530967534",
+      cacheNamespace: "x-video-twimg-page-master-fallback-test",
+      asrChunkSeconds: 900
+    });
+  } finally {
+    context.fetch = originalFetch;
+    context.requestWebFfmpeg = originalRequestWebFfmpeg;
+    context.caches = originalCaches;
+    context.Response = originalResponse;
+    chrome.runtime.sendMessage = originalSendMessage;
+  }
+
+  assert.ok(fetched.includes(pageMaster), "X page HTML master playlist should be used when same-name audio companion is absent");
+  assert.ok(fetched.includes(audioSegment), "audio companion segment should be downloaded for extraction");
+  assert.equal(fetched.includes(videoSegment), false, "video-only HLS segment should not be fed to Web FFmpeg for ASR");
+}
+
+{
+  const originalFetch = context.fetch;
+  const originalRequestWebFfmpeg = context.requestWebFfmpeg;
+  const originalCaches = context.caches;
+  const originalResponse = context.Response;
+  const fetched = [];
+  const cache = new Map();
+  const sourceVideo = "https://hls.ted.com/project_masters/1253/index-f9-v1.m3u8?intro_master_id=9294&preview=true";
+  const audioPlaylist = "https://hls.ted.com/project_masters/1253/index-f8-a1.m3u8?intro_master_id=9294&preview=true";
+  const videoSegment = "https://pu.tedcdn.com/consus/videos/1253/segment-1-f9-v1.ts";
+  const audioSegment = "https://pu.tedcdn.com/consus/videos/1253/segment-1-f8-a1.ts";
+  context.Response = class {
+    constructor(body) {
+      this.body = body;
+    }
+
+    async arrayBuffer() {
+      return this.body;
+    }
+  };
+  context.caches = {
+    open: async () => ({
+      put: async (url, response) => cache.set(url, response),
+      match: async url => cache.get(url) || null,
+      delete: async url => cache.delete(url)
+    })
+  };
+  context.fetch = async url => {
+    const href = String(url);
+    fetched.push(href);
+    if (href === audioPlaylist) {
+      return {
+        ok: true,
+        status: 200,
+        text: async () => `#EXTM3U
+#EXT-X-TARGETDURATION:6
+#EXT-X-PLAYLIST-TYPE:VOD
+#EXTINF:6.000,
+${audioSegment}
+#EXT-X-ENDLIST`,
+        arrayBuffer: async () => vm.runInContext("new Uint8Array([]).buffer", context),
+        headers: { get: () => "application/vnd.apple.mpegurl" }
+      };
+    }
+    if (href === sourceVideo) {
+      return {
+        ok: true,
+        status: 200,
+        text: async () => `#EXTM3U
+#EXT-X-TARGETDURATION:6
+#EXT-X-PLAYLIST-TYPE:VOD
+#EXTINF:6.000,
+${videoSegment}
+#EXT-X-ENDLIST`,
+        arrayBuffer: async () => vm.runInContext("new Uint8Array([]).buffer", context),
+        headers: { get: () => "application/vnd.apple.mpegurl" }
+      };
+    }
+    return {
+      ok: true,
+      status: 200,
+      text: async () => "",
+      arrayBuffer: async () => vm.runInContext("new Uint8Array([1, 2, 3]).buffer", context),
+      headers: { get: () => "video/mp2t" }
+    };
+  };
+  context.requestWebFfmpeg = async payload => ({
+    file: {
+      name: payload.outputName,
+      mime: "audio/mpeg",
+      buffer: vm.runInContext("new Uint8Array([7, 8]).buffer", context)
+    },
+    bytes: 2
+  });
+
+  try {
+    await context.extractHlsAudioWithWebFfmpeg({
+      tabId: 5,
+      jobId: "ted-hls-audio-companion-test",
+      sourceUrl: sourceVideo,
+      pageUrl: "https://www.ted.com/talks/sir_ken_robinson_do_schools_kill_creativity",
+      cacheNamespace: "ted-hls-audio-companion-test",
+      asrChunkSeconds: 900,
+      duration: 6
+    });
+  } finally {
+    context.fetch = originalFetch;
+    context.requestWebFfmpeg = originalRequestWebFfmpeg;
+    context.caches = originalCaches;
+    context.Response = originalResponse;
+  }
+
+  assert.ok(fetched.includes(audioPlaylist), "generic HLS companion probing should try the TED-style audio track");
+  assert.ok(fetched.includes(audioSegment), "audio companion segment should be downloaded for ASR");
+  assert.equal(fetched.includes(videoSegment), false, "video-only TED HLS segment should not be fed to Web FFmpeg for ASR");
 }
 
 {
@@ -1670,6 +2154,51 @@ https://segment-cdn.example.test/seg-001.ts
   assert.equal(logicalPartGroups.length, 2);
   assert.equal(logicalPartGroups[0][0].coreStart, 0);
   assert.equal(logicalPartGroups.at(-1).at(-1).coreEnd, 14373);
+}
+
+{
+  const rawSegments = [];
+  let cursor = 0;
+  for (let index = 0; index < 32; index += 1) {
+    const duration = index === 31 ? 24 : 23.645;
+    rawSegments.push({
+      start: cursor,
+      end: cursor + duration,
+      duration,
+      url: `https://delivery.domand.nicovideo.jp/audio-aac-192kbps-${index}.mp4`
+    });
+    cursor += duration;
+  }
+  const media = context.clipHlsMediaToRequestedDuration({
+    segments: rawSegments,
+    duration: cursor,
+    mapUrl: "",
+    unsupportedEncryption: ""
+  }, 219);
+  assert.equal(media.duration, 219);
+  assert.equal(media.segments.at(-1).end, 219);
+  assert.equal(media.segments.length < rawSegments.length, true);
+  const unknownDurationMedia = context.clipHlsMediaToRequestedDuration({
+    segments: rawSegments,
+    duration: cursor,
+    mapUrl: "",
+    unsupportedEncryption: ""
+  }, 0);
+  assert.equal(unknownDurationMedia.duration, cursor);
+  assert.equal(unknownDurationMedia.segments.length, rawSegments.length);
+}
+
+{
+  assert.equal(
+    context.guessHlsSegmentExtension("https://asset.domand.nicovideo.jp/video/audio-aac-192kbps/init01.cmfa?session=abc"),
+    "cmfa"
+  );
+  assert.equal(
+    context.guessHlsSegmentExtension("https://asset.domand.nicovideo.jp/video/video-h264-720p/01.cmfv?session=abc"),
+    "cmfv"
+  );
+  assert.equal(context.guessHlsSegmentExtension("https://cdn.example.test/audio/segment.m4a?token=abc"), "m4a");
+  assert.equal(context.guessHlsSegmentExtension("https://cdn.example.test/audio/segment.unknown?token=abc"), "ts");
 }
 
 {

@@ -1,0 +1,9 @@
+#EXTM3U
+#EXT-X-VERSION:7
+#EXT-X-TARGETDURATION:4
+#EXT-X-MAP:URI="audio-init.cmfa"
+#EXTINF:3.960,
+audio-00001.cmfa
+#EXTINF:3.960,
+audio-00002.cmfa
+#EXT-X-ENDLIST

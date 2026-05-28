@@ -6,6 +6,7 @@
   const MESSAGE_TYPE = "FUGUANG_PAGE_SNIFFER_MEDIA";
   const CONTEXT_TYPE = "FUGUANG_PAGE_SNIFFER_CONTEXT";
   const MAX_DEPTH = 8;
+  const MAX_DOCUMENT_MARKUP_SCAN_CHARS = 2_000_000;
   const URL_PATTERN = /https?:\/\/[^\s"'<>\\)]+|\/\/[^\s"'<>\\)]+/gi;
   const MEDIA_EXTENSIONS = new Set([
     "aac",
@@ -31,6 +32,7 @@
   const originalXhrSend = XMLHttpRequest.prototype.send;
   const originalJsonParse = JSON.parse;
   let lastContextSignature = "";
+  let lastDocumentMarkupSignature = "";
   const seenPerformanceUrls = new Set();
   const timers = [];
   const contextTimer = setInterval(reportPageContext, 1200);
@@ -93,12 +95,15 @@
 
   function scheduleInitialScan() {
     scanKnownPageState();
+    scanDocumentMarkup();
     scanPerformanceEntries();
     probeBilibiliPlayurl();
     timers.push(setTimeout(scanKnownPageState, 500));
+    timers.push(setTimeout(scanDocumentMarkup, 500));
     timers.push(setTimeout(scanPerformanceEntries, 500));
     timers.push(setTimeout(probeBilibiliPlayurl, 1000));
     timers.push(setTimeout(scanKnownPageState, 2000));
+    timers.push(setTimeout(scanDocumentMarkup, 2000));
     timers.push(setTimeout(scanPerformanceEntries, 2000));
     timers.push(setTimeout(probeBilibiliPlayurl, 3000));
     timers.push(setTimeout(probeBilibiliPlayurl, 7000));
@@ -214,6 +219,23 @@
     });
   }
 
+  function scanDocumentMarkup() {
+    try {
+      const markup = document.documentElement?.innerHTML || "";
+      if (!markup || markup.length > MAX_DOCUMENT_MARKUP_SCAN_CHARS) {
+        return;
+      }
+      const signature = `${markup.length}:${markup.slice(0, 512)}:${markup.slice(-512)}`;
+      if (signature === lastDocumentMarkupSignature) {
+        return;
+      }
+      lastDocumentMarkupSignature = signature;
+      inspectText(markup, location.href, "document-markup");
+    } catch {
+      // Initial server markup is only a discovery hint; dynamic sniffing remains active.
+    }
+  }
+
   function scanPerformanceEntries() {
     try {
       const entries = window.performance?.getEntriesByType?.("resource") || [];
@@ -318,8 +340,29 @@
       postMedia(baseUrl, "dash", "mpd", source, parseDashManifest(text));
       return;
     }
-    for (const match of text.matchAll(URL_PATTERN)) {
+    const urlText = decodeHtmlEntitiesForUrlScan(text);
+    for (const match of urlText.matchAll(URL_PATTERN)) {
       inspectUrl(match[0], source);
+    }
+  }
+
+  function decodeHtmlEntitiesForUrlScan(text) {
+    const value = String(text || "");
+    if (!/&(?:amp|quot|apos|lt|gt|#\d+|#x[0-9a-f]+);/i.test(value)) {
+      return value;
+    }
+    try {
+      const textarea = document.createElement("textarea");
+      textarea.innerHTML = value;
+      return textarea.value || value;
+    } catch {
+      return value
+        .replace(/&amp;/gi, "&")
+        .replace(/&quot;/gi, "\"")
+        .replace(/&#39;|&apos;/gi, "'")
+        .replace(/&#x3D;|&#61;/gi, "=")
+        .replace(/&lt;/gi, "<")
+        .replace(/&gt;/gi, ">");
     }
   }
 

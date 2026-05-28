@@ -32,6 +32,32 @@ const ADJACENT_VTT = `WEBVTT
 const OVERLAY_ID = "fuguang-caption-overlay-v2";
 const LEGACY_OVERLAY_ID = "fuguang-caption-overlay";
 
+class FakeVTTCue {
+  constructor(startTime, endTime, text) {
+    this.startTime = startTime;
+    this.endTime = endTime;
+    this.text = text;
+  }
+}
+
+class FakeTextTrack {
+  constructor(kind, label, language) {
+    this.kind = kind;
+    this.label = label;
+    this.language = language;
+    this.mode = "disabled";
+    this.cues = [];
+  }
+
+  addCue(cue) {
+    this.cues.push(cue);
+  }
+
+  removeCue(cue) {
+    this.cues = this.cues.filter(item => item !== cue);
+  }
+}
+
 class FakeElement {
   constructor(tagName = "div") {
     this.tagName = tagName.toUpperCase();
@@ -55,9 +81,11 @@ class FakeElement {
       values: new Map(),
       setProperty: (name, value) => this.style.values.set(name, String(value))
     };
+    const classes = new Set();
     this.classList = {
-      add: () => {},
-      remove: () => {}
+      add: (...names) => names.forEach(name => classes.add(name)),
+      remove: (...names) => names.forEach(name => classes.delete(name)),
+      contains: name => classes.has(name)
     };
   }
 
@@ -165,6 +193,13 @@ class FakeMedia extends FakeElement {
     this.readyState = 4;
     this.currentSrc = "https://media.example.test/video.mp4";
     this.src = this.currentSrc;
+    this.textTracks = [];
+  }
+
+  addTextTrack(kind, label, language) {
+    const track = new FakeTextTrack(kind, label, language);
+    this.textTracks.push(track);
+    return track;
   }
 
   getBoundingClientRect() {
@@ -179,6 +214,7 @@ class FakeDocument {
     this.fullscreenElement = null;
     this.documentElement = new FakeElement("html");
     this.documentElement.ownerDocument = this;
+    this.listeners = new Map();
   }
 
   registerElement(element) {
@@ -211,8 +247,24 @@ class FakeDocument {
     return [];
   }
 
-  addEventListener() {}
-  removeEventListener() {}
+  addEventListener(type, listener) {
+    if (!this.listeners.has(type)) {
+      this.listeners.set(type, new Set());
+    }
+    this.listeners.get(type).add(listener);
+  }
+
+  removeEventListener(type, listener) {
+    this.listeners.get(type)?.delete(listener);
+  }
+
+  dispatchEvent(event) {
+    const listeners = [...(this.listeners.get(event.type) || [])];
+    for (const listener of listeners) {
+      listener(event);
+    }
+    return true;
+  }
 }
 
 class FakeEvent {
@@ -268,6 +320,8 @@ function createHarness({ settings = {}, videos = [new FakeMedia()], legacyOverla
       timeouts.delete(id);
     }
   };
+  window.VTTCue = FakeVTTCue;
+  window.TextTrackCue = FakeVTTCue;
   window.window = window;
   if (existingCleanup) {
     window.__fuguangSubtitleOverlayCleanup = () => {
@@ -305,6 +359,8 @@ function createHarness({ settings = {}, videos = [new FakeMedia()], legacyOverla
     document,
     window,
     Event: FakeEvent,
+    VTTCue: FakeVTTCue,
+    TextTrackCue: FakeVTTCue,
     performance: { now: () => 1000 },
     Map,
     Set,
@@ -351,6 +407,7 @@ function createHarness({ settings = {}, videos = [new FakeMedia()], legacyOverla
       ?.querySelector("[data-fuguang-caption-text]")
       ?.textContentWrites || 0,
     overlayHidden: () => document.getElementById(OVERLAY_ID)?.hidden,
+    overlay: () => document.getElementById(OVERLAY_ID),
     clearOverlayOnly: () => {
       const overlay = document.getElementById(OVERLAY_ID);
       overlay.hidden = true;
@@ -360,6 +417,83 @@ function createHarness({ settings = {}, videos = [new FakeMedia()], legacyOverla
       }
     }
   };
+}
+
+{
+  const video = new FakeMedia({ currentTime: 1, paused: false });
+  const harness = createHarness({ videos: [video] });
+  await harness.ready();
+  assert.equal((await harness.send({ type: "FUGUANG_ATTACH_VTT", vtt: SAMPLE_VTT })).ok, true);
+  assert.equal(harness.overlayText(), "first cue");
+
+  harness.overlay().dispatchEvent({
+    type: "mousedown",
+    clientX: 640,
+    clientY: 520,
+    preventDefault: () => {}
+  });
+  video.currentTime = 2.5;
+  video.dispatchEvent(new harness.context.Event("timeupdate"));
+
+  assert.equal(harness.overlayHidden(), false);
+  assert.equal(harness.overlayText(), "first cue");
+
+  harness.context.document.dispatchEvent({ type: "mouseup", clientX: 640, clientY: 520 });
+  harness.runIntervals();
+
+  assert.equal(harness.overlayHidden(), true);
+  assert.equal(harness.overlayText(), "");
+}
+
+{
+  const video = new FakeMedia({ currentTime: 1, paused: false });
+  const harness = createHarness({ videos: [video] });
+  const fullscreenHost = harness.context.document.createElement("div");
+  fullscreenHost.clientWidth = 1024;
+  fullscreenHost.clientHeight = 576;
+  harness.context.document.documentElement.appendChild(fullscreenHost);
+  harness.context.document.fullscreenElement = fullscreenHost;
+  await harness.ready();
+  assert.equal((await harness.send({ type: "FUGUANG_ATTACH_VTT", vtt: SAMPLE_VTT })).ok, true);
+
+  const overlay = harness.overlay();
+  assert.equal(overlay.parentElement, fullscreenHost);
+  assert.equal(overlay.classList.contains("is-fullscreen-mounted"), true);
+  assert.equal(overlay.style.left, "50%");
+  assert.equal(overlay.style.top, "72%");
+  assert.equal(video.textTracks.length, 0);
+}
+
+{
+  const video = new FakeMedia({ currentTime: 1, paused: false });
+  const harness = createHarness({ videos: [video] });
+  harness.context.document.fullscreenElement = video;
+  await harness.ready();
+  assert.equal((await harness.send({ type: "FUGUANG_ATTACH_VTT", vtt: SAMPLE_VTT })).ok, true);
+
+  const overlay = harness.overlay();
+  assert.equal(overlay?.hidden ?? true, true);
+  assert.equal(video.textTracks.length, 1);
+  assert.equal(video.textTracks[0].label, "流声字幕");
+  assert.equal(video.textTracks[0].mode, "showing");
+  assert.equal(video.textTracks[0].cues.length, 2);
+  assert.equal(video.textTracks[0].cues[0].snapToLines, false);
+  assert.equal(video.textTracks[0].cues[0].line, 72);
+  assert.equal(video.textTracks[0].cues[0].position, 50);
+  assert.equal(video.textTracks[0].cues[0].align, "center");
+  assert.equal(video.textTracks[0].cues[0].size, 72);
+  assert.match(
+    harness.context.document.getElementById("fuguang-caption-style-v2").textContent,
+    /video::cue/
+  );
+
+  harness.context.document.fullscreenElement = null;
+  harness.context.document.dispatchEvent(new harness.context.Event("fullscreenchange"));
+
+  assert.equal(video.textTracks[0].mode, "disabled");
+  assert.equal(harness.overlay().parentElement, harness.context.document.documentElement);
+  assert.equal(harness.overlayHidden(), false);
+  assert.equal(harness.overlayText(), "first cue");
 }
 
 {

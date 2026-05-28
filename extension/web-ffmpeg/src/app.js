@@ -238,7 +238,13 @@ async function extractAudio(event, message) {
 
     if (segmentSeconds) {
       postOperationProgress("read", 96, "正在读取音频分段输出");
-      const chunks = await readSegmentOutputs(ffmpeg, outputPattern, segmentSeconds, totalDuration, null);
+      const chunks = await readSegmentOutputs(ffmpeg, outputPattern, segmentSeconds, totalDuration, null, {
+        inputName,
+        outputName: outputPattern,
+        command,
+        returnCode,
+        logs: recentFfmpegLogs(logStartIndex)
+      });
       for (const chunk of chunks) {
         cleanupTargets.add(chunk.file.name);
       }
@@ -278,6 +284,13 @@ async function extractAudio(event, message) {
     }
 
     const buffer = output.buffer.slice(output.byteOffset, output.byteOffset + output.byteLength);
+    assertExtractedAudioOutputLooksDecodable(outputName, buffer, {
+      inputName,
+      outputName,
+      command,
+      returnCode,
+      logs: recentFfmpegLogs(logStartIndex)
+    });
     state.status.textContent = "完成";
       return {
         file: {
@@ -343,6 +356,13 @@ async function extractOverlappedSegmentOutputs(
     cleanupTargets.add(spec.name);
     const output = await ffmpeg.readFile(spec.name);
     const buffer = output.buffer.slice(output.byteOffset, output.byteOffset + output.byteLength);
+    assertExtractedAudioOutputLooksDecodable(spec.name, buffer, {
+      inputName,
+      outputName: spec.name,
+      command,
+      returnCode,
+      logs: recentFfmpegLogs(0)
+    });
     chunks.push({
       index: spec.index,
       start: spec.start,
@@ -445,6 +465,13 @@ async function concatAudio(event, message) {
     }
 
     const buffer = output.buffer.slice(output.byteOffset, output.byteOffset + output.byteLength);
+    assertExtractedAudioOutputLooksDecodable(outputName, buffer, {
+      inputName: files.map(file => file.name).join(","),
+      outputName,
+      command,
+      returnCode,
+      logs: recentFfmpegLogs(logStartIndex)
+    });
     state.status.textContent = "完成";
     return {
       file: {
@@ -578,6 +605,13 @@ async function collectSpeechSegmentOutput(ffmpeg, inputName, spec, cleanupTarget
   cleanupTargets.add(spec.name);
   const output = await ffmpeg.readFile(spec.name);
   const buffer = output.buffer.slice(output.byteOffset, output.byteOffset + output.byteLength);
+  assertExtractedAudioOutputLooksDecodable(spec.name, buffer, {
+    inputName: partNames.join(","),
+    outputName: spec.name,
+    command,
+    returnCode,
+    logs: recentFfmpegLogs(0)
+  });
   return {
     index: spec.index,
     start: spec.sourceStart,
@@ -714,7 +748,70 @@ function audioResultTransferList(result) {
     .filter(buffer => buffer instanceof ArrayBuffer);
 }
 
-async function readSegmentOutputs(ffmpeg, outputPattern, segmentSeconds, totalDuration, speechIntervals = null) {
+function assertExtractedAudioOutputLooksDecodable(fileName, buffer, details = {}) {
+  const extension = String(fileName || details.outputName || "").split(/[?#]/)[0].split(".").pop()?.toLowerCase() || "";
+  const bytes = buffer instanceof Uint8Array
+    ? buffer
+    : buffer instanceof ArrayBuffer
+      ? new Uint8Array(buffer)
+      : null;
+  if (!bytes || !bytes.byteLength) {
+    throw buildFfmpegError("FFmpeg 输出没有可解码音频帧", {
+      inputName: details.inputName || "",
+      outputName: details.outputName || fileName || "",
+      command: details.command,
+      returnCode: details.returnCode,
+      logs: details.logs || []
+    });
+  }
+  if (extension === "mp3" && !mp3BufferHasAudioFrame(bytes)) {
+    throw buildFfmpegError("FFmpeg 输出没有可解码音频帧", {
+      inputName: details.inputName || "",
+      outputName: details.outputName || fileName || "",
+      command: details.command,
+      returnCode: details.returnCode,
+      logs: details.logs || []
+    });
+  }
+}
+
+function mp3BufferHasAudioFrame(input) {
+  const bytes = input instanceof Uint8Array
+    ? input
+    : input instanceof ArrayBuffer
+      ? new Uint8Array(input)
+      : null;
+  if (!bytes || bytes.length < 2) {
+    return false;
+  }
+  const start = mp3AudioFrameScanStart(bytes);
+  for (let index = start; index + 1 < bytes.length; index += 1) {
+    if (bytes[index] === 0xff && (bytes[index + 1] & 0xe0) === 0xe0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function mp3AudioFrameScanStart(bytes) {
+  if (
+    bytes.length < 10 ||
+    bytes[0] !== 0x49 ||
+    bytes[1] !== 0x44 ||
+    bytes[2] !== 0x33
+  ) {
+    return 0;
+  }
+  const tagSize =
+    ((bytes[6] & 0x7f) << 21) |
+    ((bytes[7] & 0x7f) << 14) |
+    ((bytes[8] & 0x7f) << 7) |
+    (bytes[9] & 0x7f);
+  const footerSize = (bytes[5] & 0x10) ? 10 : 0;
+  return Math.min(bytes.length, 10 + tagSize + footerSize);
+}
+
+async function readSegmentOutputs(ffmpeg, outputPattern, segmentSeconds, totalDuration, speechIntervals = null, validationContext = null) {
   const pattern = segmentPatternParts(outputPattern);
   const entries = await ffmpeg.listDir(".");
   const names = entries
@@ -725,6 +822,12 @@ async function readSegmentOutputs(ffmpeg, outputPattern, segmentSeconds, totalDu
   for (const name of names) {
     const output = await ffmpeg.readFile(name);
     const buffer = output.buffer.slice(output.byteOffset, output.byteOffset + output.byteLength);
+    if (validationContext) {
+      assertExtractedAudioOutputLooksDecodable(name, buffer, {
+        ...validationContext,
+        outputName: name
+      });
+    }
     const index = pattern.indexOf(name);
     const start = Math.max(0, index * segmentSeconds);
     const end = totalDuration ? Math.min(totalDuration, start + segmentSeconds) : start + segmentSeconds;

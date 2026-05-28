@@ -575,13 +575,15 @@ async function startBestPreload(tabId, selectedCandidate = null) {
 }
 
 async function startBrowserPreload(tabId, candidate, metadata, modelConfig) {
-  if (!canUseWebFfmpegExtraction(candidate)) {
+  const extractionCandidate = resolveAudioSourceExecutionCandidate(candidate);
+  if (!canUseWebFfmpegExtraction(extractionCandidate)) {
     throw new Error("当前媒体源暂不支持浏览器内预加载。请选择 HLS 或直连音视频源。");
   }
+  const executionMetadata = buildExecutionMetadata(metadata, candidate, extractionCandidate);
   validateBrowserPreloadModelConfig(modelConfig);
   const usesFunAsr = isDashScopeFunAsrConfig(modelConfig.asr);
   const browserAsrChunkSeconds = usesFunAsr
-    ? dashScopeFunAsrChunkSeconds(metadata)
+    ? dashScopeFunAsrChunkSeconds(executionMetadata)
     : await browserAsrEffectiveUploadChunkSeconds(modelConfig);
   const jobId = `browser-${Date.now()}`;
   const job = {
@@ -589,14 +591,10 @@ async function startBrowserPreload(tabId, candidate, metadata, modelConfig) {
     pipeline: usesFunAsr ? "funasr" : "browser",
     status: "running",
     stage: "extracting",
-    source: candidate.url,
-    sourceUrl: candidate.url,
-    metadata: {
-      title: metadata.title || "",
-      pageUrl: metadata.pageUrl || "",
-      sourceUrl: metadata.sourceUrl || candidate.url || "",
-      duration: metadata.duration || null
-    },
+    source: extractionCandidate.url,
+    sourceUrl: extractionCandidate.url,
+    originalSourceUrl: candidate.url || "",
+    metadata: executionMetadata,
     createdAt: Date.now(),
     updatedAt: Date.now(),
     extract: {
@@ -604,7 +602,7 @@ async function startBrowserPreload(tabId, candidate, metadata, modelConfig) {
       progress: 0,
       chunkCount: 0,
       availableSeconds: 0,
-      duration: metadata.duration || null,
+      duration: executionMetadata.duration || null,
       chunkSeconds: modelConfig.chunkSeconds,
       asrChunkSeconds: browserAsrChunkSeconds,
       bitrate: "64k",
@@ -629,8 +627,9 @@ async function startBrowserPreload(tabId, candidate, metadata, modelConfig) {
   };
   const record = {
     tabId,
-    candidate,
-    metadata,
+    candidate: extractionCandidate,
+    selectedCandidate: candidate,
+    metadata: executionMetadata,
     modelConfig,
     job,
     startedAt: Date.now(),
@@ -655,6 +654,88 @@ async function startBrowserPreload(tabId, candidate, metadata, modelConfig) {
     publishBrowserPreloadJob(latest);
   });
   return { status: "running", job };
+}
+
+function resolveAudioSourceExecutionCandidate(candidate = {}) {
+  const plan = candidate.sourcePlan || {};
+  const input = plan.ffmpegInput || {};
+  const url = String(input.url || plan.primaryUrl || "");
+  const inputType = String(input.type || "");
+  if (plan && plan.executable === false) {
+    throw new Error(sourcePlanUnsupportedMessage(plan));
+  }
+  if (sourcePlanHasBlockingWarning(plan)) {
+    throw new Error(sourcePlanUnsupportedMessage(plan));
+  }
+  if (!url || url === candidate.url) {
+    return candidate;
+  }
+  if (!candidate.sourcePlanTrusted) {
+    throw new Error("媒体源执行计划已过期或未通过后台校验。请刷新媒体源后重试。");
+  }
+  if (!["hls", "direct"].includes(inputType)) {
+    throw new Error("当前媒体源计划暂不支持浏览器内预加载执行。请选择 HLS 或直连音频源。");
+  }
+  const classified = classifyUrl(url) || {};
+  const canReuseHeaders = canReuseCapturedHeaders(candidate.url, url);
+  return {
+    ...candidate,
+    url,
+    sourceUrl: url,
+    originalSourceUrl: candidate.url || "",
+    kind: inputType === "hls" ? "hls" : (plan.primaryRole === "audio" ? "audio" : (classified.kind || candidate.kind || "")),
+    ext: classified.ext || candidate.ext || filenameFromUrl(url).split(".").pop() || "",
+    role: plan.primaryRole || candidate.role || "",
+    contentType: inputType === "hls" ? "application/vnd.apple.mpegurl" : (classified.kind === "audio" ? "audio/mp4" : candidate.contentType || ""),
+    requestHeaders: canReuseHeaders ? candidate.requestHeaders : null,
+    sourcePlanUsed: true
+  };
+}
+
+function buildExecutionMetadata(metadata = {}, selectedCandidate = {}, extractionCandidate = {}) {
+  const executionSourceUrl = extractionCandidate.url || metadata.sourceUrl || selectedCandidate.url || "";
+  const originalSourceUrl = selectedCandidate.url || metadata.sourceUrl || "";
+  return {
+    ...metadata,
+    title: metadata.title || "",
+    pageUrl: metadata.pageUrl || "",
+    sourceUrl: executionSourceUrl,
+    executionSourceUrl,
+    originalSourceUrl,
+    duration: metadata.duration || null
+  };
+}
+
+function canReuseCapturedHeaders(fromUrl, toUrl) {
+  if (!fromUrl || !toUrl || fromUrl === toUrl) {
+    return true;
+  }
+  try {
+    return new URL(fromUrl).origin === new URL(toUrl).origin;
+  } catch {
+    return false;
+  }
+}
+
+function sourcePlanHasBlockingWarning(plan = {}) {
+  return (Array.isArray(plan.warnings) ? plan.warnings : []).some(warning =>
+    ["requires-signature-deciphering"].includes(String(warning?.code || ""))
+  );
+}
+
+function sourcePlanUnsupportedMessage(plan = {}) {
+  const warning = (Array.isArray(plan.warnings) ? plan.warnings : [])
+    .find(item => item?.message);
+  if (warning?.code === "requires-signature-deciphering") {
+    return "当前媒体源需要播放器签名解密，浏览器内预加载暂不支持。";
+  }
+  if (warning?.message) {
+    return warning.message;
+  }
+  if (plan.executable === false) {
+    return "当前媒体源已识别，但还不能在浏览器内直接执行抽取。";
+  }
+  return "当前媒体源暂不支持浏览器内预加载执行。";
 }
 
 function validateBrowserPreloadModelConfig(modelConfig) {
@@ -1892,7 +1973,7 @@ function browserAudioFileByteLength(file) {
   return Number(file?.bytes || 0) || 0;
 }
 
-function assertBrowserAsrChunkCanUpload(chunk = {}, asrConfig = {}, byteLength = null) {
+function assertBrowserAsrChunkCanUpload(chunk = {}, asrConfig = {}, byteLength = null, fileBuffer = null) {
   if (Array.isArray(chunk.file?.parts) && chunk.file.parts.length) {
     throw new Error("识别音频分段仍由多个 MP3 片段组成，不能直接字节拼接上传；请重新抽取音频。");
   }
@@ -1904,6 +1985,82 @@ function assertBrowserAsrChunkCanUpload(chunk = {}, asrConfig = {}, byteLength =
   if (bytes > maxBytes) {
     throw new Error(`识别音频分段过大（${formatBytes(bytes)}），超过当前 ASR 上传限制（${formatBytes(maxBytes)}）。请降低 ASR 上传窗口或改用支持长文件的 ASR。`);
   }
+  if (fileBuffer instanceof ArrayBuffer) {
+    assertBrowserAsrUploadAudioBytes(chunk.file || {}, fileBuffer);
+  }
+}
+
+function assertBrowserAsrUploadAudioBytes(file = {}, buffer) {
+  if (!(buffer instanceof ArrayBuffer) || buffer.byteLength < 8) {
+    return;
+  }
+  const kind = browserAsrExpectedAudioContainer(file);
+  if (!kind) {
+    return;
+  }
+  const bytes = new Uint8Array(buffer, 0, Math.min(buffer.byteLength, 64 * 1024));
+  const valid = kind === "wav"
+    ? browserAsrBytesLookLikeWav(bytes)
+    : browserAsrBytesLookLikeMp3(bytes);
+  if (valid) {
+    return;
+  }
+  throw new Error(`ASR 音频格式校验失败：${file.name || "音频分段"} 标记为 ${file.mime || kind}，但文件头不是有效的 ${kind.toUpperCase()} 音频；请重新抽取音频。`);
+}
+
+function browserAsrExpectedAudioContainer(file = {}) {
+  const mime = String(file.mime || "").split(";")[0].trim().toLowerCase();
+  const name = String(file.name || "").split(/[?#]/)[0].toLowerCase();
+  if (mime === "audio/wav" || mime === "audio/x-wav" || /\.wav$/i.test(name)) {
+    return "wav";
+  }
+  if (mime === "audio/mpeg" || mime === "audio/mp3" || /\.mp3$/i.test(name)) {
+    return "mp3";
+  }
+  return "";
+}
+
+function browserAsrBytesLookLikeWav(bytes) {
+  return bytes.length >= 12
+    && bytes[0] === 0x52
+    && bytes[1] === 0x49
+    && bytes[2] === 0x46
+    && bytes[3] === 0x46
+    && bytes[8] === 0x57
+    && bytes[9] === 0x41
+    && bytes[10] === 0x56
+    && bytes[11] === 0x45;
+}
+
+function browserAsrBytesLookLikeMp3(bytes) {
+  if (!bytes || bytes.length < 2) {
+    return false;
+  }
+  const start = browserAsrMp3AudioFrameScanStart(bytes);
+  for (let index = start; index + 1 < bytes.length; index += 1) {
+    if (bytes[index] === 0xff && (bytes[index + 1] & 0xe0) === 0xe0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function browserAsrMp3AudioFrameScanStart(bytes) {
+  if (
+    bytes.length < 10 ||
+    bytes[0] !== 0x49 ||
+    bytes[1] !== 0x44 ||
+    bytes[2] !== 0x33
+  ) {
+    return 0;
+  }
+  const tagSize =
+    ((bytes[6] & 0x7f) << 21) |
+    ((bytes[7] & 0x7f) << 14) |
+    ((bytes[8] & 0x7f) << 7) |
+    (bytes[9] & 0x7f);
+  const footerSize = (bytes[5] & 0x10) ? 10 : 0;
+  return Math.min(bytes.length, 10 + tagSize + footerSize);
 }
 
 async function transcribeBrowserAudioChunk(chunk, asrConfig, options = {}) {
@@ -1916,7 +2073,7 @@ async function transcribeBrowserAudioChunk(chunk, asrConfig, options = {}) {
   const fileName = chunk.file?.name || `chunk-${chunk.index + 1}.mp3`;
   assertBrowserAsrChunkCanUpload(chunk, asrConfig);
   const fileBuffer = await getBrowserAudioChunkBuffer(chunk.file);
-  assertBrowserAsrChunkCanUpload(chunk, asrConfig, fileBuffer.byteLength);
+  assertBrowserAsrChunkCanUpload(chunk, asrConfig, fileBuffer.byteLength, fileBuffer);
   const diagnostics = {
     chunk: browserAsrDiagnosticChunkInfo(chunk),
     request: {
@@ -2280,7 +2437,7 @@ async function transcribeBrowserCollectedSpeechAudioChunk({
   for (const collectedChunk of chunks) {
     assertBrowserAsrChunkCanUpload(collectedChunk, asrConfig);
     const collectedBuffer = await getBrowserAudioChunkBuffer(collectedChunk.file);
-    assertBrowserAsrChunkCanUpload(collectedChunk, asrConfig, collectedBuffer.byteLength);
+    assertBrowserAsrChunkCanUpload(collectedChunk, asrConfig, collectedBuffer.byteLength, collectedBuffer);
     const transcription = await requestBrowserAsrTranscription({
       endpoint,
       timeoutMs,
@@ -2565,6 +2722,62 @@ function createBrowserAsrRequestError(message, details = {}) {
   return error;
 }
 
+function browserAsrResponseErrorMessage(payload, status) {
+  const detail = payload?.error?.message ?? payload?.message ?? payload?.detail;
+  if (typeof detail === "string" && detail.trim()) {
+    return detail.trim();
+  }
+  if (Array.isArray(detail) && detail.length) {
+    return detail.map(item => {
+      if (typeof item === "string") {
+        return item;
+      }
+      try {
+        return JSON.stringify(item);
+      } catch {
+        return String(item || "");
+      }
+    }).filter(Boolean).join("；").slice(0, 500);
+  }
+  if (detail && typeof detail === "object") {
+    try {
+      const text = JSON.stringify(detail);
+      if (text && text !== "{}") {
+        return text.slice(0, 500);
+      }
+    } catch {
+      // Fall back to the status message below.
+    }
+  }
+  return `ASR 返回 HTTP ${status}`;
+}
+
+function browserAsrUploadFileSummary(file = {}, buffer = null, fileName = "") {
+  const bytes = buffer instanceof ArrayBuffer ? new Uint8Array(buffer, 0, Math.min(buffer.byteLength, 16)) : new Uint8Array();
+  const headHex = [...bytes].map(value => value.toString(16).padStart(2, "0")).join("");
+  const headAscii = browserAsrAsciiHead(bytes);
+  const size = buffer instanceof ArrayBuffer
+    ? formatBytes(buffer.byteLength)
+    : formatBytes(browserAudioFileByteLength(file));
+  const mime = file.mime || "audio/mpeg";
+  const name = fileName || file.name || "audio";
+  const signature = headAscii || headHex || "-";
+  return `${name}（${mime}，${size}，文件头 ${signature}）`;
+}
+
+function browserAsrAsciiHead(bytes) {
+  if (!bytes?.length) {
+    return "";
+  }
+  if (bytes.length >= 4 && bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46) {
+    return "RIFF";
+  }
+  if (bytes.length >= 3 && bytes[0] === 0x49 && bytes[1] === 0x44 && bytes[2] === 0x33) {
+    return "ID3";
+  }
+  return "";
+}
+
 async function requestBrowserAsrTranscription({ endpoint, timeoutMs, asrConfig, supportedRequestFields, effectiveChunk, fileBuffer, fileName, clipTimestamps, matureAsrPlan, disableVadFilter = false }) {
   const formData = new FormData();
   const requestAsrConfig = disableVadFilter ? { ...asrConfig, vadFilter: "off" } : asrConfig;
@@ -2606,7 +2819,11 @@ async function requestBrowserAsrTranscription({ endpoint, timeoutMs, asrConfig, 
   }
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw createBrowserAsrRequestError(payload.error?.message || payload.message || `ASR 返回 HTTP ${response.status}`, {
+    const responseMessage = browserAsrResponseErrorMessage(payload, response.status);
+    const uploadSummary = response.status === 415
+      ? `。上传文件：${browserAsrUploadFileSummary(effectiveChunk.file || {}, fileBuffer, fileName)}`
+      : "";
+    throw createBrowserAsrRequestError(`${responseMessage}${uploadSummary}`, {
       requestFields,
       status: response.status,
       rawPayload: payload,

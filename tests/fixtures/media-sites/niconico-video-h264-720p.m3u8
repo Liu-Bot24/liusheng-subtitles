@@ -1,0 +1,9 @@
+#EXTM3U
+#EXT-X-VERSION:7
+#EXT-X-TARGETDURATION:4
+#EXT-X-MAP:URI="video-init.cmfv"
+#EXTINF:3.960,
+video-00001.cmfv
+#EXTINF:3.960,
+video-00002.cmfv
+#EXT-X-ENDLIST

@@ -282,6 +282,11 @@ const I18N = {
     roleVideo: "视频轨",
     rolePlaylist: "播放列表",
     roleMedia: "媒体",
+    sourcePlanKind: "计划 {kind}",
+    sourcePlanInput: "输入 {type}",
+    sourcePlanAdapter: "适配 {name}",
+    sourcePlanContainer: "容器 {name}",
+    sourcePlanDiagnosticOnly: "仅诊断",
     sourceRequestHeaders: "请求头",
     sourceRequest: "请求",
     sourceResponse: "响应",
@@ -548,6 +553,11 @@ const I18N = {
     roleVideo: "Video",
     rolePlaylist: "Playlist",
     roleMedia: "Media",
+    sourcePlanKind: "Plan {kind}",
+    sourcePlanInput: "Input {type}",
+    sourcePlanAdapter: "Adapter {name}",
+    sourcePlanContainer: "Container {name}",
+    sourcePlanDiagnosticOnly: "diagnostic only",
     sourceRequestHeaders: "Request headers",
     sourceRequest: "Request",
     sourceResponse: "Response",
@@ -2059,7 +2069,15 @@ function renderCandidates(items) {
     const reason = document.createElement("span");
     reason.className = "candidate-reason";
     reason.textContent = item.selectionReason || item.url || "";
-    card.append(title, meta, reason);
+    const diagnosticText = candidateDiagnosticText(item);
+    if (diagnosticText) {
+      const diagnostic = document.createElement("span");
+      diagnostic.className = "candidate-diagnostic";
+      diagnostic.textContent = diagnosticText;
+      card.append(title, meta, reason, diagnostic);
+    } else {
+      card.append(title, meta, reason);
+    }
     elements.candidateList.appendChild(card);
   }
   elements.candidateList.scrollTop = previousScrollTop;
@@ -2072,6 +2090,7 @@ function candidateListSignature(items) {
       title: item.title || "",
       meta: candidateMetaText(item),
       reason: item.selectionReason || "",
+      diagnostic: candidateDiagnosticText(item),
       selected: candidateKey(item, index) === selectedCandidateKey
     }))
   );
@@ -2146,6 +2165,30 @@ function candidateMetaText(item) {
     parts.push(formatSource(item.source));
   }
   return parts.filter(Boolean).join(" · ");
+}
+
+function candidateDiagnosticText(item) {
+  const plan = item?.sourcePlan;
+  const parts = [];
+  if (plan?.kind) {
+    parts.push(t("sourcePlanKind", { kind: plan.kind }));
+  }
+  if (plan?.executable === false) {
+    parts.push(t("sourcePlanDiagnosticOnly"));
+  }
+  if (plan?.ffmpegInput?.type) {
+    parts.push(t("sourcePlanInput", { type: plan.ffmpegInput.type }));
+  }
+  if (plan?.container) {
+    parts.push(t("sourcePlanContainer", { name: plan.container }));
+  }
+  if (plan?.siteAdapter) {
+    parts.push(t("sourcePlanAdapter", { name: plan.siteAdapter }));
+  }
+  if (item?.mediaAsset?.durationEvidence?.source) {
+    parts.push(`duration:${item.mediaAsset.durationEvidence.source}`);
+  }
+  return parts.join(" · ");
 }
 
 async function renderSubtitles(jobId, job = null) {

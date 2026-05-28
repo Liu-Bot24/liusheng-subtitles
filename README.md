@@ -24,6 +24,20 @@ Languages: [简体中文](README.md) · [English](README-en.md)
 - 支持 OpenAI Whisper、Groq Whisper、xAI Grok、Fun-ASR 和自定义识别接口。
 - 支持 OpenAI-compatible、Anthropic-compatible 等 LLM 翻译接口。
 
+## 演示截图
+
+![设置界面 哔哩哔哩](docs/assets/readme/bilibili-settings-demo.jpg)
+
+*设置界面 哔哩哔哩*
+
+![任务界面 TED](docs/assets/readme/ted-task-demo.jpg)
+
+*任务界面 TED*
+
+![全屏播放 ニコニコ動画](docs/assets/readme/niconico-fullscreen-demo.jpg)
+
+*全屏播放 ニコニコ動画*
+
 ## 安装
 
 1. 打开 Chrome 的 `chrome://extensions`。

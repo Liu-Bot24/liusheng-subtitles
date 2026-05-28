@@ -123,7 +123,31 @@ const asrProviderSource = fs.readFileSync(new URL("../../extension/src/backgroun
   .replace("export const FuguangBrowserAsrProvider =", "var FuguangBrowserAsrProvider =");
 const asrPostprocessSource = fs.readFileSync(new URL("../../extension/src/background/browser-asr-postprocess.js", import.meta.url), "utf8")
   .replace("export const FuguangBrowserAsrPostprocess =", "var FuguangBrowserAsrPostprocess =");
+const mediaAssetModelSource = fs.readFileSync(new URL("../../extension/src/background/media-asset-model.js", import.meta.url), "utf8")
+  .replace("export const FuguangMediaAssetModel =", "var FuguangMediaAssetModel =");
+const hlsManifestParserSource = fs.readFileSync(new URL("../../extension/src/background/hls-manifest-parser.js", import.meta.url), "utf8")
+  .replace("export const FuguangHlsManifestParser =", "var FuguangHlsManifestParser =");
+const dashManifestParserSource = fs.readFileSync(new URL("../../extension/src/background/dash-manifest-parser.js", import.meta.url), "utf8")
+  .replace("export const FuguangDashManifestParser =", "var FuguangDashManifestParser =");
+const bilibiliMediaAdapterSource = fs.readFileSync(new URL("../../extension/src/background/site-adapters/bilibili-media-adapter.js", import.meta.url), "utf8")
+  .replace("export const FuguangBilibiliMediaAdapter =", "var FuguangBilibiliMediaAdapter =");
+const xTwitterMediaAdapterSource = fs.readFileSync(new URL("../../extension/src/background/site-adapters/x-twitter-media-adapter.js", import.meta.url), "utf8")
+  .replace("export const FuguangXTwitterMediaAdapter =", "var FuguangXTwitterMediaAdapter =");
+const youtubeMediaAdapterSource = fs.readFileSync(new URL("../../extension/src/background/site-adapters/youtube-media-adapter.js", import.meta.url), "utf8")
+  .replace("export const FuguangYoutubeMediaAdapter =", "var FuguangYoutubeMediaAdapter =");
+const mediaSourceResolversSource = fs.readFileSync(new URL("../../extension/src/background/media-source-resolvers.js", import.meta.url), "utf8")
+  .replace('import { FuguangMediaAssetModel } from "./media-asset-model.js";\n', "")
+  .replace('import { FuguangHlsManifestParser } from "./hls-manifest-parser.js";\n', "")
+  .replace('import { FuguangDashManifestParser } from "./dash-manifest-parser.js";\n', "")
+  .replace('import { FuguangBilibiliMediaAdapter } from "./site-adapters/bilibili-media-adapter.js";\n', "")
+  .replace('import { FuguangXTwitterMediaAdapter } from "./site-adapters/x-twitter-media-adapter.js";\n', "")
+  .replace('import { FuguangYoutubeMediaAdapter } from "./site-adapters/youtube-media-adapter.js";\n\n', "")
+  .replace("export const FuguangMediaSourceResolvers =", "var FuguangMediaSourceResolvers =");
 const mediaCandidatesSource = fs.readFileSync(new URL("../../extension/src/background/browser-media-candidates.js", import.meta.url), "utf8")
+  .replace('import { FuguangMediaAssetModel } from "./media-asset-model.js";\n\n', "")
+  .replace('import { FuguangMediaAssetModel } from "./media-asset-model.js";\n', "")
+  .replace('import { FuguangMediaSourceResolvers } from "./media-source-resolvers.js";\n\n', "")
+  .replace('import { FuguangMediaSourceResolvers } from "./media-source-resolvers.js";\n', "")
   .replace("export const FuguangBrowserMediaCandidates =", "var FuguangBrowserMediaCandidates =");
 const modelProfilesSource = fs.readFileSync(new URL("../../extension/src/background/browser-model-profiles.js", import.meta.url), "utf8")
   .replace('import { FuguangBrowserAsrProvider } from "./browser-asr-provider.js";\n\n', "")
@@ -154,6 +178,20 @@ vm.runInContext(asrProviderSource, context, { filename: "browser-asr-provider.js
 Object.assign(context, context.FuguangBrowserAsrProvider);
 vm.runInContext(asrPostprocessSource, context, { filename: "browser-asr-postprocess.js" });
 Object.assign(context, context.FuguangBrowserAsrPostprocess);
+vm.runInContext(mediaAssetModelSource, context, { filename: "media-asset-model.js" });
+Object.assign(context, context.FuguangMediaAssetModel);
+vm.runInContext(hlsManifestParserSource, context, { filename: "hls-manifest-parser.js" });
+Object.assign(context, context.FuguangHlsManifestParser);
+vm.runInContext(dashManifestParserSource, context, { filename: "dash-manifest-parser.js" });
+Object.assign(context, context.FuguangDashManifestParser);
+vm.runInContext(bilibiliMediaAdapterSource, context, { filename: "bilibili-media-adapter.js" });
+Object.assign(context, context.FuguangBilibiliMediaAdapter);
+vm.runInContext(xTwitterMediaAdapterSource, context, { filename: "x-twitter-media-adapter.js" });
+Object.assign(context, context.FuguangXTwitterMediaAdapter);
+vm.runInContext(youtubeMediaAdapterSource, context, { filename: "youtube-media-adapter.js" });
+Object.assign(context, context.FuguangYoutubeMediaAdapter);
+vm.runInContext(mediaSourceResolversSource, context, { filename: "media-source-resolvers.js" });
+Object.assign(context, context.FuguangMediaSourceResolvers);
 vm.runInContext(mediaCandidatesSource, context, { filename: "browser-media-candidates.js" });
 Object.assign(context, context.FuguangBrowserMediaCandidates);
 vm.runInContext(modelProfilesSource, context, { filename: "browser-model-profiles.js" });
@@ -215,6 +253,144 @@ vm.runInContext(source, context, { filename: "service-worker.js" });
   } finally {
     context.runBrowserPreloadJob = originalRunBrowserPreloadJob;
   }
+}
+
+{
+  const originalRunBrowserPreloadJob = context.runBrowserPreloadJob;
+  let queuedJobId = "";
+  context.runBrowserPreloadJob = async jobId => {
+    queuedJobId = jobId;
+  };
+  try {
+    const sourcePlan = {
+      kind: "hls-audio",
+      primaryUrl: "https://cdn.example.test/audio-aac-128k.m3u8",
+      primaryRole: "audio",
+      ffmpegInput: {
+        type: "hls",
+        url: "https://cdn.example.test/audio-aac-128k.m3u8"
+      }
+    };
+    const executionCandidate = context.resolveAudioSourceExecutionCandidate({
+      url: "https://cdn.example.test/video-h264-720p.m3u8",
+      kind: "hls",
+      ext: "m3u8",
+      role: "playlist",
+      sourcePlanTrusted: true,
+      sourcePlan
+    });
+    assert.equal(executionCandidate.url, "https://cdn.example.test/audio-aac-128k.m3u8");
+    assert.equal(executionCandidate.originalSourceUrl, "https://cdn.example.test/video-h264-720p.m3u8");
+    assert.equal(executionCandidate.sourcePlanUsed, true);
+
+    const dashCandidate = context.resolveAudioSourceExecutionCandidate({
+      url: "https://cdn.example.test/video.mpd",
+      kind: "dash",
+      ext: "mpd",
+      sourcePlan: {
+        primaryUrl: "https://cdn.example.test/audio/",
+        ffmpegInput: { type: "dash", url: "https://cdn.example.test/video.mpd" }
+      }
+    });
+    assert.equal(dashCandidate.sourcePlanUsed, undefined);
+    assert.equal(dashCandidate.url, "https://cdn.example.test/video.mpd");
+
+    const response = await context.startBrowserPreload(
+      1,
+      {
+        url: "https://cdn.example.test/video-h264-720p.m3u8",
+        kind: "hls",
+        ext: "m3u8",
+        role: "playlist",
+        duration: 120,
+        sourcePlanTrusted: true,
+        sourcePlan
+      },
+      {
+        title: "Source plan start",
+        pageUrl: "https://example.test/watch/source-plan",
+        sourceUrl: "https://cdn.example.test/video-h264-720p.m3u8",
+        duration: 120
+      },
+      {
+        asr: {
+          providerType: "openai",
+          baseUrl: "https://asr.example.test/v1",
+          model: "whisper",
+          apiKey: "test"
+        },
+        translation: {
+          providerType: "openai",
+          baseUrl: "https://llm.example.test/v1",
+          model: "llm",
+          apiKey: "test"
+        },
+        targetLanguage: "zh-CN",
+        asrWorkers: 1,
+        workers: 1,
+        chunkSeconds: 900
+      }
+    );
+    assert.equal(response.job.sourceUrl, "https://cdn.example.test/audio-aac-128k.m3u8");
+    assert.equal(response.job.originalSourceUrl, "https://cdn.example.test/video-h264-720p.m3u8");
+    assert.equal(response.job.metadata.sourceUrl, "https://cdn.example.test/audio-aac-128k.m3u8");
+    assert.equal(response.job.metadata.executionSourceUrl, "https://cdn.example.test/audio-aac-128k.m3u8");
+    assert.equal(response.job.metadata.originalSourceUrl, "https://cdn.example.test/video-h264-720p.m3u8");
+    assert.equal(queuedJobId, response.job.id);
+  } finally {
+    context.runBrowserPreloadJob = originalRunBrowserPreloadJob;
+  }
+}
+
+{
+  assert.throws(
+    () => context.resolveAudioSourceExecutionCandidate({
+      url: "https://cdn.example.test/video-h264-720p.m3u8",
+      kind: "hls",
+      ext: "m3u8",
+      role: "playlist",
+      sourcePlan: {
+        kind: "hls-audio",
+        primaryUrl: "https://evil.example.test/audio.m3u8",
+        primaryRole: "audio",
+        ffmpegInput: { type: "hls", url: "https://evil.example.test/audio.m3u8" }
+      }
+    }),
+    /后台校验/
+  );
+
+  const crossOrigin = context.resolveAudioSourceExecutionCandidate({
+    url: "https://secure-cdn.example.test/video-h264-720p.m3u8",
+    kind: "hls",
+    ext: "m3u8",
+    role: "playlist",
+    sourcePlanTrusted: true,
+    requestHeaders: { authorization: "Bearer source-token" },
+    sourcePlan: {
+      kind: "hls-audio",
+      primaryUrl: "https://audio-cdn.example.test/audio-aac-128k.m3u8",
+      primaryRole: "audio",
+      ffmpegInput: { type: "hls", url: "https://audio-cdn.example.test/audio-aac-128k.m3u8" }
+    }
+  });
+  assert.equal(crossOrigin.url, "https://audio-cdn.example.test/audio-aac-128k.m3u8");
+  assert.equal(crossOrigin.requestHeaders, null);
+
+  assert.throws(
+    () => context.resolveAudioSourceExecutionCandidate({
+      url: "https://cdn.example.test/dash/seg-00001.m4s",
+      kind: "audio",
+      ext: "m4s",
+      sourcePlanTrusted: true,
+      sourcePlan: {
+        kind: "mse-fragments",
+        executable: false,
+        ffmpegInput: { type: "mse-fragments", url: "https://cdn.example.test/dash/seg-00001.m4s" },
+        warnings: [{ code: "unsupported-mse-fragments", message: "MSE fragments need assembly first." }]
+      }
+    }),
+    /MSE fragments/
+  );
 }
 
 {
@@ -1835,6 +2011,154 @@ vm.runInContext(source, context, { filename: "service-worker.js" });
 
 {
   const originalFetch = context.fetch;
+  let postCount = 0;
+  context.fetch = async (_url, init = {}) => {
+    if (!init.method) {
+      return { ok: true, json: async () => ({ paths: {} }) };
+    }
+    postCount += 1;
+    return {
+      ok: true,
+      json: async () => ({ segments: [{ start: 0, end: 1, text: "should not upload" }] })
+    };
+  };
+  const badMp3 = new Uint8Array(256).fill(0x41).buffer;
+  await assert.rejects(
+    context.transcribeBrowserAudioChunk(
+      {
+        index: 0,
+        start: 0,
+        end: 10,
+        duration: 10,
+        file: { name: "asr-bad.mp3", buffer: badMp3, mime: "audio/mpeg" }
+      },
+      {
+        providerType: "openai",
+        baseUrl: "https://speaches-invalid-upload.example/v1",
+        model: "Systran/faster-whisper-large-v3",
+        apiKey: "test",
+        vadFilter: "off"
+      }
+    ),
+    /ASR 音频格式校验失败/
+  );
+  assert.equal(postCount, 0);
+  context.fetch = originalFetch;
+}
+
+{
+  const originalFetch = context.fetch;
+  const postedFiles = [];
+  context.fetch = async (_url, init = {}) => {
+    if (!init.method) {
+      return { ok: true, json: async () => ({ paths: {} }) };
+    }
+    for (const [name, value] of init.body.entries()) {
+      if (name === "file") {
+        postedFiles.push({ type: value.type, size: value.size });
+      }
+    }
+    return {
+      ok: true,
+      json: async () => ({ segments: [{ start: 0, end: 1, text: "canonical mp3" }] })
+    };
+  };
+  const canonicalMp3 = new Uint8Array([0x49, 0x44, 0x33, 4, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0xff, 0xfb, 0x90, 0x64, ...new Array(256).fill(0)]).buffer;
+  const segments = await context.transcribeBrowserAudioChunk(
+    {
+      index: 0,
+      start: 0,
+      end: 10,
+      duration: 10,
+      file: { name: "asr-ok.mp3", buffer: canonicalMp3, mime: "audio/mpeg" }
+    },
+    {
+      providerType: "openai",
+      baseUrl: "https://speaches-valid-upload.example/v1",
+      model: "Systran/faster-whisper-large-v3",
+      apiKey: "test",
+      vadFilter: "off"
+    }
+  );
+  assert.equal(segments[0].text, "canonical mp3");
+  assert.deepEqual(postedFiles, [{ type: "audio/mpeg", size: canonicalMp3.byteLength }]);
+  context.fetch = originalFetch;
+}
+
+{
+  const originalFetch = context.fetch;
+  let postCount = 0;
+  context.fetch = async (_url, init = {}) => {
+    if (!init.method) {
+      return { ok: true, json: async () => ({ paths: {} }) };
+    }
+    postCount += 1;
+    return {
+      ok: true,
+      json: async () => ({ segments: [{ start: 0, end: 1, text: "should not upload" }] })
+    };
+  };
+  const id3OnlyMp3 = new Uint8Array([0x49, 0x44, 0x33, 4, 0, 0, 0, 0, 2, 67, ...new Array(323).fill(0)]).buffer;
+  await assert.rejects(
+    context.transcribeBrowserAudioChunk(
+      {
+        index: 0,
+        start: 0,
+        end: 10,
+        duration: 10,
+        file: { name: "asr-id3-only.mp3", buffer: id3OnlyMp3, mime: "audio/mpeg" }
+      },
+      {
+        providerType: "openai",
+        baseUrl: "https://speaches-id3-only.example/v1",
+        model: "Systran/faster-whisper-large-v3",
+        apiKey: "test",
+        vadFilter: "off"
+      }
+    ),
+    /ASR 音频格式校验失败/
+  );
+  assert.equal(postCount, 0);
+  context.fetch = originalFetch;
+}
+
+{
+  const originalFetch = context.fetch;
+  context.fetch = async (_url, init = {}) => {
+    if (!init.method) {
+      return { ok: true, json: async () => ({ paths: {} }) };
+    }
+    return {
+      ok: false,
+      status: 415,
+      json: async () => ({ detail: "Failed to decode audio. The provided file type is not supported." })
+    };
+  };
+  const canonicalMp3 = new Uint8Array([0x49, 0x44, 0x33, 4, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0xff, 0xfb, 0x90, 0x64, ...new Array(256).fill(0)]).buffer;
+  await assert.rejects(
+    context.transcribeBrowserAudioChunk(
+      {
+        index: 0,
+        start: 0,
+        end: 10,
+        duration: 10,
+        file: { name: "asr-decode-fails.mp3", buffer: canonicalMp3, mime: "audio/mpeg" }
+      },
+      {
+        providerType: "openai",
+        baseUrl: "https://speaches-decode-detail.example/v1",
+        model: "Systran/faster-whisper-large-v3",
+        apiKey: "test",
+        vadFilter: "off"
+      }
+    ),
+    /Failed to decode audio[\s\S]*asr-decode-fails\.mp3[\s\S]*audio\/mpeg[\s\S]*ID3/
+  );
+  context.fetch = originalFetch;
+}
+
+{
+  const originalFetch = context.fetch;
   context.fetch = async url => {
     const host = new URL(String(url)).hostname;
     const withClip = host === "speaches-clip.example";
@@ -3270,6 +3594,8 @@ function add(tabId, candidate) {
   assert.equal(candidate.source, "bilibili-playurl");
   assert.equal(candidate.role, "audio");
   assert.equal(Math.round(candidate.duration), 600);
+  assert.equal(candidate.sourcePlan.kind, "direct-audio");
+  assert.equal(candidate.sourcePlan.siteAdapter, "bilibili");
 }
 
 {
@@ -3424,6 +3750,167 @@ function add(tabId, candidate) {
 }
 
 {
+  const tabId = 123;
+  seedPage(tabId, {
+    title: "DECO*27 - 愛言葉Ⅳ feat. 初音ミク - ニコニコ動画",
+    url: "https://www.nicovideo.jp/watch/sm40510213",
+    duration: 219
+  });
+  add(tabId, {
+    url: "https://delivery.domand.nicovideo.jp/hlsbid/test/playlists/media/audio-aac-192kbps.m3u8?session=audio",
+    kind: "hls",
+    ext: "m3u8",
+    contentType: "application/vnd.apple.mpegurl",
+    source: "response",
+    initiator: "https://www.nicovideo.jp/watch/sm40510213"
+  });
+  add(tabId, {
+    url: "https://delivery.domand.nicovideo.jp/hlsbid/test/playlists/media/video-h264-720p.m3u8?session=video",
+    kind: "hls",
+    ext: "m3u8",
+    contentType: "application/vnd.apple.mpegurl",
+    source: "response",
+    initiator: "https://www.nicovideo.jp/watch/sm40510213"
+  });
+
+  const [candidate] = context.getDisplayCandidates(tabId);
+  assert.match(candidate.url, /audio-aac-192kbps\.m3u8/);
+  assert.equal(candidate.role, "audio");
+  assert.equal(candidate.assetKind, "hls-media");
+  assert.equal(candidate.trackRole, "audio");
+  assert.equal(candidate.mediaAsset.role, "audio");
+  assert.equal(candidate.mediaAsset.durationEvidence.source, "manifest");
+  assert.equal(candidate.sourcePlan.kind, "hls-audio");
+  assert.match(candidate.sourcePlan.reason, /track identity/);
+  assert.equal(candidate.hiddenCount, 1);
+  assert.equal(Math.round(candidate.duration), 219);
+}
+
+{
+  const tabId = 125;
+  seedPage(tabId, {
+    title: "Sir Ken Robinson: Do schools kill creativity? | TED Talk",
+    url: "https://www.ted.com/talks/sir_ken_robinson_do_schools_kill_creativity",
+    duration: 1151
+  });
+  add(tabId, {
+    url: "https://hls.ted.com/project_masters/1253/index-f9-v1.m3u8?intro_master_id=9294&preview=true",
+    kind: "hls",
+    ext: "m3u8",
+    contentType: "application/vnd.apple.mpegurl",
+    source: "response",
+    videoWidth: 854,
+    videoHeight: 480,
+    initiator: "https://www.ted.com/talks/sir_ken_robinson_do_schools_kill_creativity"
+  });
+  add(tabId, {
+    url: "https://hls.ted.com/project_masters/1253/index-f8-a1.m3u8?intro_master_id=9294&preview=true",
+    kind: "hls",
+    ext: "m3u8",
+    contentType: "application/vnd.apple.mpegurl",
+    source: "response",
+    initiator: "https://www.ted.com/talks/sir_ken_robinson_do_schools_kill_creativity"
+  });
+
+  const [candidate] = context.getDisplayCandidates(tabId);
+  assert.match(candidate.url, /index-f8-a1\.m3u8/);
+  assert.equal(candidate.role, "audio");
+  assert.equal(candidate.mediaAsset.kind, "hls-media");
+  assert.equal(candidate.mediaAsset.role, "audio");
+  assert.equal(candidate.sourcePlan.kind, "hls-audio");
+  assert.match(candidate.sourcePlan.reason, /track identity/);
+  assert.equal(candidate.hiddenCount, 1);
+  assert.equal(candidate.variantStats.audio, 1);
+  assert.equal(
+    candidate.variants.find(variant => /index-f9-v1\.m3u8/.test(variant.url))?.role,
+    "playlist"
+  );
+}
+
+{
+  const tabId = 124;
+  seedPage(tabId, {
+    title: "DECO*27 - 愛言葉Ⅳ feat. 初音ミク - ニコニコ動画",
+    url: "https://www.nicovideo.jp/watch/sm40510213",
+    duration: 219
+  });
+  add(tabId, {
+    url: "https://delivery.domand.nicovideo.jp/hlsbid/test/playlists/media/audio-aac-192kbps.m3u8?session=audio",
+    kind: "hls",
+    ext: "m3u8",
+    contentType: "application/vnd.apple.mpegurl",
+    source: "response",
+    initiator: "https://www.nicovideo.jp/watch/sm40510213"
+  });
+  add(tabId, {
+    url: "https://delivery.domand.nicovideo.jp/hlsbid/test/playlists/media/video-h264-720p.m3u8?session=video",
+    kind: "hls",
+    ext: "m3u8",
+    contentType: "application/vnd.apple.mpegurl",
+    source: "response",
+    initiator: "https://www.nicovideo.jp/watch/sm40510213"
+  });
+  add(tabId, {
+    url: "https://ads.nicovideo.jp/support-announcement.mp3",
+    kind: "audio",
+    ext: "mp3",
+    contentType: "audio/mp3",
+    source: "response",
+    initiator: "https://www.nicovideo.jp/watch/sm40510213"
+  });
+
+  const candidates = context.getDisplayCandidates(tabId);
+  const supportAudio = candidates.find(candidate => candidate.url.includes("support-announcement.mp3"));
+  assert.match(candidates[0].url, /audio-aac-192kbps\.m3u8/);
+  assert.ok(supportAudio);
+  assert.equal(supportAudio.duration, null);
+  assert.equal(supportAudio.asrScore > candidates[0].asrScore, true);
+}
+
+{
+  const tabId = 126;
+  seedPage(tabId, { title: "YouTube placeholder", url: "https://www.youtube.com/watch?v=test", duration: 60 });
+  add(tabId, {
+    url: "https://www.youtube.com/s/search/audio/no_input.mp3",
+    kind: "audio",
+    ext: "mp3",
+    contentType: "audio/mpeg",
+    source: "request"
+  });
+  add(tabId, {
+    url: "https://rr1---sn.example.googlevideo.com/videoplayback?mime=audio%2Fmp4&id=real",
+    kind: "audio",
+    ext: "m4a",
+    contentType: "audio/mp4",
+    source: "request"
+  });
+
+  const candidates = context.getDisplayCandidates(tabId);
+  assert.equal(candidates.length, 1);
+  assert.match(candidates[0].url, /googlevideo\.com\/videoplayback/);
+}
+
+{
+  const tabId = 127;
+  seedPage(tabId, { title: "YouTube decipher warning", url: "https://www.youtube.com/watch?v=needs-signature", duration: 90 });
+  add(tabId, {
+    url: "https://rr1---sn.example.googlevideo.com/videoplayback?mime=audio%2Fmp4&id=needs-signature",
+    kind: "audio",
+    role: "audio",
+    ext: "m4a",
+    contentType: "audio/mp4",
+    source: "json-parse",
+    duration: 90,
+    requiresSignatureDeciphering: true
+  });
+
+  const [candidate] = context.getDisplayCandidates(tabId);
+  assert.equal(candidate.sourcePlan.kind, "direct-audio");
+  assert.equal(candidate.sourcePlan.executable, false);
+  assert.equal(candidate.sourcePlan.warnings[0].code, "requires-signature-deciphering");
+}
+
+{
   const compactedHeaders = context.compactRequestHeaders([
     { name: "Authorization", value: "Bearer request-token" },
     { name: "Cookie", value: "sid=request-secret" },
@@ -3460,11 +3947,21 @@ function add(tabId, candidate) {
   const [candidate] = context.getDisplayCandidates(tabId);
   assert.equal(candidate.requestHeaders, undefined);
   assert.equal(JSON.stringify(candidate).includes("display-secret"), false);
-  const internalCandidate = context.resolvePreloadCandidateForStart(context.getState(tabId), candidate);
+  assert.equal(JSON.stringify(candidate).includes("authorization"), false);
+  assert.equal(JSON.stringify(candidate).includes("headerNames"), false);
+  const internalCandidate = context.resolvePreloadCandidateForStart(context.getState(tabId), {
+    ...candidate,
+    sourcePlan: {
+      kind: "hls-audio",
+      primaryUrl: "https://evil.example.test/steal.m3u8",
+      ffmpegInput: { type: "hls", url: "https://evil.example.test/steal.m3u8" }
+    }
+  });
   assert.deepEqual(JSON.parse(JSON.stringify(internalCandidate.requestHeaders)), {
     authorization: "Bearer display-secret"
   });
   assert.equal(JSON.stringify(internalCandidate.requestHeaders).includes("sid=display-secret"), false);
+  assert.notEqual(internalCandidate.sourcePlan?.ffmpegInput?.url, "https://evil.example.test/steal.m3u8");
 }
 
 {
