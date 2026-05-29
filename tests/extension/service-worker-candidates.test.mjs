@@ -125,9 +125,12 @@ const asrPostprocessSource = fs.readFileSync(new URL("../../extension/src/backgr
   .replace("export const FuguangBrowserAsrPostprocess =", "var FuguangBrowserAsrPostprocess =");
 const mediaAssetModelSource = fs.readFileSync(new URL("../../extension/src/background/media-asset-model.js", import.meta.url), "utf8")
   .replace("export const FuguangMediaAssetModel =", "var FuguangMediaAssetModel =");
+const hlsUrlHelpersSource = fs.readFileSync(new URL("../../extension/src/shared/hls-url-helpers.js", import.meta.url), "utf8")
+  .replace("export const FuguangHlsUrlHelpers =", "var FuguangHlsUrlHelpers =");
 const hlsManifestParserSource = fs.readFileSync(new URL("../../extension/src/background/hls-manifest-parser.js", import.meta.url), "utf8")
+  .replace('import { FuguangHlsUrlHelpers } from "../shared/hls-url-helpers.js";\n\n', "")
   .replace("export const FuguangHlsManifestParser =", "var FuguangHlsManifestParser =");
-const dashManifestParserSource = fs.readFileSync(new URL("../../extension/src/background/dash-manifest-parser.js", import.meta.url), "utf8")
+const dashManifestParserSource = fs.readFileSync(new URL("../../extension/src/shared/dash-manifest-parser.js", import.meta.url), "utf8")
   .replace("export const FuguangDashManifestParser =", "var FuguangDashManifestParser =");
 const bilibiliMediaAdapterSource = fs.readFileSync(new URL("../../extension/src/background/site-adapters/bilibili-media-adapter.js", import.meta.url), "utf8")
   .replace("export const FuguangBilibiliMediaAdapter =", "var FuguangBilibiliMediaAdapter =");
@@ -180,6 +183,8 @@ vm.runInContext(asrPostprocessSource, context, { filename: "browser-asr-postproc
 Object.assign(context, context.FuguangBrowserAsrPostprocess);
 vm.runInContext(mediaAssetModelSource, context, { filename: "media-asset-model.js" });
 Object.assign(context, context.FuguangMediaAssetModel);
+vm.runInContext(hlsUrlHelpersSource, context, { filename: "hls-url-helpers.js" });
+Object.assign(context, context.FuguangHlsUrlHelpers);
 vm.runInContext(hlsManifestParserSource, context, { filename: "hls-manifest-parser.js" });
 Object.assign(context, context.FuguangHlsManifestParser);
 vm.runInContext(dashManifestParserSource, context, { filename: "dash-manifest-parser.js" });

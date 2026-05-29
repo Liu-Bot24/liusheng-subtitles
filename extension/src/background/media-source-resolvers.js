@@ -125,12 +125,12 @@ export const FuguangMediaSourceResolvers = (() => {
         .flatMap(set => set.representations)
         .filter(item => item.role === "audio")
         .sort((a, b) => Math.abs((a.bandwidth || 128000) - 128000) - Math.abs((b.bandwidth || 128000) - 128000));
-      const representation = audioRepresentations.find(item => !isUnsupportedDashWebmOpusRepresentation(item)) || audioRepresentations[0];
+      const representation = audioRepresentations.find(item => !FuguangDashManifestParser.isUnsupportedWebmOpusRepresentation(item)) || audioRepresentations[0];
       if (!representation) {
         continue;
       }
       const fragments = FuguangDashManifestParser.expandRepresentationFragments(representation, parsed.duration);
-      const unsupportedDashWebmOpus = isUnsupportedDashWebmOpusRepresentation(representation);
+      const unsupportedDashWebmOpus = FuguangDashManifestParser.isUnsupportedWebmOpusRepresentation(representation);
       const executable = fragments.some(fragment => fragment.segmentType === "init") &&
         fragments.some(fragment => fragment.segmentType === "media") &&
         !unsupportedDashWebmOpus;
@@ -472,31 +472,6 @@ export const FuguangMediaSourceResolvers = (() => {
 
   function isSegmentedWebmOpusGroup(fragments = []) {
     return (Array.isArray(fragments) ? fragments : []).some(isSegmentedWebmOpusFragment);
-  }
-
-  function isUnsupportedDashWebmOpusRepresentation(representation = {}) {
-    return dashRepresentationContainerFamily(representation) === "webm-ogg";
-  }
-
-  function dashRepresentationContainerFamily(representation = {}) {
-    const template = representation.segmentTemplate || {};
-    const text = [
-      representation.mimeType,
-      representation.codecs,
-      representation.baseUrl,
-      template.initialization,
-      template.media
-    ].map(value => String(value || "").toLowerCase()).join(" ");
-    const mp4Container = /(?:mp4|m4a|m4s|cmf|cmfa|cmfv|iso\.segment)/.test(text);
-    const webmOrOggContainer = /(?:webm|weba|ogg|oga)/.test(text) ||
-      (!mp4Container && /(?:^|[\s,])opus(?:[\s,]|$)/.test(text));
-    if (webmOrOggContainer && !mp4Container) {
-      return "webm-ogg";
-    }
-    if (mp4Container) {
-      return "mp4";
-    }
-    return "unknown";
   }
 
   function isSegmentedWebmOpusFragment(candidate = {}) {

@@ -29,8 +29,13 @@ function loadModule(path, exportName, importLines = []) {
 }
 
 const model = loadModule("../../extension/src/background/media-asset-model.js", "FuguangMediaAssetModel");
-const hlsParser = loadModule("../../extension/src/background/hls-manifest-parser.js", "FuguangHlsManifestParser");
-const dashParser = loadModule("../../extension/src/background/dash-manifest-parser.js", "FuguangDashManifestParser");
+loadModule("../../extension/src/shared/hls-url-helpers.js", "FuguangHlsUrlHelpers");
+const hlsParser = loadModule(
+  "../../extension/src/background/hls-manifest-parser.js",
+  "FuguangHlsManifestParser",
+  ['import { FuguangHlsUrlHelpers } from "../shared/hls-url-helpers.js";']
+);
+const dashParser = loadModule("../../extension/src/shared/dash-manifest-parser.js", "FuguangDashManifestParser");
 loadModule("../../extension/src/background/site-adapters/bilibili-media-adapter.js", "FuguangBilibiliMediaAdapter");
 loadModule("../../extension/src/background/site-adapters/x-twitter-media-adapter.js", "FuguangXTwitterMediaAdapter");
 loadModule("../../extension/src/background/site-adapters/youtube-media-adapter.js", "FuguangYoutubeMediaAdapter");

@@ -1,3 +1,5 @@
+import { FuguangHlsUrlHelpers } from "../shared/hls-url-helpers.js";
+
 export const FuguangHlsManifestParser = (() => {
   function parse(text, baseUrl = "") {
     const master = parseMasterPlaylist(text, baseUrl);
@@ -124,82 +126,8 @@ export const FuguangHlsManifestParser = (() => {
     };
   }
 
-  function inferHlsRoleFromUrl(rawUrl) {
-    let path = "";
-    try {
-      const url = new URL(rawUrl);
-      path = `${url.pathname} ${url.search}`.toLowerCase();
-    } catch {
-      path = String(rawUrl || "").toLowerCase();
-    }
-    if (/(?:^|[-_/])(?:audio|aac|m4a|mp3|opus)(?:[-_.\/]|$)/i.test(path) ||
-      /(?:^|[-_/])(?:f\d+[-_.])?a\d+(?=[-_.\/]|$)/i.test(path) ||
-      /\/mp4a\//i.test(path)) {
-      return "audio";
-    }
-    if (/(?:^|[-_/])(?:video|h264|h265|hevc|avc1|vp9)(?:[-_.\/]|$)/i.test(path) ||
-      /(?:^|[-_/])(?:f\d+[-_.])?v\d+(?=[-_.\/]|$)/i.test(path) ||
-      /\/avc1\//i.test(path)) {
-      return "video";
-    }
-    return "unknown";
-  }
-
-  function buildAudioSiblingUrls(rawUrl) {
-    const output = [];
-    let url;
-    try {
-      url = new URL(rawUrl);
-    } catch {
-      return output;
-    }
-    const addPath = pathname => {
-      const next = new URL(url.href);
-      next.pathname = pathname;
-      if (!output.includes(next.href)) {
-        output.push(next.href);
-      }
-    };
-    const pathname = url.pathname;
-    const filename = pathname.split("/").pop() || "";
-    const basePath = pathname.slice(0, pathname.length - filename.length);
-    const addFilename = nextFilename => {
-      if (nextFilename && nextFilename !== filename) {
-        addPath(`${basePath}${nextFilename}`);
-      }
-    };
-    if (/\/video\//i.test(pathname)) {
-      addPath(pathname.replace(/\/video\//i, "/audio/"));
-    }
-    if (/\/video\.m3u8$/i.test(pathname)) {
-      addPath(pathname.replace(/\/video\.m3u8$/i, "/audio.m3u8"));
-    }
-    const formatTrackMatch = filename.match(/([._-])f(\d+)([._-])v(\d+)(?=\.m3u8$|[._-])/i);
-    if (formatTrackMatch) {
-      const format = Number(formatTrackMatch[2]);
-      const track = Number(formatTrackMatch[4]) || 1;
-      for (const audioFormat of [...new Set([format - 1, format].filter(value => value > 0))]) {
-        addFilename(filename.replace(/([._-])f\d+([._-])v\d+(?=\.m3u8$|[._-])/i, `$1f${audioFormat}$2a${track}`));
-      }
-    }
-    const numberedVideoTrackMatch = filename.match(/([._-])v(\d+)(?=\.m3u8$|[._-])/i);
-    if (numberedVideoTrackMatch) {
-      const track = Number(numberedVideoTrackMatch[2]) || 1;
-      for (const audioTrack of [...new Set([track, 1])]) {
-        addFilename(filename.replace(/([._-])v\d+(?=\.m3u8$|[._-])/i, `$1a${audioTrack}`));
-      }
-    }
-    addFilename(filename.replace(/([._-])video(?=\.m3u8$|[._-])/i, "$1audio"));
-    if (/(^|\.)video\.twimg\.com$/i.test(url.hostname)) {
-      const avcMatch = pathname.match(/^(.*\/pl\/)avc1\/[^/]+\/([^/]+\.m3u8)$/i);
-      if (avcMatch) {
-        for (const bitrate of ["128000", "64000", "32000"]) {
-          addPath(`${avcMatch[1]}mp4a/${bitrate}/${avcMatch[2]}`);
-        }
-      }
-    }
-    return output;
-  }
+  const inferHlsRoleFromUrl = FuguangHlsUrlHelpers.inferHlsRoleFromUrl;
+  const buildAudioSiblingUrls = FuguangHlsUrlHelpers.buildAudioSiblingUrls;
 
   function streamInfIsAudioOnly(attrs = {}) {
     if (attrs.RESOLUTION || attrs.VIDEO) {

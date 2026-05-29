@@ -58,6 +58,16 @@ const context = vm.createContext({
   }
 });
 
+function loadSharedModule(path, exportName) {
+  const sharedSource = fs.readFileSync(new URL(path, import.meta.url), "utf8")
+    .replace(`export const ${exportName} =`, `var ${exportName} =`);
+  vm.runInContext(sharedSource, context, { filename: path });
+  return context[exportName];
+}
+
+loadSharedModule("../../extension/src/shared/dash-manifest-parser.js", "FuguangDashManifestParser");
+loadSharedModule("../../extension/src/shared/hls-url-helpers.js", "FuguangHlsUrlHelpers");
+
 const source = fs.readFileSync(new URL("../../extension/src/offscreen/offscreen.js", import.meta.url), "utf8");
 
 {
