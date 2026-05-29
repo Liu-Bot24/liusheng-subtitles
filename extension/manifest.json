@@ -3,7 +3,7 @@
   "name": "流声字幕 - 基于 ASR 与大语言模型的流媒体影视、动漫生肉视频字幕生成与翻译",
   "short_name": "流声字幕",
   "description": "基于 ASR 与大语言模型，为流媒体影视、动漫生肉视频生成字幕并翻译。",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "action": {
     "default_title": "流声字幕"
   },

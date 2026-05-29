@@ -72,6 +72,8 @@
       elementWidth: media?.clientWidth || null,
       elementHeight: media?.clientHeight || null,
       mediaTag: media?.tagName?.toLowerCase() || "",
+      poster: media?.poster || "",
+      currentSrc: media?.currentSrc || media?.src || "",
       readyState: media?.readyState || 0
     };
     const signature = JSON.stringify(context);

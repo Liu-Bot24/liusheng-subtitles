@@ -21,29 +21,60 @@ export const FuguangXTwitterMediaAdapter = (() => {
       if (!audio) {
         continue;
       }
-      const primaryAsset = model.createMediaAsset({
-        url: audio.url,
-        kind: model.ASSET_KIND.HLS_MEDIA,
-        role: model.MEDIA_ROLE.AUDIO,
-        container: "hls",
-        codecs: audio.codecs || "mp4a",
+      return createXTwitterAudioPlan({
+        model,
+        candidate,
+        mediaId,
+        audioUrl: audio.url,
         bitrate: audio.bandwidth,
-        duration: candidate.duration || options.duration || 0,
-        durationEvidence: durationEvidence(candidate, options, model),
-        siteAdapter: "x-twitter",
-        evidence: [{ source: "x-twitter-page-master", strength: 90, detail: mediaId }]
-      });
-      return model.createAudioSourcePlan({
-        kind: "hls-audio",
-        primaryAsset,
-        companionAssets: [model.createMediaAsset({ ...candidate, role: "video", siteAdapter: "x-twitter" })],
+        codecs: audio.codecs || "mp4a",
+        evidenceSource: "x-twitter-page-master",
         reason: "selected X/Twitter mp4a audio from amplify master",
         confidence: 0.9,
-        ffmpegInput: { type: "hls", url: audio.url, credentials: "include" },
-        expectedAudio: { codec: "aac", duration: primaryAsset.duration || 0 }
+        options
       });
     }
     return null;
+  }
+
+  function createXTwitterAudioPlan({ model, candidate, mediaId, audioUrl, executionUrl, audioCandidateUrls, bitrate, codecs, evidenceSource, reason, confidence, options }) {
+    const primaryAsset = model.createMediaAsset({
+      url: audioUrl,
+      kind: model.ASSET_KIND.HLS_MEDIA,
+      role: model.MEDIA_ROLE.AUDIO,
+      container: "hls",
+      codecs: codecs || "mp4a",
+      bitrate,
+      duration: candidate.duration || options.duration || 0,
+      durationEvidence: durationEvidence(candidate, options, model),
+      siteAdapter: "x-twitter",
+      evidence: [{ source: evidenceSource, strength: 86, detail: mediaId }]
+    });
+    return model.createAudioSourcePlan({
+      kind: "hls-audio",
+      primaryAsset,
+      companionAssets: [model.createMediaAsset({ ...candidate, role: "video", siteAdapter: "x-twitter" })],
+      reason,
+      confidence,
+      ffmpegInput: {
+        type: "hls",
+        url: executionUrl || audioUrl,
+        credentials: "include",
+        audioCandidateUrls: normalizeAudioCandidateUrls(audioCandidateUrls)
+      },
+      expectedAudio: { codec: "aac", duration: primaryAsset.duration || 0 }
+    });
+  }
+
+  function normalizeAudioCandidateUrls(urls = []) {
+    const output = [];
+    for (const url of Array.isArray(urls) ? urls : []) {
+      const value = String(url || "");
+      if (/^https?:\/\//i.test(value) && !output.includes(value)) {
+        output.push(value);
+      }
+    }
+    return output;
   }
 
   function extractVideoTwimgPlaylistUrlsFromText(text) {

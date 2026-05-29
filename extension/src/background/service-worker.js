@@ -46,6 +46,7 @@ var isIgnoredMediaUrl = FuguangBrowserMediaCandidates.isIgnoredMediaUrl;
 var isMediaContentType = FuguangBrowserMediaCandidates.isMediaContentType;
 var mergeCandidate = FuguangBrowserMediaCandidates.mergeCandidate;
 var pickFinite = FuguangBrowserMediaCandidates.pickFinite;
+var pruneCandidatesForRetention = FuguangBrowserMediaCandidates.pruneCandidatesForRetention;
 var resolvePreloadCandidateForStart = FuguangBrowserMediaCandidates.resolvePreloadCandidateForStart;
 var sanitizeInternalRequestHeaders = FuguangBrowserMediaCandidates.sanitizeInternalRequestHeaders;
 var stripCandidateRequestHeaders = FuguangBrowserMediaCandidates.stripCandidateRequestHeaders;
@@ -113,6 +114,7 @@ const LEGACY_CAPTION_TOP_RATIO_KEY = "captionTopRatio";
 const DEFAULT_MODEL_SETTINGS = {
   sourceLanguage: "auto",
   targetLanguage: "zh-CN",
+  webFfmpegPerformance: "auto",
   asrWorkers: 1,
   translationWorkers: 3,
   chunkMinutes: 15
@@ -500,10 +502,10 @@ function canUseWebFfmpegExtraction(candidate) {
   if (!candidate?.url || isIgnoredMediaUrl(candidate.url)) {
     return false;
   }
-  if (candidate.kind === "dash") {
-    return false;
-  }
   const ext = String(candidate.ext || classifyUrl(candidate.url)?.ext || "").toLowerCase();
+  if (candidate.kind === "dash" || ext === "mpd") {
+    return true;
+  }
   if (candidate.kind === "hls" || ext === "m3u8") {
     return true;
   }
@@ -577,7 +579,7 @@ async function startBestPreload(tabId, selectedCandidate = null) {
 async function startBrowserPreload(tabId, candidate, metadata, modelConfig) {
   const extractionCandidate = resolveAudioSourceExecutionCandidate(candidate);
   if (!canUseWebFfmpegExtraction(extractionCandidate)) {
-    throw new Error("当前媒体源暂不支持浏览器内预加载。请选择 HLS 或直连音视频源。");
+    throw new Error("当前媒体源暂不支持浏览器内预加载。请选择 HLS、DASH 或直连音视频源。");
   }
   const executionMetadata = buildExecutionMetadata(metadata, candidate, extractionCandidate);
   validateBrowserPreloadModelConfig(modelConfig);
@@ -667,6 +669,54 @@ function resolveAudioSourceExecutionCandidate(candidate = {}) {
   if (sourcePlanHasBlockingWarning(plan)) {
     throw new Error(sourcePlanUnsupportedMessage(plan));
   }
+  if (inputType === "mse-fragments") {
+    if (!candidate.sourcePlanTrusted) {
+      throw new Error("媒体源执行计划已过期或未通过后台校验。请刷新媒体源后重试。");
+    }
+    const mseFragments = normalizeMseFfmpegFragments(input.fragments);
+    if (!mseFragments.some(fragment => fragment.segmentType === "init") ||
+        !mseFragments.some(fragment => fragment.segmentType !== "init")) {
+      throw new Error("MSE/fMP4 媒体源缺少可执行的初始化片段或媒体片段。请刷新媒体源后重试。");
+    }
+    const canReuseHeaders = canReuseCapturedHeaders(candidate.url, url) &&
+      mseFragments.every(fragment => canReuseCapturedHeaders(candidate.url, fragment.url));
+    return {
+      ...candidate,
+      url,
+      sourceUrl: url,
+      originalSourceUrl: candidate.url || "",
+      kind: "mse-fragments",
+      ext: "m4s",
+      role: plan.primaryRole || "audio",
+      contentType: "video/iso.segment",
+      requestHeaders: canReuseHeaders ? candidate.requestHeaders : null,
+      sourcePlanUsed: true,
+      mseFragments,
+      normalizeStrategy: normalizeExecutionStrategy(plan, inputType)
+    };
+  }
+  if (inputType === "dash") {
+    if (!candidate.sourcePlanTrusted) {
+      throw new Error("媒体源执行计划已过期或未通过后台校验。请刷新媒体源后重试。");
+    }
+    const dashFragments = normalizeMseFfmpegFragments(input.fragments);
+    const canReuseHeaders = canReuseCapturedHeaders(candidate.url, url) &&
+      dashFragments.every(fragment => canReuseCapturedHeaders(candidate.url, fragment.url));
+    return {
+      ...candidate,
+      url: url || candidate.url || "",
+      sourceUrl: url || candidate.url || "",
+      originalSourceUrl: candidate.url || "",
+      kind: "dash",
+      ext: "mpd",
+      role: plan.primaryRole || "audio",
+      contentType: "application/dash+xml",
+      requestHeaders: canReuseHeaders ? candidate.requestHeaders : null,
+      sourcePlanUsed: true,
+      dashFragments,
+      normalizeStrategy: normalizeExecutionStrategy(plan, inputType)
+    };
+  }
   if (!url || url === candidate.url) {
     return candidate;
   }
@@ -678,17 +728,166 @@ function resolveAudioSourceExecutionCandidate(candidate = {}) {
   }
   const classified = classifyUrl(url) || {};
   const canReuseHeaders = canReuseCapturedHeaders(candidate.url, url);
+  const hlsAudioCandidateUrls = normalizeHttpUrlList(input.audioCandidateUrls);
+  const executionFilename = filenameFromUrl(url);
+  const ext = classified.ext || executionFilename.split(".").pop() || candidate.ext || "";
   return {
     ...candidate,
     url,
     sourceUrl: url,
     originalSourceUrl: candidate.url || "",
+    filename: executionFilename,
+    fileName: executionFilename,
     kind: inputType === "hls" ? "hls" : (plan.primaryRole === "audio" ? "audio" : (classified.kind || candidate.kind || "")),
-    ext: classified.ext || candidate.ext || filenameFromUrl(url).split(".").pop() || "",
+    ext,
     role: plan.primaryRole || candidate.role || "",
-    contentType: inputType === "hls" ? "application/vnd.apple.mpegurl" : (classified.kind === "audio" ? "audio/mp4" : candidate.contentType || ""),
+    contentType: executionCandidateContentType({ inputType, plan, classified, candidate, ext }),
     requestHeaders: canReuseHeaders ? candidate.requestHeaders : null,
-    sourcePlanUsed: true
+    sourcePlanUsed: true,
+    hlsAudioCandidateUrls,
+    normalizeStrategy: normalizeExecutionStrategy(plan, inputType)
+  };
+}
+
+function executionCandidateContentType({ inputType, plan = {}, classified = {}, candidate = {}, ext = "" } = {}) {
+  if (inputType === "hls") {
+    return "application/vnd.apple.mpegurl";
+  }
+  const normalizedExt = String(ext || "").toLowerCase();
+  if (inputType === "direct" && (plan.primaryRole === "audio" || classified.kind === "audio")) {
+    return audioContentTypeFromExtension(ext) || (String(candidate.contentType || "").startsWith("audio/") ? candidate.contentType : "audio/mp4");
+  }
+  if (inputType === "direct") {
+    if (["mp4", "m4v", "mov"].includes(normalizedExt)) {
+      return "video/mp4";
+    }
+    if (normalizedExt === "webm") {
+      return "video/webm";
+    }
+    if (normalizedExt === "mkv") {
+      return "video/x-matroska";
+    }
+    if (String(candidate.contentType || "").startsWith("video/")) {
+      return candidate.contentType;
+    }
+  }
+  return candidate.contentType || "";
+}
+
+function audioContentTypeFromExtension(ext = "") {
+  const normalized = String(ext || "").toLowerCase();
+  if (normalized === "mp3") {
+    return "audio/mpeg";
+  }
+  if (normalized === "wav") {
+    return "audio/wav";
+  }
+  if (normalized === "aac") {
+    return "audio/aac";
+  }
+  if (["m4a", "mp4", "m4s"].includes(normalized)) {
+    return "audio/mp4";
+  }
+  if (["oga", "ogg", "opus"].includes(normalized)) {
+    return "audio/ogg";
+  }
+  if (normalized === "weba") {
+    return "audio/webm";
+  }
+  if (normalized === "flac") {
+    return "audio/flac";
+  }
+  return "";
+}
+
+function normalizeHttpUrlList(values = []) {
+  const output = [];
+  for (const value of Array.isArray(values) ? values : []) {
+    const url = String(value || "");
+    if (/^https?:\/\//i.test(url) && !output.includes(url)) {
+      output.push(url);
+    }
+  }
+  return output;
+}
+
+function normalizeExecutionStrategy(plan = {}, inputType = "") {
+  if (plan.normalizeStrategy?.type) {
+    return plan.normalizeStrategy;
+  }
+  if (inputType === "mse-fragments") {
+    return {
+      type: "fmp4-fragments",
+      action: "assemble-fragments-extract-audio",
+      inputType,
+      requiresAssembly: true,
+      output: normalizedMp3Output()
+    };
+  }
+  if (inputType === "hls") {
+    return {
+      type: "hls-playlist",
+      action: "parse-playlist-extract-audio",
+      inputType,
+      requiresAssembly: true,
+      output: normalizedMp3Output()
+    };
+  }
+  if (inputType === "dash") {
+    return {
+      type: "dash-manifest",
+      action: "parse-manifest-extract-audio",
+      inputType,
+      requiresAssembly: true,
+      output: normalizedMp3Output()
+    };
+  }
+  return {
+    type: plan.kind === "muxed-media" ? "muxed-media-file" : "direct-audio-file",
+    action: plan.kind === "muxed-media" ? "extract-audio-track" : "transcode-or-remux-audio",
+    inputType: inputType || "direct",
+    requiresAssembly: false,
+    output: normalizedMp3Output()
+  };
+}
+
+function normalizedMp3Output() {
+  return {
+    codec: "mp3",
+    container: "mp3",
+    sampleRate: 16000,
+    channels: 1,
+    bitrate: 64000
+  };
+}
+
+function normalizeMseFfmpegFragments(fragments) {
+  return (Array.isArray(fragments) ? fragments : [])
+    .map(fragment => ({
+      url: String(fragment?.url || ""),
+      name: String(fragment?.name || fragment?.filename || ""),
+      segmentType: String(fragment?.segmentType || "").toLowerCase() === "init" ? "init" : "media",
+      role: String(fragment?.role || ""),
+      duration: pickFinite(fragment?.duration, 0),
+      start: pickFinite(fragment?.start, 0),
+      end: pickFinite(fragment?.end, 0),
+      byteRange: normalizeFragmentByteRange(fragment?.byteRange)
+    }))
+    .filter(fragment => /^https?:\/\//i.test(fragment.url));
+}
+
+function normalizeFragmentByteRange(byteRange) {
+  if (!byteRange || typeof byteRange !== "object") {
+    return null;
+  }
+  const offset = Number(byteRange.offset);
+  const length = Number(byteRange.length);
+  if (!Number.isFinite(offset) || !Number.isFinite(length) || offset < 0 || length <= 0) {
+    return null;
+  }
+  return {
+    offset: Math.floor(offset),
+    length: Math.floor(length)
   };
 }
 
@@ -1053,11 +1252,19 @@ async function extractCandidateAudioInBrowser(record) {
   const webFfmpeg = await getWebFfmpegConfig();
   const candidate = record.candidate;
   const pageUrl = candidate.pageUrl || record.metadata?.pageUrl || record.metadata?.url || candidate.initiator || "";
-  const response = await withMediaRequestHeaderRules(candidate.url, pageUrl, async () => chrome.runtime.sendMessage({
+  const headerRuleUrls = [
+    candidate.url,
+    candidate.originalSourceUrl,
+    ...(candidate.hlsAudioCandidateUrls || []),
+    ...(candidate.dashFragments || []).map(fragment => fragment.url)
+  ];
+  const response = await withMediaRequestHeaderRules(headerRuleUrls, pageUrl, async () => chrome.runtime.sendMessage({
     type: MESSAGE.OFFSCREEN_WEB_FFMPEG_EXTRACT_AUDIO,
     tabId: record.tabId,
     webFfmpegUrl: webFfmpeg.url,
     sourceUrl: candidate.url,
+    originalSourceUrl: candidate.originalSourceUrl || record.selectedCandidate?.url || "",
+    hlsAudioCandidateUrls: candidate.hlsAudioCandidateUrls || [],
     kind: candidate.kind || "",
     ext: candidate.ext || "",
     requestHeaders: candidate.requestHeaders || null,
@@ -1066,9 +1273,12 @@ async function extractCandidateAudioInBrowser(record) {
     pageUrl,
     initiator: candidate.initiator || "",
     duration: pickFinite(candidate.duration, record.metadata?.duration),
+    mseFragments: candidate.mseFragments || candidate.sourcePlan?.ffmpegInput?.fragments || [],
+    dashFragments: candidate.dashFragments || [],
     chunkSeconds: record.modelConfig.chunkSeconds,
     asrChunkSeconds: record.browserAsrChunkSeconds || browserAsrUploadChunkSeconds(record.modelConfig),
     asrMode: (record.pipeline === "funasr" || record.job?.pipeline === "funasr") ? "long-file" : "",
+    webFfmpegPerformance: record.modelConfig.webFfmpegPerformance || DEFAULT_MODEL_SETTINGS.webFfmpegPerformance,
     cacheNamespace: record.job.id,
     jobId: record.job.id
   }), record.job.id);
@@ -6104,11 +6314,16 @@ async function getModelConfig() {
     asr: asrConfig,
     translation: compactProviderConfig(selectedLlm),
     targetLanguage: normalizeTargetLanguage(localStored.targetLanguage || DEFAULT_MODEL_SETTINGS.targetLanguage),
+    webFfmpegPerformance: normalizeWebFfmpegPerformanceMode(localStored.webFfmpegPerformance || DEFAULT_MODEL_SETTINGS.webFfmpegPerformance),
     asrWorkers: DEFAULT_MODEL_SETTINGS.asrWorkers,
     workers: Number(localStored.translationWorkers) || DEFAULT_MODEL_SETTINGS.translationWorkers,
     chunkMinutes: clampInteger(localStored.chunkMinutes, 1, 60, DEFAULT_MODEL_SETTINGS.chunkMinutes),
     chunkSeconds: clampInteger(localStored.chunkMinutes, 1, 60, DEFAULT_MODEL_SETTINGS.chunkMinutes) * 60
   };
+}
+
+function normalizeWebFfmpegPerformanceMode(value) {
+  return ["auto", "stable", "fast"].includes(value) ? value : DEFAULT_MODEL_SETTINGS.webFfmpegPerformance;
 }
 
 function clampInteger(value, min, max, fallback) {
@@ -6251,6 +6466,8 @@ function updateTabContext(tabId, context, frameId = 0) {
     elementWidth: shouldReplaceMedia ? context.elementWidth || current.elementWidth || null : current.elementWidth || context.elementWidth || null,
     elementHeight: shouldReplaceMedia ? context.elementHeight || current.elementHeight || null : current.elementHeight || context.elementHeight || null,
     mediaTag: context.mediaTag || current.mediaTag || "",
+    poster: shouldReplaceMedia ? context.poster || current.poster || "" : current.poster || context.poster || "",
+    currentSrc: shouldReplaceMedia ? context.currentSrc || current.currentSrc || "" : current.currentSrc || context.currentSrc || "",
     readyState: context.readyState || current.readyState || 0,
     frameId: shouldReplaceMedia ? incomingFrameId : current.frameId ?? incomingFrameId,
     seenAt: Date.now()
@@ -6287,6 +6504,10 @@ function addPageMediaCandidate(tabId, media, frameId = 0) {
     bandwidth: media.bandwidth,
     qualityLabel: media.qualityLabel,
     playlistType: media.playlistType,
+    statusId: media.statusId,
+    role: media.role,
+    segmentType: media.segmentType,
+    trackHandler: media.trackHandler,
     frameId: mediaFrameId,
     seenAt: Date.now()
   });
@@ -6312,7 +6533,7 @@ function addCandidate(tabId, candidate) {
   }
   state.candidateFingerprints.add(fingerprint);
   state.candidates.unshift(safeCandidate);
-  state.candidates = state.candidates.slice(0, MAX_CANDIDATES_PER_TAB);
+  state.candidates = pruneCandidatesForRetention(state.candidates, MAX_CANDIDATES_PER_TAB);
 }
 
 function sanitizeCandidateRequestHeaders(candidate = {}) {

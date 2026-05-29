@@ -47,8 +47,120 @@ export const FuguangDashManifestParser = (() => {
       media: attrs.media || "",
       startNumber: Number(attrs.startNumber || 1) || 1,
       timescale: Number(attrs.timescale || 1) || 1,
+      duration: Number(attrs.duration || 0) || 0,
       timeline: parseSegmentTimeline(timelineBody)
     };
+  }
+
+  function expandRepresentationFragments(representation = {}, fallbackDuration = 0) {
+    const template = representation.segmentTemplate || null;
+    if (!template?.initialization || !template?.media) {
+      return [];
+    }
+    const fragments = [];
+    const initUrl = resolveDashUrl(
+      expandSegmentTemplateUrl(template.initialization, representation, template.startNumber),
+      representation.baseUrl || ""
+    );
+    if (initUrl) {
+      fragments.push({
+        url: initUrl,
+        segmentType: "init",
+        role: representation.role || "unknown",
+        duration: 0,
+        start: 0,
+        end: 0
+      });
+    }
+    const mediaSegments = expandMediaSegments(representation, fallbackDuration);
+    return [...fragments, ...mediaSegments];
+  }
+
+  function expandMediaSegments(representation = {}, fallbackDuration = 0) {
+    const template = representation.segmentTemplate || null;
+    if (!template?.media) {
+      return [];
+    }
+    const timescale = Number(template.timescale || 1) || 1;
+    const startNumber = Number(template.startNumber || 1) || 1;
+    const timeline = Array.isArray(template.timeline) ? template.timeline : [];
+    const segments = [];
+    if (timeline.length) {
+      let number = startNumber;
+      let cursorUnits = Number(timeline[0]?.t || 0) || 0;
+      for (let index = 0; index < timeline.length; index += 1) {
+        const item = timeline[index] || {};
+        if (Number.isFinite(Number(item.t)) && Number(item.t) > 0) {
+          cursorUnits = Number(item.t);
+        }
+        const durationUnits = Number(item.d || 0) || 0;
+        if (durationUnits <= 0) {
+          continue;
+        }
+        const repeat = normalizeTimelineRepeat(item.r, cursorUnits, durationUnits, timeline[index + 1], fallbackDuration, timescale);
+        for (let offset = 0; offset <= repeat; offset += 1) {
+          segments.push(createMediaSegment(representation, template, number, cursorUnits / timescale, durationUnits / timescale));
+          number += 1;
+          cursorUnits += durationUnits;
+        }
+      }
+      return segments;
+    }
+    const segmentDuration = Number(template.duration || 0) / timescale;
+    const totalDuration = Number(fallbackDuration || 0) || 0;
+    if (segmentDuration <= 0 || totalDuration <= 0) {
+      return [];
+    }
+    const count = Math.ceil(totalDuration / segmentDuration);
+    for (let index = 0; index < count; index += 1) {
+      const start = index * segmentDuration;
+      const duration = Math.min(segmentDuration, Math.max(0, totalDuration - start));
+      if (duration > 0) {
+        segments.push(createMediaSegment(representation, template, startNumber + index, start, duration));
+      }
+    }
+    return segments;
+  }
+
+  function normalizeTimelineRepeat(value, cursorUnits, durationUnits, nextItem, fallbackDuration, timescale) {
+    const repeat = Number(value || 0) || 0;
+    if (repeat >= 0) {
+      return repeat;
+    }
+    const nextStart = Number(nextItem?.t || 0) || 0;
+    if (nextStart > cursorUnits) {
+      return Math.max(0, Math.ceil((nextStart - cursorUnits) / durationUnits) - 1);
+    }
+    const fallbackUnits = Number(fallbackDuration || 0) * (Number(timescale || 1) || 1);
+    if (fallbackUnits > cursorUnits) {
+      return Math.max(0, Math.ceil((fallbackUnits - cursorUnits) / durationUnits) - 1);
+    }
+    return 0;
+  }
+
+  function createMediaSegment(representation, template, number, start, duration) {
+    return {
+      url: resolveDashUrl(
+        expandSegmentTemplateUrl(template.media, representation, number),
+        representation.baseUrl || ""
+      ),
+      segmentType: "media",
+      role: representation.role || "unknown",
+      duration,
+      start,
+      end: start + duration
+    };
+  }
+
+  function expandSegmentTemplateUrl(value, representation = {}, number = 1) {
+    return String(value || "")
+      .replace(/\$RepresentationID\$/g, String(representation.id || ""))
+      .replace(/\$Bandwidth\$/g, String(representation.bandwidth || ""))
+      .replace(/\$Number(?:%0(\d+)d)?\$/g, (_match, width) => {
+        const text = String(number);
+        const size = Number(width || 0) || 0;
+        return size > 0 ? text.padStart(size, "0") : text;
+      });
   }
 
   function parseSegmentTimeline(body) {
@@ -139,6 +251,8 @@ export const FuguangDashManifestParser = (() => {
   }
 
   return {
+    expandMediaSegments,
+    expandRepresentationFragments,
     inferDashRole,
     parse,
     parseIsoDuration,

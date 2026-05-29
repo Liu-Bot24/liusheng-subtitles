@@ -23,6 +23,7 @@ const MESSAGE = {
 const DEFAULTS = {
   sourceLanguage: "auto",
   targetLanguage: "zh-CN",
+  webFfmpegPerformance: "auto",
   translationWorkers: 3,
   chunkMinutes: 15,
   subtitleFontSize: 28,
@@ -118,6 +119,10 @@ const I18N = {
     whisperCompatibleAsr: "Whisper 兼容接口",
     funAsrCompatibleAsr: "Fun-ASR 接口",
     targetLanguage: "目标语言",
+    webFfmpegPerformance: "Web FFmpeg 性能",
+    webFfmpegPerformanceAuto: "自动",
+    webFfmpegPerformanceStable: "稳定优先",
+    webFfmpegPerformanceFast: "速度优先",
     translationWorkers: "翻译并发",
     chunkMinutes: "字幕分组时长（分钟）",
     funAsrLongFileHint: "Fun-ASR 使用长文件链路：系统会按 2 小时以内粗切，完成后进入字幕翻译。",
@@ -235,6 +240,7 @@ const I18N = {
     onlyTranslationTrack: "这份字幕只有译文轨。",
     sourcePreview: "字幕会先显示原文，译文完成后自动更新。",
     partialTranslationPreview: "部分译文已完成，剩余句子会暂时显示原文。",
+    partialTranslationReady: "第 {done}/{total} 部分翻译已完成，字幕已可先行观看，剩余翻译仍在后台继续。",
     noPlayer: "当前页面没有可挂载字幕的播放器。",
     noExportSubtitle: "还没有可导出的字幕。",
     noExportRealTranslation: "当前模式下还没有可导出的字幕。",
@@ -389,6 +395,10 @@ const I18N = {
     whisperCompatibleAsr: "Whisper-compatible API",
     funAsrCompatibleAsr: "Fun-ASR API",
     targetLanguage: "Target Language",
+    webFfmpegPerformance: "Web FFmpeg Performance",
+    webFfmpegPerformanceAuto: "Auto",
+    webFfmpegPerformanceStable: "Stability First",
+    webFfmpegPerformanceFast: "Speed First",
     translationWorkers: "Translation Workers",
     chunkMinutes: "Subtitle Group Length (min)",
     funAsrLongFileHint: "Fun-ASR uses a long-file workflow: audio is coarsely split under two hours, then subtitles are translated.",
@@ -506,6 +516,7 @@ const I18N = {
     onlyTranslationTrack: "This subtitle file only has a translation track.",
     sourcePreview: "Source subtitles are shown first and will update as translations finish.",
     partialTranslationPreview: "Some translations are ready; remaining lines temporarily show source text.",
+    partialTranslationReady: "Part {done}/{total} is translated. You can start watching while the remaining translation continues in the background.",
     noPlayer: "No subtitle-capable player was found on this page.",
     noExportSubtitle: "There are no subtitles to export yet.",
     noExportRealTranslation: "There are no subtitles to export in this mode yet.",
@@ -679,6 +690,7 @@ const elements = {
   llmApiKeyHint: document.querySelector("#llmApiKeyHint"),
   sourceLanguage: document.querySelector("#sourceLanguage"),
   targetLanguage: document.querySelector("#targetLanguage"),
+  webFfmpegPerformance: document.querySelector("#webFfmpegPerformance"),
   translationWorkers: document.querySelector("#translationWorkers"),
   chunkMinutes: document.querySelector("#chunkMinutes"),
   funAsrLongFileHint: document.querySelector("#funAsrLongFileHint"),
@@ -1023,6 +1035,7 @@ function storagePayloadsEqual(left, right) {
 function applyStoredSettings(data) {
   setSourceLanguageValue(data.sourceLanguage || DEFAULTS.sourceLanguage);
   setTargetLanguageValue(data.targetLanguage || DEFAULTS.targetLanguage);
+  setWebFfmpegPerformanceValue(data.webFfmpegPerformance || DEFAULTS.webFfmpegPerformance);
   elements.translationWorkers.value = valueOrDefault(data.translationWorkers, DEFAULTS.translationWorkers);
   elements.chunkMinutes.value = valueOrDefault(data.chunkMinutes, DEFAULTS.chunkMinutes);
   elements.subtitleFontSize.value = valueOrDefault(data.subtitleFontSize, DEFAULTS.subtitleFontSize);
@@ -1039,6 +1052,18 @@ function setTargetLanguageValue(value) {
 
 function getTargetLanguageValue() {
   return normalizeTargetLanguageValue(elements.targetLanguage.value, DEFAULTS.targetLanguage);
+}
+
+function normalizeWebFfmpegPerformanceValue(value, fallback = DEFAULTS.webFfmpegPerformance) {
+  return ["auto", "stable", "fast"].includes(value) ? value : fallback;
+}
+
+function setWebFfmpegPerformanceValue(value) {
+  elements.webFfmpegPerformance.value = normalizeWebFfmpegPerformanceValue(value);
+}
+
+function getWebFfmpegPerformanceValue() {
+  return normalizeWebFfmpegPerformanceValue(elements.webFfmpegPerformance.value);
 }
 
 function setSourceLanguageValue(value) {
@@ -1464,6 +1489,7 @@ async function saveSettings() {
     llmProfiles: profilesForStorage("llm", llmProfiles),
     sourceLanguage: getSourceLanguageValue(),
     targetLanguage: getTargetLanguageValue(),
+    webFfmpegPerformance: getWebFfmpegPerformanceValue(),
     translationWorkers: clampSetting(elements.translationWorkers.value, 1, 6, DEFAULTS.translationWorkers),
     chunkMinutes: Math.round(clampSetting(elements.chunkMinutes.value, 1, 60, DEFAULTS.chunkMinutes))
   });
@@ -2583,12 +2609,16 @@ function subtitleNoticeText() {
   if (!subtitleCues.length) {
     return "";
   }
-  if (currentSubtitleCacheEntry) {
-    return t("cacheLoaded", { title: currentSubtitleCacheEntry.title || t("unnamedSubtitle") });
+  const runningPartialText = subtitleRunningPartialTranslationNoticeText();
+  if (runningPartialText) {
+    return runningPartialText;
   }
   const sourcePreviewText = subtitleSourcePreviewNoticeText();
   if (sourcePreviewText) {
     return sourcePreviewText;
+  }
+  if (currentSubtitleCacheEntry) {
+    return t("cacheLoaded", { title: currentSubtitleCacheEntry.title || t("unnamedSubtitle") });
   }
   if (subtitleDisplayMode === "bilingual") {
     if (subtitleCueSource !== "transcript") {
@@ -2599,6 +2629,90 @@ function subtitleNoticeText() {
     }
   }
   return "";
+}
+
+function subtitleRunningPartialTranslationNoticeText() {
+  if (!isRunningJob(currentJob) || subtitleCueSource !== "transcript" || !currentTranscript || !hasRealTranslatedSubtitles()) {
+    return "";
+  }
+  const stage = currentJob?.stage || currentJob?.progress?.stage || "";
+  if (["translated", "completed", "completed_with_warnings"].includes(stage)) {
+    return "";
+  }
+  const progress = partialTranslationNoticeProgress(currentJob, currentTranscript);
+  if (!progress || progress.done <= 0 || progress.total <= 0 || progress.done >= progress.total) {
+    return "";
+  }
+  return t("partialTranslationReady", progress);
+}
+
+function partialTranslationNoticeProgress(job, transcript) {
+  const translation = job?.translation || job?.progress?.translation || {};
+  const statuses = job?.translation?.chunkStatuses || job?.progress?.chunkStatuses || job?.progress?.translation?.chunkStatuses || [];
+  const total = firstPositiveInteger(
+    translation.chunksTotal,
+    job?.progress?.chunksTotal,
+    Array.isArray(statuses) ? statuses.length : 0,
+    transcriptChunkCount(transcript?.source),
+    transcriptChunkCount(transcript?.translated)
+  );
+  const done = Math.max(
+    firstPositiveInteger(translation.chunksDone, job?.progress?.chunksDone),
+    completedTranslatedChunkStatusCount(statuses),
+    transcriptChunkCount(transcript?.translated)
+  );
+  if (!total || !done) {
+    return null;
+  }
+  return { done: Math.min(done, total), total };
+}
+
+function firstPositiveInteger(...values) {
+  for (const value of values) {
+    const number = Math.trunc(Number(value));
+    if (Number.isFinite(number) && number > 0) {
+      return number;
+    }
+  }
+  return 0;
+}
+
+function completedTranslatedChunkStatusCount(statuses) {
+  if (!Array.isArray(statuses) || !statuses.length) {
+    return 0;
+  }
+  return statuses.filter(status => {
+    const stage = String(status?.stage || "");
+    if (!["completed", "completed_with_warnings", "done"].includes(stage)) {
+      return false;
+    }
+    const translatedCount = Number(status?.translatedCount || status?.translatedSegments || status?.translated_segments || 0);
+    const sourceCount = Number(status?.sourceCount || status?.sourceSegments || status?.source_segments || 0);
+    return translatedCount > 0 || sourceCount > 0;
+  }).length;
+}
+
+function transcriptChunkCount(segments) {
+  if (!Array.isArray(segments) || !segments.length) {
+    return 0;
+  }
+  const indexes = new Set();
+  let hasUnindexedText = false;
+  for (const segment of segments) {
+    if (!cleanSubtitleText(segment?.text || "")) {
+      continue;
+    }
+    const index = Number(segment?.chunkIndex);
+    if (Number.isInteger(index) && index >= 0) {
+      indexes.add(index);
+    } else {
+      hasUnindexedText = true;
+    }
+  }
+  if (indexes.size) {
+    return indexes.size;
+  }
+  return hasUnindexedText ? 1 : 0;
 }
 
 function subtitleSourcePreviewNoticeText() {

@@ -122,6 +122,22 @@ function fixture(name) {
 }
 
 {
+  const selectedVideoUrl = "https://video.twimg.com/amplify_video/2059183692569071878/pl/avc1/650x360/_6Jux_HKzlwgTTC3.m3u8?tag=16";
+  const plan = resolvers.resolveAudioSourcePlan({
+    duration: 82,
+    candidates: [
+      { url: selectedVideoUrl, kind: "hls", ext: "m3u8", role: "playlist", duration: 82 },
+      { url: "https://video.twimg.com/amplify_video/2059183692569071878/seg-00001.m4s", kind: "segment", ext: "m4s", role: "audio", duration: 82 },
+      { url: "https://video.twimg.com/amplify_video/2059183692569071878/seg-00002.m4s", kind: "segment", ext: "m4s", role: "audio", duration: 82 }
+    ]
+  });
+
+  assert.equal(plan.kind, "mse-fragments");
+  assert.equal(plan.executable, false);
+  assert.match(plan.warnings[0].code, /unsupported-mse-fragments/);
+}
+
+{
   const mpdUrl = "https://cdn.example.test/manifest/generic.mpd";
   const plan = resolvers.resolveAudioSourcePlan({
     candidates: [{ url: mpdUrl, kind: "dash", ext: "mpd", role: "playlist" }],
@@ -133,8 +149,15 @@ function fixture(name) {
   assert.equal(plan.kind, "dash-audio");
   assert.equal(plan.primaryAsset.role, "audio");
   assert.equal(plan.expectedAudio.codec, "mp4a.40.2");
-  assert.equal(plan.executable, false);
-  assert.equal(plan.warnings[0].code, "unsupported-dash-audio");
+  assert.equal(plan.executable, true);
+  assert.equal(plan.ffmpegInput.type, "dash");
+  assert.equal(plan.ffmpegInput.fragments.length, 3);
+  assert.equal(plan.ffmpegInput.fragments[0].segmentType, "init");
+  assert.match(plan.ffmpegInput.fragments[0].url, /\/manifest\/audio\/init\.mp4$/);
+  assert.match(plan.ffmpegInput.fragments[1].url, /\/manifest\/audio\/seg-1\.m4s$/);
+  assert.match(plan.ffmpegInput.fragments[2].url, /\/manifest\/audio\/seg-2\.m4s$/);
+  assert.equal(plan.normalizeStrategy.type, "dash-manifest");
+  assert.equal(plan.normalizeStrategy.action, "parse-manifest-extract-audio");
 }
 
 {
@@ -149,6 +172,63 @@ function fixture(name) {
   assert.equal(plan.kind, "dash-audio");
   assert.equal(plan.primaryAsset.role, "audio");
   assert.equal(plan.primaryAsset.bitrate, 128000);
+}
+
+{
+  const mpdUrl = "https://cdn.example.test/manifest/webm-opus.mpd";
+  const plan = resolvers.resolveAudioSourcePlan({
+    candidates: [{ url: mpdUrl, kind: "dash", ext: "mpd", role: "playlist" }],
+    manifestTextByUrl: {
+      [mpdUrl]: `<?xml version="1.0"?>
+<MPD mediaPresentationDuration="PT10S">
+  <Period>
+    <AdaptationSet mimeType="audio/webm" contentType="audio" codecs="opus">
+      <Representation id="audio-opus" bandwidth="96000">
+        <BaseURL>audio/</BaseURL>
+        <SegmentTemplate initialization="init.webm" media="seg-$Number$.webm" startNumber="1" timescale="1000">
+          <SegmentTimeline>
+            <S d="5000" r="1" />
+          </SegmentTimeline>
+        </SegmentTemplate>
+      </Representation>
+    </AdaptationSet>
+  </Period>
+</MPD>`
+    }
+  });
+
+  assert.equal(plan.kind, "dash-audio");
+  assert.equal(plan.executable, false);
+  assert.match(plan.warnings[0].message, /DASH WebM\/Opus/);
+}
+
+{
+  const mpdUrl = "https://cdn.example.test/manifest/mp4-opus.mpd";
+  const plan = resolvers.resolveAudioSourcePlan({
+    candidates: [{ url: mpdUrl, kind: "dash", ext: "mpd", role: "playlist" }],
+    manifestTextByUrl: {
+      [mpdUrl]: `<?xml version="1.0"?>
+<MPD mediaPresentationDuration="PT10S">
+  <Period>
+    <AdaptationSet mimeType="audio/mp4" contentType="audio" codecs="opus">
+      <Representation id="audio-opus-mp4" bandwidth="96000">
+        <BaseURL>audio/</BaseURL>
+        <SegmentTemplate initialization="init.mp4" media="seg-$Number$.m4s" startNumber="1" timescale="1000">
+          <SegmentTimeline>
+            <S d="5000" r="1" />
+          </SegmentTimeline>
+        </SegmentTemplate>
+      </Representation>
+    </AdaptationSet>
+  </Period>
+</MPD>`
+    }
+  });
+
+  assert.equal(plan.kind, "dash-audio");
+  assert.equal(plan.executable, true);
+  assert.equal(plan.expectedAudio.codec, "opus");
+  assert.equal(plan.ffmpegInput.fragments.length, 3);
 }
 
 {
@@ -202,6 +282,186 @@ function fixture(name) {
   assert.equal(directPlan.kind, "direct-audio");
   assert.equal(directPlan.primaryAsset.role, "audio");
   assert.equal(directPlan.ffmpegInput.type, "direct");
+  assert.equal(directPlan.normalizeStrategy.type, "direct-audio-file");
+  assert.equal(directPlan.normalizeStrategy.action, "transcode-or-remux-audio");
+}
+
+{
+  const muxedPlan = resolvers.resolveAudioSourcePlan({
+    duration: 42,
+    candidates: [{
+      url: "https://cdn.example.test/media/clip.mp4",
+      kind: "video",
+      ext: "mp4",
+      role: "video",
+      contentType: "video/mp4",
+      duration: 42
+    }]
+  });
+  assert.equal(muxedPlan.kind, "muxed-media");
+  assert.equal(muxedPlan.primaryAsset.role, "muxed");
+  assert.equal(muxedPlan.ffmpegInput.type, "direct");
+  assert.equal(muxedPlan.normalizeStrategy.type, "muxed-media-file");
+  assert.equal(muxedPlan.normalizeStrategy.action, "extract-audio-track");
+}
+
+{
+  const xVideoOnlyPlan = resolvers.resolveAudioSourcePlan({
+    duration: 82,
+    candidates: [{
+      url: "https://video.twimg.com/amplify_video/2058958000000000001/vid/avc1/2160x2160/mYURGjflKU62W4IR.mp4?tag=27",
+      kind: "media",
+      ext: "mp4",
+      role: "video",
+      contentType: "video/mp4",
+      duration: 82
+    }]
+  });
+  assert.equal(xVideoOnlyPlan, null);
+}
+
+{
+  const audioOnlyPlan = resolvers.resolveAudioSourcePlan({
+    duration: 42,
+    candidates: [{
+      url: "https://cdn.example.test/media/audio-track.mp4",
+      kind: "audio",
+      ext: "mp4",
+      role: "audio",
+      contentType: "audio/mp4",
+      duration: 42
+    }]
+  });
+  assert.equal(audioOnlyPlan.kind, "direct-audio");
+  assert.equal(audioOnlyPlan.primaryAsset.role, "audio");
+  assert.equal(audioOnlyPlan.normalizeStrategy.type, "direct-audio-file");
+}
+
+{
+  const cases = [
+    {
+      url: "https://cdn.example.test/media/speech.webm",
+      ext: "webm",
+      contentType: "audio/webm; codecs=opus",
+      expectedCodec: "audio/webm; codecs=opus"
+    },
+    {
+      url: "https://cdn.example.test/media/speech.weba",
+      ext: "weba",
+      contentType: "audio/webm",
+      expectedCodec: "audio/webm"
+    },
+    {
+      url: "https://cdn.example.test/media/speech.opus",
+      ext: "opus",
+      contentType: "audio/ogg; codecs=opus",
+      expectedCodec: "audio/ogg; codecs=opus"
+    },
+    {
+      url: "https://cdn.example.test/media/speech.ogg",
+      ext: "ogg",
+      contentType: "audio/ogg",
+      expectedCodec: "audio/ogg"
+    }
+  ];
+  for (const item of cases) {
+    const plan = resolvers.resolveAudioSourcePlan({
+      duration: 30,
+      candidates: [{
+        url: item.url,
+        kind: "audio",
+        ext: item.ext,
+        role: "audio",
+        contentType: item.contentType,
+        duration: 30
+      }]
+    });
+    assert.equal(plan.kind, "direct-audio");
+    assert.equal(plan.primaryAsset.role, "audio");
+    assert.equal(plan.ffmpegInput.type, "direct");
+    assert.equal(plan.normalizeStrategy.type, "direct-audio-file");
+    assert.equal(plan.expectedAudio.codec, item.expectedCodec);
+  }
+}
+
+{
+  const plan = resolvers.resolveAudioSourcePlan({
+    duration: 12,
+    candidates: [
+      {
+        url: "https://cdn.example.test/audio/init.webm",
+        kind: "segment",
+        ext: "webm",
+        role: "audio",
+        contentType: "audio/webm; codecs=opus"
+      },
+      {
+        url: "https://cdn.example.test/audio/seg-00001.webm",
+        kind: "segment",
+        ext: "webm",
+        role: "audio",
+        contentType: "audio/webm; codecs=opus",
+        duration: 6
+      },
+      {
+        url: "https://cdn.example.test/audio/seg-00002.webm",
+        kind: "segment",
+        ext: "webm",
+        role: "audio",
+        contentType: "audio/webm; codecs=opus",
+        duration: 6
+      }
+    ]
+  });
+  assert.equal(plan.kind, "mse-fragments");
+  assert.equal(plan.executable, false);
+  assert.match(plan.warnings[0].message, /WebM\/Opus fragments/);
+}
+
+{
+  const plan = resolvers.resolveAudioSourcePlan({
+    duration: 8,
+    candidates: [
+      {
+        url: "https://cdn.example.test/mixed/init.mp4",
+        kind: "segment",
+        ext: "mp4",
+        role: "audio",
+        contentType: "audio/mp4"
+      },
+      {
+        url: "https://cdn.example.test/mixed/seg-00001.m4s",
+        kind: "segment",
+        ext: "m4s",
+        role: "audio",
+        contentType: "audio/mp4",
+        duration: 4
+      },
+      {
+        url: "https://cdn.example.test/mixed/seg-00002.m4s",
+        kind: "segment",
+        ext: "m4s",
+        role: "audio",
+        contentType: "audio/mp4",
+        duration: 4
+      },
+      {
+        url: "https://cdn.example.test/mixed/seg-00001.webm",
+        kind: "segment",
+        ext: "webm",
+        role: "audio",
+        contentType: "audio/webm; codecs=opus",
+        duration: 4
+      }
+    ]
+  });
+  assert.equal(plan.kind, "mse-fragments");
+  assert.equal(plan.executable, true);
+  assert.deepEqual(JSON.parse(JSON.stringify(plan.ffmpegInput.fragments.map(fragment => fragment.url))), [
+    "https://cdn.example.test/mixed/init.mp4",
+    "https://cdn.example.test/mixed/seg-00001.m4s",
+    "https://cdn.example.test/mixed/seg-00002.m4s"
+  ]);
 }
 
 {
@@ -213,6 +473,7 @@ function fixture(name) {
   assert.equal(plan.kind, "hls-audio");
   assert.equal(plan.primaryAsset.url, audioUrl);
   assert.match(plan.reason, /track identity/);
+  assert.equal(plan.normalizeStrategy.type, "hls-playlist");
 }
 
 {
@@ -237,7 +498,7 @@ function fixture(name) {
     { url: "https://cdn.example.test/audio/seg-00001.m4s", kind: "segment", role: "audio", duration: 4 },
     { url: "https://cdn.example.test/audio/seg-00002.m4s", kind: "segment", role: "audio", duration: 4 }
   ], { duration: 8 });
-  assert.equal(reconstructable.executable, false);
+  assert.equal(reconstructable.executable, true);
   assert.equal(reconstructable.reconstructable, true);
   assert.equal(reconstructable.role, "audio");
 
@@ -251,8 +512,16 @@ function fixture(name) {
   });
   assert.equal(plan.kind, "mse-fragments");
   assert.equal(plan.ffmpegInput.type, "mse-fragments");
-  assert.equal(plan.executable, false);
-  assert.equal(plan.warnings[0].code, "unsupported-mse-fragments");
+  assert.equal(plan.executable, true);
+  assert.equal(plan.warnings.length, 0);
+  assert.equal(plan.normalizeStrategy.type, "fmp4-fragments");
+  assert.equal(plan.normalizeStrategy.action, "assemble-fragments-extract-audio");
+  assert.deepEqual(JSON.parse(JSON.stringify(plan.ffmpegInput.fragments.map(fragment => fragment.url))), [
+    "https://cdn.example.test/audio/init.mp4",
+    "https://cdn.example.test/audio/seg-00001.m4s",
+    "https://cdn.example.test/audio/seg-00002.m4s"
+  ]);
+  assert.equal(plan.ffmpegInput.fragments[0].segmentType, "init");
 
   const mixed = resolvers.assessFragmentGroupForAsr([
     { url: "https://cdn.example.test/media/init.mp4", kind: "segment" },

@@ -65,10 +65,12 @@ assert.equal(asrProfiles.every(profile => ["auto", "on", "off"].includes(profile
 
 const defaultSettings = constObject(background, "DEFAULT_MODEL_SETTINGS");
 assert.equal(defaultSettings.chunkMinutes, 15);
+assert.equal(defaultSettings.webFfmpegPerformance, "auto");
 assert.equal(constExpression(background, "BROWSER_ASR_UPLOAD_CHUNK_SECONDS"), 15 * 60);
 assert.equal(constExpression(background, "BROWSER_ASR_MAX_UPLOAD_CHUNK_SECONDS"), 30 * 60);
 assert.equal(constExpression(background, "BROWSER_ASR_MAX_UPLOAD_BYTES"), 25 * 1024 * 1024);
 assert.deepEqual(selectOptionValues(sidepanelHtml, "asrVadFilter"), ["auto", "on", "off"]);
+assert.deepEqual(selectOptionValues(sidepanelHtml, "webFfmpegPerformance"), ["auto", "stable", "fast"]);
 
 function constNumber(source, name) {
   const match = source.match(new RegExp(`const ${name} = (\\d+);`));

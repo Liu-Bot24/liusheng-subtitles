@@ -66,6 +66,56 @@ export const FuguangBrowserMediaCandidates = (() => {
       seenAt: incoming.seenAt || Date.now()
     };
   }
+
+  function pruneCandidatesForRetention(candidates = [], maxCount = 80) {
+    if (!Array.isArray(candidates) || candidates.length <= maxCount) {
+      return Array.isArray(candidates) ? candidates : [];
+    }
+    return candidates
+      .map((candidate, index) => ({
+        candidate,
+        index,
+        score: candidateRetentionScore(candidate)
+      }))
+      .sort((a, b) =>
+        b.score - a.score ||
+        (b.candidate.seenAt || 0) - (a.candidate.seenAt || 0) ||
+        a.index - b.index
+      )
+      .slice(0, maxCount)
+      .sort((a, b) => a.index - b.index)
+      .map(item => item.candidate);
+  }
+
+  function candidateRetentionScore(candidate = {}) {
+    let score = 0;
+    const contentType = String(candidate.contentType || candidate.responseHeaders?.type || "").toLowerCase();
+    const ext = String(candidate.ext || "").toLowerCase();
+    if (candidate.role === "audio" || candidate.kind === "audio" || contentType.startsWith("audio/")) {
+      score += 90;
+    }
+    if (candidate.kind === "hls" || candidate.kind === "dash" || MANIFEST_EXTENSIONS.has(ext)) {
+      score += 80;
+    }
+    if (candidate.playlistType === "audio" || candidate.playlistType === "master") {
+      score += 20;
+    }
+    if (candidate.source === "json-parse" || candidate.source === "fetch-body" || candidate.source === "xhr-body") {
+      score += 16;
+    } else if (candidate.source === "response" || candidate.source === "media-element") {
+      score += 10;
+    }
+    if (candidate.segmentType === "init") {
+      score += 24;
+    }
+    if (candidate.role === "video" || contentType.startsWith("video/")) {
+      score -= 8;
+    }
+    if (candidate.kind === "segment" || ["m4s", "ts", "cmfa", "cmfv"].includes(ext)) {
+      score -= candidate.segmentType === "init" ? 4 : 32;
+    }
+    return score;
+  }
   
   function shouldUseIncomingCandidateField(key, value, existingValue) {
     if (key === "seenAt") {
@@ -104,11 +154,84 @@ export const FuguangBrowserMediaCandidates = (() => {
   }
   
   function getGroupedCandidatesForState(state) {
-    return groupCandidatesForAsr(
+    return filterDisplayableCandidateGroups(groupCandidatesForAsr(
       (state.candidates || [])
         .filter(candidate => !isIgnoredMediaUrl(candidate.url))
         .map(candidate => enrichCandidate(candidate, state))
-    );
+    ), state);
+  }
+
+  function filterDisplayableCandidateGroups(groups, state = null) {
+    return (Array.isArray(groups) ? groups : []).filter(candidate => isDisplayableCandidateGroup(candidate, state));
+  }
+
+  function isDisplayableCandidateGroup(candidate = {}, state = null) {
+    if (isUnrelatedXTwitterMediaCandidate(candidate, state)) {
+      return false;
+    }
+    if (!candidate.sourcePlan) {
+      return !isKnownSeparatedXTwitterVideoOnlyCandidate(candidate);
+    }
+    return candidate.sourcePlan.executable !== false &&
+      !sourcePlanHasBlockingWarning(candidate.sourcePlan);
+  }
+
+  function isUnrelatedXTwitterMediaCandidate(candidate = {}, state = null) {
+    const targetMediaId = getXTwitterCurrentMediaIdentity(state);
+    if (!targetMediaId) {
+      return false;
+    }
+    const ids = xTwitterMediaIdentitiesForCandidate(candidate);
+    return ids.length > 0 && !ids.includes(targetMediaId);
+  }
+
+  function getXTwitterCurrentMediaIdentity(state = null) {
+    const candidates = [
+      state?.context?.poster,
+      state?.context?.currentSrc,
+      state?.context?.sourceUrl
+    ];
+    for (const value of candidates) {
+      const id = getXTwitterAnyMediaIdentity(parseUrlInfo(value || ""));
+      if (id) {
+        return id;
+      }
+    }
+    return "";
+  }
+
+  function xTwitterMediaIdentitiesForCandidate(candidate = {}) {
+    const ids = new Set();
+    for (const item of [candidate, ...(Array.isArray(candidate.variants) ? candidate.variants : [])]) {
+      const id = getXTwitterAnyMediaIdentity(parseUrlInfo(item?.url || ""));
+      if (id) {
+        ids.add(id);
+      }
+    }
+    return [...ids];
+  }
+
+  function sourcePlanHasBlockingWarning(plan = {}) {
+    return (Array.isArray(plan.warnings) ? plan.warnings : [])
+      .some(warning => ["requires-signature-deciphering"].includes(String(warning?.code || "")));
+  }
+
+  function isKnownSeparatedXTwitterVideoOnlyCandidate(candidate = {}) {
+    return isXTwitterSeparatedVideoUrl(candidate.url) ||
+      (Array.isArray(candidate.variants) && candidate.variants.length > 0 &&
+        candidate.variants.every(variant => isXTwitterSeparatedVideoUrl(variant.url)));
+  }
+
+  function isXTwitterSeparatedVideoUrl(rawUrl = "") {
+    try {
+      const url = new URL(rawUrl);
+      if (!/(^|\.)video\.twimg\.com$/i.test(url.hostname)) {
+        return false;
+      }
+      return /\/amplify_video\/\d+\/(?:vid|pl)\/(?:avc1|h264|h265|hevc|vp9|av01)(?:\/|$)/i.test(url.pathname);
+    } catch {
+      return false;
+    }
   }
   
   function resolvePreloadCandidateForStart(state, candidate) {
@@ -220,6 +343,7 @@ export const FuguangBrowserMediaCandidates = (() => {
       trackRole: mediaAsset.role,
       durationEvidence: mediaAsset.durationEvidence,
       mediaAsset,
+      pageRelevanceScore: scoreCandidatePageRelevance(candidate, duration, state),
       asrScore: scoreCandidateForAsr(candidate, role, quality, size, duration, contentType, urlInfo, state)
     };
   }
@@ -245,6 +369,7 @@ export const FuguangBrowserMediaCandidates = (() => {
         width: candidate.videoWidth,
         height: candidate.videoHeight
       },
+      segmentType: candidate.segmentType || "",
       requestContext: candidate.requestHeaders ? { headerNames: Object.keys(sanitizeInternalRequestHeaders(candidate.requestHeaders)).sort() } : null,
       relation: inferMediaAssetRelation(candidate),
       siteAdapter: inferCandidateSiteAdapter(candidate),
@@ -421,11 +546,16 @@ export const FuguangBrowserMediaCandidates = (() => {
     }
     return [...groups.values()]
       .map(buildCandidateGroup)
-      .sort((a, b) => a.asrScore - b.asrScore || (b.seenAt || 0) - (a.seenAt || 0));
+      .sort((a, b) =>
+        a.pageRelevanceScore - b.pageRelevanceScore ||
+        a.asrScore - b.asrScore ||
+        (b.seenAt || 0) - (a.seenAt || 0)
+      );
   }
   
   function buildCandidateGroup(group) {
     const variants = [...group].sort((a, b) =>
+      a.pageRelevanceScore - b.pageRelevanceScore ||
       a.asrScore - b.asrScore ||
       compareCandidateSourceForAsr(a, b) ||
       compareSizeForAsr(a, b)
@@ -434,11 +564,12 @@ export const FuguangBrowserMediaCandidates = (() => {
     const hiddenCount = Math.max(variants.length - 1, 0);
     const variantStats = summarizeVariants(variants);
     const mergedHeaders = mergeVariantHeaders(variants);
+    const resolvedSourcePlan = FuguangMediaSourceResolvers.resolveAudioSourcePlan({
+      candidates: variants,
+      duration: selected.duration || 0
+    });
     const sourcePlan = summarizeAudioSourcePlan(
-      FuguangMediaSourceResolvers.resolveAudioSourcePlan({
-        candidates: variants,
-        duration: selected.duration || 0
-      })
+      sourcePlanMatchesSelectedCandidate(selected, resolvedSourcePlan) ? resolvedSourcePlan : null
     );
     return {
       ...selected,
@@ -450,6 +581,23 @@ export const FuguangBrowserMediaCandidates = (() => {
       sourcePlan,
       selectionReason: describeSelection(selected, hiddenCount, variantStats)
     };
+  }
+
+  function sourcePlanMatchesSelectedCandidate(selected = {}, plan = null) {
+    if (!plan?.primaryAsset) {
+      return false;
+    }
+    if (!isManifestCandidate(selected)) {
+      return true;
+    }
+    if (plan.kind === "muxed-media" && plan.ffmpegInput?.type === "direct") {
+      return sameUrl(plan.ffmpegInput?.url || plan.primaryAsset.url, selected.url);
+    }
+    return true;
+  }
+
+  function sameUrl(left = "", right = "") {
+    return exactStreamUrl(left) === exactStreamUrl(right);
   }
 
   function summarizeAudioSourcePlan(plan) {
@@ -468,16 +616,61 @@ export const FuguangBrowserMediaCandidates = (() => {
       siteAdapter: plan.primaryAsset.siteAdapter || "",
       ffmpegInput: {
         type: plan.ffmpegInput?.type || "",
-        url: plan.ffmpegInput?.url || ""
+        url: plan.ffmpegInput?.url || "",
+        audioCandidateUrls: summarizeUrlList(plan.ffmpegInput?.audioCandidateUrls),
+        fragments: summarizeFfmpegFragments(plan.ffmpegInput?.fragments)
       },
       expectedAudio: {
         codec: plan.expectedAudio?.codec || "",
         container: plan.expectedAudio?.container || "",
         duration: plan.expectedAudio?.duration || 0
       },
+      normalizeStrategy: summarizeNormalizeStrategy(plan.normalizeStrategy),
       executable: plan.executable !== false,
       warnings: plan.warnings?.length ? plan.warnings : (plan.primaryAsset.warnings || [])
     };
+  }
+
+  function summarizeUrlList(values = []) {
+    const output = [];
+    for (const value of Array.isArray(values) ? values : []) {
+      const url = String(value || "");
+      if (/^https?:\/\//i.test(url) && !output.includes(url)) {
+        output.push(url);
+      }
+    }
+    return output;
+  }
+
+  function summarizeNormalizeStrategy(strategy = {}) {
+    return {
+      type: strategy.type || "",
+      action: strategy.action || "",
+      inputType: strategy.inputType || "",
+      requiresAssembly: Boolean(strategy.requiresAssembly),
+      output: {
+        codec: strategy.output?.codec || "mp3",
+        container: strategy.output?.container || "mp3",
+        sampleRate: strategy.output?.sampleRate || 16000,
+        channels: strategy.output?.channels || 1,
+        bitrate: strategy.output?.bitrate || 64000
+      }
+    };
+  }
+
+  function summarizeFfmpegFragments(fragments) {
+    return (Array.isArray(fragments) ? fragments : [])
+      .filter(fragment => fragment?.url)
+      .map(fragment => ({
+        url: fragment.url,
+        name: fragment.name || "",
+        segmentType: fragment.segmentType || "",
+        role: fragment.role || "",
+        duration: fragment.duration || 0,
+        start: fragment.start || 0,
+        end: fragment.end || 0,
+        byteRange: fragment.byteRange || null
+      }));
   }
   
   function mergeVariantHeaders(variants) {
@@ -522,7 +715,9 @@ export const FuguangBrowserMediaCandidates = (() => {
       quality: candidate.quality,
       assetKind: candidate.assetKind,
       trackRole: candidate.trackRole,
-      filename: candidate.filename
+      filename: candidate.filename,
+      statusId: candidate.statusId,
+      segmentType: candidate.segmentType
     };
   }
   
@@ -545,6 +740,10 @@ export const FuguangBrowserMediaCandidates = (() => {
     const bilibiliMediaKey = getBilibiliMediaIdentity(urlInfo);
     if (bilibiliMediaKey) {
       return `asr:bilibili:${bilibiliMediaKey}`;
+    }
+    const xTwitterMediaKey = getXTwitterAmplifyMediaIdentity(urlInfo);
+    if (xTwitterMediaKey) {
+      return `asr:x-twitter:${xTwitterMediaKey}`;
     }
     const durationKey = candidate.duration ? Math.round(candidate.duration / 5) * 5 : "";
     if (pageKey && durationKey && isAsrSameContentCandidate(candidate)) {
@@ -579,6 +778,9 @@ export const FuguangBrowserMediaCandidates = (() => {
   
   function scoreCandidateForAsr(candidate, role, quality, size, duration, contentType = "", urlInfo = null, state = null) {
     const info = urlInfo || parseUrlInfo(candidate.url || "");
+    if (candidate.ext === "m4s" && candidate.kind !== "audio" && !contentType.startsWith("audio/")) {
+      return 30 + Math.min(size / 1024 / 1024, 60);
+    }
     if (role === "audio") {
       if (isLowConfidenceDirectAudioCandidate(candidate, contentType, info, size, state)) {
         return 45 + audioContainerPenalty(candidate);
@@ -591,13 +793,92 @@ export const FuguangBrowserMediaCandidates = (() => {
     if (candidate.kind === "dash") {
       return 20 + qualityForAsr(quality);
     }
-    if (candidate.ext === "m4s") {
-      return 30 + Math.min(size / 1024 / 1024, 60);
-    }
     if (role === "video") {
       return 40 + qualityForAsr(quality);
     }
     return 50;
+  }
+
+  function scoreCandidatePageRelevance(candidate = {}, duration, state = null) {
+    const targetMediaId = getXTwitterCurrentMediaIdentity(state);
+    const candidateMediaId = getXTwitterAnyMediaIdentity(parseUrlInfo(candidate.url || ""));
+    const targetStatusId = xTwitterStatusIdFromPageUrl(state?.page?.url || state?.context?.href || "");
+    const candidateStatusId = firstDigits(candidate.statusId, candidate.tweetId);
+    const durationScore = scoreCandidateDurationRelevance(duration, state);
+    if (targetMediaId && candidateMediaId === targetMediaId) {
+      return 0;
+    }
+    if (targetMediaId && candidateMediaId) {
+      return 20 + durationScore;
+    }
+    if (targetStatusId && candidateStatusId === targetStatusId) {
+      return 0;
+    }
+    if (targetStatusId && candidateStatusId) {
+      return 16;
+    }
+    if (targetStatusId) {
+      return 1 + durationScore;
+    }
+    return durationScore;
+  }
+
+  function scoreCandidateDurationRelevance(duration, state = null) {
+    const targetDuration = positiveNumber(state?.context?.duration);
+    if (!targetDuration || !state?.context?.hasMedia) {
+      return 0;
+    }
+    const candidateDuration = positiveNumber(duration);
+    if (!candidateDuration) {
+      return 4;
+    }
+    const drift = Math.abs(candidateDuration - targetDuration);
+    const tolerance = Math.max(2, Math.min(12, targetDuration * 0.03));
+    if (drift <= tolerance) {
+      return 0;
+    }
+    return 8 + Math.min(drift / targetDuration, 8);
+  }
+
+  function xTwitterStatusIdFromPageUrl(rawUrl) {
+    try {
+      const url = new URL(rawUrl);
+      if (!/(^|\.)x\.com$/i.test(url.hostname) && !/(^|\.)twitter\.com$/i.test(url.hostname)) {
+        return "";
+      }
+      return url.pathname.match(/\/status\/(\d+)/i)?.[1] || "";
+    } catch {
+      return "";
+    }
+  }
+
+  function getXTwitterAmplifyMediaIdentity(urlInfo = {}) {
+    if (!/(^|\.)video\.twimg\.com$/i.test(urlInfo.hostname || "")) {
+      return "";
+    }
+    return String(urlInfo.pathname || "").match(/\/amplify_video\/(\d+)\//i)?.[1] || "";
+  }
+
+  function getXTwitterAnyMediaIdentity(urlInfo = {}) {
+    const hostname = String(urlInfo.hostname || "");
+    const pathname = String(urlInfo.pathname || "");
+    if (/(^|\.)video\.twimg\.com$/i.test(hostname)) {
+      return pathname.match(/\/amplify_video\/(\d+)\//i)?.[1] || "";
+    }
+    if (/(^|\.)pbs\.twimg\.com$/i.test(hostname) || /(^|\.)pbs-[a-z0-9-]+\.twimg\.com$/i.test(hostname)) {
+      return pathname.match(/\/amplify_video_thumb\/(\d+)\//i)?.[1] || "";
+    }
+    return pathname.match(/\/amplify_video_thumb\/(\d+)\//i)?.[1] || "";
+  }
+
+  function firstDigits(...values) {
+    for (const value of values) {
+      const text = String(value || "").trim();
+      if (/^\d+$/.test(text)) {
+        return text;
+      }
+    }
+    return "";
   }
   
   function compareSizeForAsr(a, b) {
@@ -727,6 +1008,14 @@ export const FuguangBrowserMediaCandidates = (() => {
   }
   
   function inferMediaRole(candidate, contentType, urlInfo, videoWidth, videoHeight) {
+    if (["audio", "video", "playlist", "media"].includes(candidate.role)) {
+      return candidate.role;
+    }
+    const separatedTrackRole = inferSeparatedTrackRoleFromUrl(urlInfo);
+    if (separatedTrackRole) {
+      return separatedTrackRole;
+    }
+    const genericSegmentContent = candidate.ext === "m4s" && contentType.includes("iso.segment");
     if (candidate.kind === "audio" || AUDIO_EXTENSIONS.has(candidate.ext)) {
       return "audio";
     }
@@ -736,7 +1025,7 @@ export const FuguangBrowserMediaCandidates = (() => {
     if (candidate.kind === "hls" || candidate.kind === "dash") {
       return "playlist";
     }
-    if (contentType.startsWith("video/") || videoWidth || videoHeight) {
+    if ((contentType.startsWith("video/") && !genericSegmentContent) || videoWidth || videoHeight) {
       return "video";
     }
     if (contentType.startsWith("audio/")) {
@@ -746,6 +1035,20 @@ export const FuguangBrowserMediaCandidates = (() => {
       return "audio";
     }
     return "media";
+  }
+
+  function inferSeparatedTrackRoleFromUrl(urlInfo = {}) {
+    if (!/(^|\.)video\.twimg\.com$/i.test(urlInfo.hostname || "")) {
+      return "";
+    }
+    const path = String(urlInfo.pathname || "").toLowerCase();
+    if (/\/amplify_video\/\d+\/(?:audio|pl\/mp4a)(?:\/|$)/i.test(path)) {
+      return "audio";
+    }
+    if (/\/amplify_video\/\d+\/(?:vid|pl)\/(?:avc1|h264|h265|hevc|vp9|av01)(?:\/|$)/i.test(path)) {
+      return "video";
+    }
+    return "";
   }
 
   function isLikelyAudioOnlyManifest(candidate, urlInfo) {
@@ -1258,6 +1561,7 @@ export const FuguangBrowserMediaCandidates = (() => {
     isMediaContentType,
     mergeCandidate,
     pickFinite,
+    pruneCandidatesForRetention,
     resolvePreloadCandidateForStart,
     sanitizeInternalRequestHeaders,
     stripCandidateRequestHeaders

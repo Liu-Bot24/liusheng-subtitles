@@ -15,18 +15,22 @@ export const FuguangMediaSourceResolvers = (() => {
       return bilibiliPlan;
     }
 
+    const dashPlan = resolveDashAudioPlan(candidates, { ...input, manifestTextByUrl });
+    const fragmentPlan = resolveFragmentAudioPlan(candidates, input);
+    const directPlan = resolveDirectAudioPlan(candidates, { ...input, fragmentPlan });
+    if (directPlan && directPlan.executable !== false) {
+      return directPlan;
+    }
     const hlsPlan = resolveHlsAudioPlan(candidates, { ...input, manifestTextByUrl });
     if (hlsPlan) {
       return hlsPlan;
     }
-
-    const dashPlan = resolveDashAudioPlan(candidates, { ...input, manifestTextByUrl });
-    const fragmentPlan = resolveFragmentAudioPlan(candidates, input);
-    const directPlan = resolveDirectAudioPlan(candidates, input);
-    return [dashPlan, fragmentPlan, directPlan].find(plan => plan?.executable !== false) ||
+    const muxedPlan = resolveMuxedMediaPlan(candidates, input);
+    return [dashPlan, fragmentPlan, directPlan, muxedPlan].find(plan => plan?.executable !== false) ||
       dashPlan ||
       fragmentPlan ||
       directPlan ||
+      muxedPlan ||
       null;
   }
 
@@ -117,13 +121,19 @@ export const FuguangMediaSourceResolvers = (() => {
         continue;
       }
       const parsed = FuguangDashManifestParser.parse(text, candidate.url);
-      const representation = parsed.adaptationSets
+      const audioRepresentations = parsed.adaptationSets
         .flatMap(set => set.representations)
         .filter(item => item.role === "audio")
-        .sort((a, b) => Math.abs((a.bandwidth || 128000) - 128000) - Math.abs((b.bandwidth || 128000) - 128000))[0];
+        .sort((a, b) => Math.abs((a.bandwidth || 128000) - 128000) - Math.abs((b.bandwidth || 128000) - 128000));
+      const representation = audioRepresentations.find(item => !isUnsupportedDashWebmOpusRepresentation(item)) || audioRepresentations[0];
       if (!representation) {
         continue;
       }
+      const fragments = FuguangDashManifestParser.expandRepresentationFragments(representation, parsed.duration);
+      const unsupportedDashWebmOpus = isUnsupportedDashWebmOpusRepresentation(representation);
+      const executable = fragments.some(fragment => fragment.segmentType === "init") &&
+        fragments.some(fragment => fragment.segmentType === "media") &&
+        !unsupportedDashWebmOpus;
       const primaryAsset = FuguangMediaAssetModel.createMediaAsset({
         url: representation.baseUrl || candidate.url,
         kind: FuguangMediaAssetModel.ASSET_KIND.DASH_MPD,
@@ -140,10 +150,20 @@ export const FuguangMediaSourceResolvers = (() => {
         primaryAsset,
         reason: "selected DASH audio representation",
         confidence: 0.84,
-        executable: false,
-        ffmpegInput: { type: "dash", url: candidate.url, credentials: "include" },
+        executable,
+        ffmpegInput: {
+          type: "dash",
+          url: candidate.url,
+          credentials: "include",
+          fragments
+        },
+        normalizeStrategy: { type: "dash-manifest", action: "parse-manifest-extract-audio", requiresAssembly: true },
         expectedAudio: { codec: primaryAsset.codecs[0] || "mp4a", duration: primaryAsset.duration || 0 },
-        warnings: [unsupportedRuntimeWarning("dash-audio", "DASH manifest parsing is available, but browser Web FFmpeg execution is not wired yet.")]
+        warnings: executable
+          ? []
+          : (unsupportedDashWebmOpus
+            ? [unsupportedRuntimeWarning("dash-webm-opus", "DASH WebM/Opus fragments need a dedicated reconstruction path before ASR.")]
+            : [unsupportedRuntimeWarning("dash-audio", "DASH audio representation is identifiable, but init+segment expansion is incomplete.")])
       });
     }
     return null;
@@ -165,10 +185,20 @@ export const FuguangMediaSourceResolvers = (() => {
       companionAssets: [assessment.initSegment, ...assessment.segments.slice(1)].filter(Boolean).map(item => normalizeCandidateAsset(item)),
       reason: assessment.reason,
       confidence: 0.62,
-      executable: false,
-      ffmpegInput: { type: "mse-fragments", url: primaryAsset.url, credentials: "include" },
+      executable: assessment.executable !== false && assessment.reconstructable === true,
+      ffmpegInput: {
+        type: "mse-fragments",
+        url: primaryAsset.url,
+        credentials: "include",
+        fragments: assessment.reconstructable
+          ? [assessment.initSegment, ...assessment.segments].filter(Boolean).map(fragment => summarizeFfmpegFragment(fragment))
+          : []
+      },
+      normalizeStrategy: { type: "fmp4-fragments", action: "assemble-fragments-extract-audio", requiresAssembly: true },
       expectedAudio: { codec: primaryAsset.codecs[0] || "mp4a", duration: primaryAsset.duration || 0 },
-      warnings: [unsupportedRuntimeWarning("mse-fragments", "MSE/fMP4 fragments are identifiable, but browser Web FFmpeg execution needs init+segment assembly before ASR.")]
+      warnings: assessment.reconstructable
+        ? []
+        : [unsupportedRuntimeWarning("mse-fragments", `MSE/fMP4 fragments are identifiable, but ${assessment.reason || "init+segment assembly is incomplete"}.`)]
     });
   }
 
@@ -191,6 +221,16 @@ export const FuguangMediaSourceResolvers = (() => {
     const mediaSegments = fragments.filter(candidate => !isInitFragment(candidate)).sort(compareFragmentSequence);
     const role = inferFragmentGroupRole(fragments);
     const hasTimeline = Boolean(options.duration || mediaSegments.some(segment => segment.duration || segment.start != null || segment.end != null));
+    if (isSegmentedWebmOpusGroup(fragments)) {
+      return {
+        executable: false,
+        reconstructable: false,
+        role,
+        reason: "WebM/Opus fragments need a dedicated reconstruction path before ASR",
+        initSegment,
+        segments: mediaSegments
+      };
+    }
     if (!initSegment) {
       return { executable: false, reconstructable: false, role, reason: "missing init segment for fMP4 reconstruction", segments: mediaSegments };
     }
@@ -207,19 +247,39 @@ export const FuguangMediaSourceResolvers = (() => {
       return { executable: false, reconstructable: false, role, reason: "media fragment sequence is not contiguous", initSegment, segments: mediaSegments };
     }
     return {
-      executable: false,
+      executable: true,
       reconstructable: true,
       role,
-      reason: `selected reconstructable MSE/fMP4 ${role} fragment group; runtime execution is disabled until init+segment assembly is implemented`,
+      reason: `selected reconstructable MSE/fMP4 ${role} fragment group`,
       initSegment,
       segments: mediaSegments
     };
   }
 
+  function summarizeFfmpegFragment(fragment = {}) {
+    return {
+      url: String(fragment.url || ""),
+      name: String(fragment.filename || fragment.name || ""),
+      segmentType: isInitFragment(fragment) ? "init" : "media",
+      role: inferSingleFragmentRole(fragment),
+      duration: Number(fragment.duration || 0) || 0,
+      start: Number(fragment.start || 0) || 0,
+      end: Number(fragment.end || 0) || 0,
+      byteRange: fragment.byteRange || null
+    };
+  }
+
   function resolveDirectAudioPlan(candidates, options) {
+    const reconstructableFragmentUrls = new Set(
+      options.fragmentPlan?.executable !== false
+        ? (options.fragmentPlan?.ffmpegInput?.fragments || []).map(fragment => fragment.url).filter(Boolean)
+        : []
+    );
     const audio = candidates
       .filter(candidate => candidate.role === "audio" || candidate.kind === "audio")
-      .filter(candidate => !isFragmentCandidate(candidate))
+      .filter(candidate => !reconstructableFragmentUrls.has(candidate.url))
+      .filter(candidate => !isHlsCandidate(candidate) && !isDashCandidate(candidate))
+      .filter(candidate => !isFragmentCandidate(candidate) || isStandaloneDirectAudioFragment(candidate))
       .sort((a, b) => Math.abs((a.bitrate || a.bandwidth || 128000) - 128000) - Math.abs((b.bitrate || b.bandwidth || 128000) - 128000))[0];
     if (!audio) {
       return null;
@@ -235,7 +295,60 @@ export const FuguangMediaSourceResolvers = (() => {
       confidence: 0.72,
       executable: !hasBlockingWarnings(primaryAsset.warnings),
       ffmpegInput: { type: "direct", url: primaryAsset.url, credentials: "include" },
+      normalizeStrategy: { type: "direct-audio-file", action: "transcode-or-remux-audio", requiresAssembly: false },
       expectedAudio: { codec: primaryAsset.codecs[0] || "", duration: primaryAsset.duration || 0 },
+      warnings: primaryAsset.warnings || []
+    });
+  }
+
+  function isStandaloneDirectAudioFragment(candidate = {}) {
+    if (candidate.segmentType) {
+      return false;
+    }
+    if (isSegmentedWebmOpusFragment(candidate)) {
+      return false;
+    }
+    const codecText = Array.isArray(candidate.codecs) ? candidate.codecs.join(" ") : candidate.codecs;
+    const contentType = String(
+      candidate.contentType ||
+      candidate.mime ||
+      codecText ||
+      candidate.evidence?.map(item => item?.detail).join(" ") ||
+      ""
+    ).toLowerCase();
+    if (!contentType.startsWith("audio/")) {
+      return false;
+    }
+    const ext = normalizeExtension(candidate.ext || extensionFromUrl(candidate.url));
+    if (!["mp4", "m4a", "m4s", "cmfa", "aac", "mp3"].includes(ext) &&
+        !contentType.includes("mp4") &&
+        !contentType.includes("mpeg") &&
+        !contentType.includes("aac")) {
+      return false;
+    }
+    return Number(candidate.duration || 0) > 0 || Number(candidate.bitrate || candidate.bandwidth || 0) > 0;
+  }
+
+  function resolveMuxedMediaPlan(candidates, options) {
+    const muxed = candidates
+      .filter(candidate => isDirectMuxedMediaCandidate(candidate))
+      .sort((a, b) => Math.abs((a.bitrate || a.bandwidth || 512000) - 512000) - Math.abs((b.bitrate || b.bandwidth || 512000) - 512000))[0];
+    if (!muxed) {
+      return null;
+    }
+    const primaryAsset = normalizeCandidateAsset(muxed, {
+      role: FuguangMediaAssetModel.MEDIA_ROLE.MUXED,
+      duration: muxed.duration || options.duration || 0
+    });
+    return FuguangMediaAssetModel.createAudioSourcePlan({
+      kind: "muxed-media",
+      primaryAsset,
+      reason: "selected complete muxed media file for audio extraction",
+      confidence: 0.58,
+      executable: !hasBlockingWarnings(primaryAsset.warnings),
+      ffmpegInput: { type: "direct", url: primaryAsset.url, credentials: "include" },
+      normalizeStrategy: { type: "muxed-media-file", action: "extract-audio-track", requiresAssembly: false },
+      expectedAudio: { codec: "", duration: primaryAsset.duration || 0 },
       warnings: primaryAsset.warnings || []
     });
   }
@@ -333,6 +446,115 @@ export const FuguangMediaSourceResolvers = (() => {
       (ext === "mp4" && isInitFragment(candidate));
   }
 
+  function isDirectMuxedMediaCandidate(candidate = {}) {
+    if (isHlsCandidate(candidate) || isDashCandidate(candidate) || isFragmentCandidate(candidate)) {
+      return false;
+    }
+    if (isKnownSeparatedVideoTrack(candidate)) {
+      return false;
+    }
+    const ext = normalizeExtension(candidate.ext || extensionFromUrl(candidate.url));
+    const contentType = String(candidate.contentType || candidate.mime || "").toLowerCase();
+    const role = String(candidate.role || "");
+    const kind = String(candidate.kind || "");
+    if (role === "audio" || kind === "audio") {
+      return false;
+    }
+    if (["mp4", "m4v", "mov", "webm", "mkv"].includes(ext)) {
+      return true;
+    }
+    return contentType.startsWith("video/") ||
+      role === "video" ||
+      role === "media" ||
+      kind === "video" ||
+      kind === "media";
+  }
+
+  function isSegmentedWebmOpusGroup(fragments = []) {
+    return (Array.isArray(fragments) ? fragments : []).some(isSegmentedWebmOpusFragment);
+  }
+
+  function isUnsupportedDashWebmOpusRepresentation(representation = {}) {
+    return dashRepresentationContainerFamily(representation) === "webm-ogg";
+  }
+
+  function dashRepresentationContainerFamily(representation = {}) {
+    const template = representation.segmentTemplate || {};
+    const text = [
+      representation.mimeType,
+      representation.codecs,
+      representation.baseUrl,
+      template.initialization,
+      template.media
+    ].map(value => String(value || "").toLowerCase()).join(" ");
+    const mp4Container = /(?:mp4|m4a|m4s|cmf|cmfa|cmfv|iso\.segment)/.test(text);
+    const webmOrOggContainer = /(?:webm|weba|ogg|oga)/.test(text) ||
+      (!mp4Container && /(?:^|[\s,])opus(?:[\s,]|$)/.test(text));
+    if (webmOrOggContainer && !mp4Container) {
+      return "webm-ogg";
+    }
+    if (mp4Container) {
+      return "mp4";
+    }
+    return "unknown";
+  }
+
+  function isSegmentedWebmOpusFragment(candidate = {}) {
+    if (!isFragmentCandidate(candidate)) {
+      return false;
+    }
+    const ext = normalizeExtension(candidate.ext || extensionFromUrl(candidate.url));
+    const codecText = Array.isArray(candidate.codecs) ? candidate.codecs.join(" ") : candidate.codecs;
+    const contentType = String(candidate.contentType || candidate.mime || "").toLowerCase();
+    const codec = String(codecText || "").toLowerCase();
+    const mp4Container = ["mp4", "m4a", "m4s", "cmf", "cmfa", "cmfv"].includes(ext) ||
+      contentType.includes("mp4") ||
+      contentType.includes("iso.segment");
+    const webmOrOggContainer = ["webm", "weba", "opus", "ogg", "oga"].includes(ext) ||
+      contentType.includes("webm") ||
+      contentType.includes("ogg") ||
+      (!mp4Container && codec.includes("opus"));
+    return webmOrOggContainer && !mp4Container;
+  }
+
+  function isKnownSeparatedVideoTrack(candidate = {}) {
+    const rawUrl = String(candidate.url || "");
+    const path = safeUrlPath(rawUrl).toLowerCase();
+    if (/(^|\.)video\.twimg\.com$/i.test(safeUrlHostname(rawUrl)) &&
+        /\/amplify_video\/\d+\/(?:vid|pl)\/(?:avc1|h264|h265|hevc|vp9|av01)(?:\/|$)/i.test(path)) {
+      return true;
+    }
+    const codecs = String(candidate.codecs || candidate.quality?.codecs || "")
+      .split(",")
+      .map(codec => codec.trim())
+      .filter(Boolean);
+    return codecs.length > 0 && codecs.every(isVideoCodec) && !codecs.some(isAudioCodec);
+  }
+
+  function isVideoCodec(codec = "") {
+    return /^(?:avc1|avc3|hvc1|hev1|vp8|vp9|av01|theora)(?:\.|$)/i.test(String(codec || ""));
+  }
+
+  function isAudioCodec(codec = "") {
+    return /^(?:mp4a|ac-3|ec-3|opus|vorbis|flac|alac|aac)(?:\.|$)/i.test(String(codec || ""));
+  }
+
+  function safeUrlHostname(rawUrl = "") {
+    try {
+      return new URL(rawUrl).hostname;
+    } catch {
+      return "";
+    }
+  }
+
+  function safeUrlPath(rawUrl = "") {
+    try {
+      return new URL(rawUrl).pathname;
+    } catch {
+      return String(rawUrl || "");
+    }
+  }
+
   function isInitFragment(candidate = {}) {
     const text = `${candidate.url || ""} ${candidate.filename || ""}`.toLowerCase();
     return /(?:^|[-_/])init(?:[-_.\/]|$)/i.test(text) ||
@@ -348,7 +570,7 @@ export const FuguangMediaSourceResolvers = (() => {
     if (roles.size > 1) {
       return "mixed";
     }
-    const text = candidates.map(candidate => `${candidate.url || ""} ${candidate.role || ""} ${candidate.kind || ""} ${candidate.contentType || ""}`).join(" ").toLowerCase();
+    const text = candidates.map(candidate => `${fragmentUrlRoleText(candidate.url)} ${candidate.role || ""} ${candidate.kind || ""} ${nonGenericSegmentContentType(candidate.contentType)}`).join(" ").toLowerCase();
     if (/(?:audio|mp4a|aac|302(?:16|32|80))/.test(text)) {
       return "audio";
     }
@@ -359,14 +581,33 @@ export const FuguangMediaSourceResolvers = (() => {
   }
 
   function inferSingleFragmentRole(candidate = {}) {
-    const text = `${candidate.url || ""} ${candidate.role || ""} ${candidate.kind || ""} ${candidate.contentType || ""}`.toLowerCase();
-    if (/(?:^|\W)(?:audio|mp4a|aac|opus|302(?:16|32|80))(?:\W|$)/.test(text)) {
+    const role = String(candidate.role || "").toLowerCase();
+    const kind = String(candidate.kind || "").toLowerCase();
+    const contentType = String(candidate.contentType || "").toLowerCase();
+    const text = `${fragmentUrlRoleText(candidate.url)} ${role} ${kind} ${nonGenericSegmentContentType(contentType)}`.toLowerCase();
+    if (role === "audio" || kind === "audio" || contentType.startsWith("audio/") ||
+      /(?:^|\W)(?:audio|mp4a|aac|opus|302(?:16|32|80))(?:\W|$)/.test(text)) {
       return "audio";
     }
-    if (/(?:^|\W)(?:video|avc|h264|h265|hevc|vp9|av01|100\d{3})(?:\W|$)/.test(text)) {
+    if (role === "video" || kind === "video" || (contentType.startsWith("video/") && !contentType.includes("iso.segment")) ||
+      /(?:^|\W)(?:video|avc|h264|h265|hevc|vp9|av01|100\d{3})(?:\W|$)/.test(text)) {
       return "video";
     }
     return "unknown";
+  }
+
+  function nonGenericSegmentContentType(value = "") {
+    const contentType = String(value || "").toLowerCase();
+    return contentType.includes("iso.segment") ? "" : contentType;
+  }
+
+  function fragmentUrlRoleText(rawUrl = "") {
+    try {
+      const url = new URL(rawUrl);
+      return `${url.pathname} ${url.search}`.toLowerCase();
+    } catch {
+      return String(rawUrl || "").toLowerCase();
+    }
   }
 
   function groupFragmentsByTrack(fragments) {
@@ -378,7 +619,26 @@ export const FuguangMediaSourceResolvers = (() => {
       }
       groups.get(key).push(fragment);
     }
-    return [...groups.values()];
+    return [
+      ...groups.values(),
+      ...fragmentDirectoryFallbackGroups(fragments)
+    ];
+  }
+
+  function fragmentDirectoryFallbackGroups(fragments = []) {
+    const directories = new Map();
+    for (const fragment of fragments) {
+      const key = fragmentDirectoryKey(fragment);
+      if (!directories.has(key)) {
+        directories.set(key, []);
+      }
+      directories.get(key).push(fragment);
+    }
+    return [...directories.values()].filter(group =>
+      group.some(isInitFragment) &&
+      group.some(fragment => !isInitFragment(fragment)) &&
+      group.some(fragment => inferSingleFragmentRole(fragment) === "unknown")
+    );
   }
 
   function fragmentTrackKey(candidate = {}) {
@@ -387,9 +647,32 @@ export const FuguangMediaSourceResolvers = (() => {
     try {
       const url = new URL(candidate.url || "");
       const directory = url.pathname.replace(/[^/]*$/, "");
-      return `${url.origin}${directory}:${explicitTrack || role || "unknown"}`;
+      return `${url.origin}${directory}:${explicitTrack || role || "unknown"}:${fragmentContainerFamily(candidate)}`;
     } catch {
-      return `${explicitTrack || role || "unknown"}:${String(candidate.url || "").replace(/[^/]*$/, "")}`;
+      return `${explicitTrack || role || "unknown"}:${String(candidate.url || "").replace(/[^/]*$/, "")}:${fragmentContainerFamily(candidate)}`;
+    }
+  }
+
+  function fragmentContainerFamily(candidate = {}) {
+    if (isSegmentedWebmOpusFragment(candidate)) {
+      return "webm-ogg";
+    }
+    const ext = normalizeExtension(candidate.ext || extensionFromUrl(candidate.url));
+    const contentType = String(candidate.contentType || candidate.mime || "").toLowerCase();
+    if (["mp4", "m4a", "m4s", "cmf", "cmfa", "cmfv", "m4v"].includes(ext) ||
+        contentType.includes("mp4") ||
+        contentType.includes("iso.segment")) {
+      return "fmp4";
+    }
+    return "unknown";
+  }
+
+  function fragmentDirectoryKey(candidate = {}) {
+    try {
+      const url = new URL(candidate.url || "");
+      return `${url.origin}${url.pathname.replace(/[^/]*$/, "")}`;
+    } catch {
+      return String(candidate.url || "").replace(/[^/]*$/, "");
     }
   }
 

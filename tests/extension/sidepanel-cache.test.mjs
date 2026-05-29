@@ -1599,6 +1599,39 @@ assert.equal(profileOptionRenameState.llmOptionText, "翻译档案");
 assert.equal(profileOptionRenameState.selectedAsrId.startsWith("asr_profile_"), true);
 assert.equal(profileOptionRenameState.selectedLlmId.startsWith("llm_profile_"), true);
 
+const webFfmpegPerformanceSettingsState = await vm.runInContext(`
+  (async () => {
+    const originalLocalSet = chrome.storage.local.set;
+    const originalSyncSet = chrome.storage.sync.set;
+    let localPayload = null;
+    chrome.storage.local.set = async payload => {
+      localPayload = payload;
+    };
+    chrome.storage.sync.set = async () => {};
+    try {
+      asrProfiles = normalizeStoredProfiles("asr", []);
+      llmProfiles = normalizeStoredProfiles("llm", []);
+      renderProfileOptions(elements.asrProfileId, asrProfiles, DEFAULT_ASR_PROFILE_ID);
+      renderProfileOptions(elements.llmProfileId, llmProfiles, DEFAULT_LLM_PROFILE_ID);
+      applyStoredSettings({ ...DEFAULTS, webFfmpegPerformance: "fast" });
+      const loaded = elements.webFfmpegPerformance.value;
+      elements.webFfmpegPerformance.value = "stable";
+      await saveSettings();
+      const saved = localPayload?.webFfmpegPerformance;
+      applyStoredSettings({ ...DEFAULTS, webFfmpegPerformance: "turbo" });
+      const fallback = elements.webFfmpegPerformance.value;
+      return { loaded, saved, fallback };
+    } finally {
+      chrome.storage.local.set = originalLocalSet;
+      chrome.storage.sync.set = originalSyncSet;
+    }
+  })()
+`, context);
+
+assert.equal(webFfmpegPerformanceSettingsState.loaded, "fast");
+assert.equal(webFfmpegPerformanceSettingsState.saved, "stable");
+assert.equal(webFfmpegPerformanceSettingsState.fallback, "auto");
+
 const builtInAsrSaveState = await vm.runInContext(`
   (() => {
     asrProfiles = normalizeStoredProfiles("asr", [{ id: "groq_whisper", apiKey: "groq-key" }]);
@@ -4233,6 +4266,7 @@ assert.deepEqual(JSON.parse(JSON.stringify(subtitleModeCycleState)), {
 
 const sourcePreviewNoticeText = await vm.runInContext(`
   (() => {
+    currentJob = null;
     currentSubtitleCacheEntry = null;
     subtitleDisplayMode = "translated";
     subtitleCueSource = "transcript";
@@ -4253,6 +4287,7 @@ assert.doesNotMatch(sourcePreviewNoticeText, /拒绝|补位|ASR 原文|列表.*�
 
 const partialSourcePreviewNoticeText = await vm.runInContext(`
   (() => {
+    currentJob = null;
     currentSubtitleCacheEntry = null;
     subtitleDisplayMode = "translated";
     subtitleCueSource = "transcript";
@@ -4276,6 +4311,94 @@ const partialSourcePreviewNoticeText = await vm.runInContext(`
 assert.match(partialSourcePreviewNoticeText, /部分译文已完成/);
 assert.match(partialSourcePreviewNoticeText, /剩余句子/);
 assert.doesNotMatch(partialSourcePreviewNoticeText, /拒绝|补位|ASR 原文|列表.*浮层.*导出/);
+
+const runningPartialTranslationNoticeState = await vm.runInContext(`
+  (() => {
+    currentSubtitleCacheEntry = { id: "subtitle:v1:test", title: "缓存标题" };
+    currentJob = {
+      id: "running-partial",
+      status: "running",
+      translation: {
+        chunksTotal: 2,
+        chunksDone: 1,
+        chunkStatuses: [
+          { index: 0, stage: "completed", sourceCount: 1, translatedCount: 1 },
+          { index: 1, stage: "translation", sourceCount: 1, translatedCount: 0 }
+        ]
+      }
+    };
+    taskDetailsExpanded = false;
+    taskDetailsManuallyCollapsed = false;
+    subtitleDisplayMode = "translated";
+    subtitleCueSource = "transcript";
+    currentTranscript = {
+      source: [
+        { start: 0, end: 2, text: "source first", chunkIndex: 0, segmentIndex: 0 },
+        { start: 3, end: 5, text: "source second", chunkIndex: 1, segmentIndex: 0 }
+      ],
+      translated: [
+        { start: 0, end: 2, text: "translated first", chunkIndex: 0, segmentIndex: 0 }
+      ]
+    };
+    subtitleCues = [
+      { start: 0, end: 2, text: "translated first", sourceText: "source first", sourceOnly: false },
+      { start: 3, end: 5, text: "source second", sourceText: "source second", sourceOnly: true }
+    ];
+    elements.taskPanel.classList.remove("subtitles-focus");
+    renderSubtitleCueList();
+    return {
+      hidden: elements.subtitleNotice.hidden,
+      notice: elements.subtitleNotice.textContent,
+      focus: elements.taskPanel.classList.contains("subtitles-focus"),
+      toggleText: elements.toggleTaskDetails.textContent
+    };
+  })()
+`, context);
+
+assert.deepEqual(JSON.parse(JSON.stringify(runningPartialTranslationNoticeState)), {
+  hidden: false,
+  notice: "第 1/2 部分翻译已完成，字幕已可先行观看，剩余翻译仍在后台继续。",
+  focus: true,
+  toggleText: "展开任务"
+});
+assert.doesNotMatch(runningPartialTranslationNoticeState.notice, /已加载本地缓存/);
+
+const completedCacheNoticeText = await vm.runInContext(`
+  (() => {
+    currentJob = {
+      id: "completed-cache",
+      status: "completed",
+      translation: {
+        chunksTotal: 2,
+        chunksDone: 2,
+        chunkStatuses: [
+          { index: 0, stage: "completed", sourceCount: 1, translatedCount: 1 },
+          { index: 1, stage: "completed", sourceCount: 1, translatedCount: 1 }
+        ]
+      }
+    };
+    currentSubtitleCacheEntry = { id: "subtitle:v1:test", title: "缓存标题" };
+    subtitleDisplayMode = "translated";
+    subtitleCueSource = "transcript";
+    currentTranscript = {
+      source: [
+        { start: 0, end: 2, text: "source first", chunkIndex: 0, segmentIndex: 0 },
+        { start: 3, end: 5, text: "source second", chunkIndex: 1, segmentIndex: 0 }
+      ],
+      translated: [
+        { start: 0, end: 2, text: "translated first", chunkIndex: 0, segmentIndex: 0 },
+        { start: 3, end: 5, text: "translated second", chunkIndex: 1, segmentIndex: 0 }
+      ]
+    };
+    subtitleCues = [
+      { start: 0, end: 2, text: "translated first", sourceText: "source first", sourceOnly: false },
+      { start: 3, end: 5, text: "translated second", sourceText: "source second", sourceOnly: false }
+    ];
+    return subtitleNoticeText();
+  })()
+`, context);
+
+assert.equal(completedCacheNoticeText, "已加载本地缓存：缓存标题");
 
 const attachRefreshState = await vm.runInContext(`
   (async () => {

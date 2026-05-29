@@ -26,17 +26,21 @@ After opening a video page, Liusheng Subtitles shows available media sources in 
 
 ## Demo Screenshots
 
-![Settings Interface Bilibili](docs/assets/readme/bilibili-settings-demo.jpg)
+![Bilibili Video / Settings Interface](docs/assets/readme/bilibili-settings-demo.jpg)
 
-*Settings Interface Bilibili*
+*Bilibili Video / Settings Interface*
 
-![Task Interface TED](docs/assets/readme/ted-task-demo.jpg)
+![TED Video / Main Interface](docs/assets/readme/ted-task-demo.jpg)
 
-*Task Interface TED*
+*TED Video / Main Interface*
 
-![Fullscreen Playback NicoNico](docs/assets/readme/niconico-fullscreen-demo.jpg)
+![X / Full Subtitles](docs/assets/readme/x-full-subtitles-demo.jpg)
 
-*Fullscreen Playback NicoNico*
+*X / Full Subtitles*
+
+![NicoNico Video / Fullscreen Playback](docs/assets/readme/niconico-fullscreen-demo.jpg)
+
+*NicoNico Video / Fullscreen Playback*
 
 ## Installation
 

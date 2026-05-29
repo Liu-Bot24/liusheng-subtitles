@@ -76,6 +76,22 @@ vm.runInContext(source, context, { filename: "offscreen.js" });
 }
 
 {
+  assert.equal(context.normalizeWebFfmpegPerformanceMode("auto"), "auto");
+  assert.equal(context.normalizeWebFfmpegPerformanceMode("stable"), "stable");
+  assert.equal(context.normalizeWebFfmpegPerformanceMode("fast"), "fast");
+  assert.equal(context.normalizeWebFfmpegPerformanceMode("turbo"), "auto");
+  assert.equal(context.hlsWebFfmpegRecycleBaseLimit("auto"), 40);
+  assert.equal(context.hlsWebFfmpegRecycleBaseLimit("stable"), 24);
+  assert.ok(context.hlsWebFfmpegRecycleBaseLimit("fast") > 48);
+  const autoPolicy = context.createHlsWebFfmpegRecyclePolicy("auto");
+  assert.equal(autoPolicy.shouldRecycleBefore(39), false);
+  assert.equal(autoPolicy.shouldRecycleBefore(40), true);
+  autoPolicy.noteFfmpegFailure();
+  assert.equal(autoPolicy.limit, 24);
+  assert.equal(autoPolicy.shouldRecycleBefore(24), true);
+}
+
+{
   const originalEnsureWebFfmpegFrame = context.ensureWebFfmpegFrame;
   const originalWarmWebFfmpegFrame = context.warmWebFfmpegFrame;
   const originalRequestWebFfmpeg = context.requestWebFfmpeg;
@@ -344,6 +360,100 @@ audio-stream-inf.m3u8
       ]
     );
     assert.equal(result.chunks.every(chunk => chunk.file.cacheUrl.includes("__fuguang_audio_cache")), true);
+  } finally {
+    context.fetch = originalFetch;
+    context.ensureWebFfmpegFrame = originalEnsureWebFfmpegFrame;
+    context.warmWebFfmpegFrame = originalWarmWebFfmpegFrame;
+    context.requestWebFfmpeg = originalRequestWebFfmpeg;
+    context.caches = originalCaches;
+    context.Response = originalResponse;
+  }
+}
+
+{
+  const originalFetch = context.fetch;
+  const originalEnsureWebFfmpegFrame = context.ensureWebFfmpegFrame;
+  const originalWarmWebFfmpegFrame = context.warmWebFfmpegFrame;
+  const originalRequestWebFfmpeg = context.requestWebFfmpeg;
+  const originalCaches = context.caches;
+  const originalResponse = context.Response;
+  const cache = new Map();
+  const fetchedUrls = [];
+  let captured = null;
+  const buffers = new Map([
+    ["https://cdn.example.test/audio/init.mp4", [1, 2]],
+    ["https://cdn.example.test/audio/seg-00001.m4s", [3, 4, 5]],
+    ["https://cdn.example.test/audio/seg-00002.m4s", [6, 7]]
+  ]);
+  context.Response = class {
+    constructor(body) {
+      this.body = body;
+    }
+
+    async arrayBuffer() {
+      return this.body;
+    }
+  };
+  context.caches = {
+    open: async () => ({
+      put: async (url, response) => cache.set(url, response),
+      match: async url => cache.get(url) || null,
+      delete: async url => cache.delete(url)
+    })
+  };
+  context.ensureWebFfmpegFrame = async () => {};
+  context.warmWebFfmpegFrame = () => {};
+  context.fetch = async url => {
+    const href = String(url);
+    fetchedUrls.push(href);
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: () => "video/iso.segment" },
+      arrayBuffer: async () => Uint8Array.from(buffers.get(href) || []).buffer
+    };
+  };
+  context.requestWebFfmpeg = async (payload, transfer) => {
+    captured = { payload, transfer };
+    return {
+      file: {
+        name: "mse-audio.mp3",
+        mime: "audio/mpeg",
+        buffer: vm.runInContext("new Uint8Array([255, 251, 1, 2]).buffer", context)
+      },
+      bytes: 4,
+      speechIntervals: [{ start: 0.5, end: 2 }],
+      speechIntervalsReliable: false
+    };
+  };
+
+  try {
+    const result = await context.extractAudioWithWebFfmpeg({
+      sourceUrl: "https://cdn.example.test/audio/seg-00001.m4s",
+      kind: "mse-fragments",
+      ext: "m4s",
+      cacheNamespace: "mse-fragment-test",
+      asrChunkSeconds: 30,
+      duration: 8,
+      mseFragments: [
+        { url: "https://cdn.example.test/audio/init.mp4", segmentType: "init" },
+        { url: "https://cdn.example.test/audio/seg-00001.m4s", segmentType: "media" },
+        { url: "https://cdn.example.test/audio/seg-00002.m4s", segmentType: "media" }
+      ]
+    });
+    assert.deepEqual(fetchedUrls, [
+      "https://cdn.example.test/audio/init.mp4",
+      "https://cdn.example.test/audio/seg-00001.m4s",
+      "https://cdn.example.test/audio/seg-00002.m4s"
+    ]);
+    assert.equal(captured.payload.type, "extract-audio");
+    assert.equal(captured.payload.file.name, "mse-fragments.m4a");
+    assert.deepEqual(Array.from(new Uint8Array(captured.payload.file.buffer)), [1, 2, 3, 4, 5, 6, 7]);
+    assert.equal(captured.transfer.length, 1);
+    assert.equal(captured.payload.options.chunkSeconds, 30);
+    assert.equal(captured.payload.options.duration, 8);
+    assert.equal(result.sourceType, "mse-fragments");
+    assert.equal(result.file.cacheUrl.includes("__fuguang_audio_cache"), true);
   } finally {
     context.fetch = originalFetch;
     context.ensureWebFfmpegFrame = originalEnsureWebFfmpegFrame;
@@ -725,6 +835,96 @@ seg-000.cmfa
 }
 
 {
+  const originalFetch = context.fetch;
+  const originalRequestWebFfmpeg = context.requestWebFfmpeg;
+  const originalReloadWebFfmpegFrame = context.reloadWebFfmpegFrame;
+  const originalCaches = context.caches;
+  const originalResponse = context.Response;
+  const requests = [];
+  const reloads = [];
+  const cache = new Map();
+  context.Response = class {
+    constructor(body) {
+      this.body = body;
+    }
+
+    async arrayBuffer() {
+      return this.body;
+    }
+  };
+  context.caches = {
+    open: async () => ({
+      put: async (url, response) => {
+        cache.set(url, response);
+      },
+      match: async url => cache.get(url) || null,
+      delete: async url => cache.delete(url)
+    })
+  };
+  context.fetch = async url => {
+    if (String(url).endsWith(".m3u8")) {
+      const lines = ["#EXTM3U", "#EXT-X-TARGETDURATION:180"];
+      for (let index = 0; index < 50; index += 1) {
+        lines.push("#EXTINF:180.000,", `seg-${String(index).padStart(3, "0")}.ts`);
+      }
+      lines.push("#EXT-X-ENDLIST");
+      return {
+        ok: true,
+        text: async () => lines.join("\n"),
+        arrayBuffer: async () => vm.runInContext("new Uint8Array([]).buffer", context),
+        headers: { get: () => "application/vnd.apple.mpegurl" }
+      };
+    }
+    return {
+      ok: true,
+      text: async () => "",
+      arrayBuffer: async () => vm.runInContext("new Uint8Array([1, 2, 3]).buffer", context),
+      headers: { get: () => "video/mp2t" }
+    };
+  };
+  context.reloadWebFfmpegFrame = async url => {
+    reloads.push({ url, requestsSeen: requests.length });
+  };
+  context.requestWebFfmpeg = async payload => {
+    if (payload.type === "extract-audio" && /^chunk-\d+\.mp3$/.test(String(payload.outputName || ""))) {
+      requests.push(payload.outputName);
+    }
+    return {
+      file: {
+        name: payload.outputName,
+        mime: "audio/mpeg",
+        buffer: vm.runInContext("new Uint8Array([7, 8]).buffer", context)
+      },
+      bytes: 2
+    };
+  };
+
+  try {
+    await context.extractHlsAudioWithWebFfmpeg({
+      tabId: 3,
+      jobId: "hls-recycle-before-aging-test",
+      sourceUrl: "https://cdn.example.test/long-video.m3u8",
+      cacheNamespace: "hls-recycle-before-aging-test",
+      asrChunkSeconds: 7200,
+      webFfmpegUrl: "chrome-extension://fuguang-test/web-ffmpeg/index.html",
+      longFileAsr: true
+    });
+    const chunk48RequestIndex = requests.indexOf("chunk-048.mp3");
+    assert.equal(chunk48RequestIndex, 47);
+    assert.ok(
+      reloads.some(reload => reload.requestsSeen <= chunk48RequestIndex),
+      "Web FFmpeg should be recycled before starting the 48th internal HLS chunk"
+    );
+  } finally {
+    context.fetch = originalFetch;
+    context.requestWebFfmpeg = originalRequestWebFfmpeg;
+    context.reloadWebFfmpegFrame = originalReloadWebFfmpegFrame;
+    context.caches = originalCaches;
+    context.Response = originalResponse;
+  }
+}
+
+{
   const segmentBuffer = vm.runInContext("new Uint8Array([1]).buffer", context);
   const input = context.buildHlsFfmpegInput({
     index: 2,
@@ -740,6 +940,189 @@ seg-000.cmfa
   assert.equal(input.inputKind, "playlist");
   assert.match(playlist, /#EXT-X-MAP:URI="init-2\.mp4"/);
   assert.match(playlist, /seg-000\.m4s/);
+}
+
+{
+  const originalFetch = context.fetch;
+  const originalRequestWebFfmpeg = context.requestWebFfmpeg;
+  const originalEnsureWebFfmpegFrame = context.ensureWebFfmpegFrame;
+  const originalWarmWebFfmpegFrame = context.warmWebFfmpegFrame;
+  const originalCaches = context.caches;
+  const originalResponse = context.Response;
+  const fetched = [];
+  const cache = new Map();
+  const mpdUrl = "https://cdn.example.test/manifest/generic.mpd";
+  const audioInit = "https://cdn.example.test/manifest/audio/init.mp4";
+  const audioSeg1 = "https://cdn.example.test/manifest/audio/seg-1.m4s";
+  const audioSeg2 = "https://cdn.example.test/manifest/audio/seg-2.m4s";
+  const videoSeg1 = "https://cdn.example.test/manifest/video/seg-1.m4s";
+  context.Response = class {
+    constructor(body) {
+      this.body = body;
+    }
+
+    async arrayBuffer() {
+      return this.body;
+    }
+  };
+  context.caches = {
+    open: async () => ({
+      put: async (url, response) => cache.set(url, response),
+      match: async url => cache.get(url) || null,
+      delete: async url => cache.delete(url)
+    })
+  };
+  context.ensureWebFfmpegFrame = async () => {};
+  context.warmWebFfmpegFrame = () => {};
+  context.fetch = async url => {
+    const href = String(url);
+    fetched.push(href);
+    if (href === mpdUrl) {
+      return {
+        ok: true,
+        status: 200,
+        text: async () => `<?xml version="1.0" encoding="UTF-8"?>
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" mediaPresentationDuration="PT10S" type="static">
+  <Period>
+    <AdaptationSet mimeType="audio/mp4" contentType="audio" codecs="mp4a.40.2">
+      <Representation id="audio-128k" bandwidth="128000">
+        <BaseURL>audio/</BaseURL>
+        <SegmentTemplate initialization="init.mp4" media="seg-$Number$.m4s" startNumber="1" timescale="1000">
+          <SegmentTimeline>
+            <S d="5000" r="1" />
+          </SegmentTimeline>
+        </SegmentTemplate>
+      </Representation>
+    </AdaptationSet>
+    <AdaptationSet mimeType="video/mp4" contentType="video" codecs="avc1.64001f">
+      <Representation id="video-720p" bandwidth="1200000">
+        <BaseURL>video/</BaseURL>
+        <SegmentTemplate initialization="init.mp4" media="seg-$Number$.m4s" startNumber="1" timescale="1000">
+          <SegmentTimeline>
+            <S d="5000" r="1" />
+          </SegmentTimeline>
+        </SegmentTemplate>
+      </Representation>
+    </AdaptationSet>
+  </Period>
+</MPD>`,
+        arrayBuffer: async () => vm.runInContext("new Uint8Array([]).buffer", context),
+        headers: { get: () => "application/dash+xml" }
+      };
+    }
+    return {
+      ok: true,
+      status: 200,
+      text: async () => "",
+      arrayBuffer: async () => vm.runInContext("new Uint8Array([1, 2, 3]).buffer", context),
+      headers: { get: () => "video/mp4" }
+    };
+  };
+  context.requestWebFfmpeg = async payload => ({
+    file: {
+      name: payload.outputName,
+      mime: "audio/mpeg",
+      buffer: vm.runInContext("new Uint8Array([7, 8]).buffer", context)
+    },
+    bytes: 2
+  });
+
+  try {
+    const result = await context.extractAudioWithWebFfmpeg({
+      tabId: 9,
+      jobId: "dash-audio-extraction-test",
+      sourceUrl: mpdUrl,
+      kind: "dash",
+      ext: "mpd",
+      cacheNamespace: "dash-audio-extraction-test",
+      asrChunkSeconds: 900,
+      duration: 10
+    });
+
+    assert.equal(result.sourceType, "dash");
+  } finally {
+    context.fetch = originalFetch;
+    context.requestWebFfmpeg = originalRequestWebFfmpeg;
+    context.ensureWebFfmpegFrame = originalEnsureWebFfmpegFrame;
+    context.warmWebFfmpegFrame = originalWarmWebFfmpegFrame;
+    context.caches = originalCaches;
+    context.Response = originalResponse;
+  }
+
+  assert.ok(fetched.includes(audioInit), "DASH audio init segment should be downloaded");
+  assert.ok(fetched.includes(audioSeg1), "first DASH audio media segment should be downloaded");
+  assert.ok(fetched.includes(audioSeg2), "second DASH audio media segment should be downloaded");
+  assert.equal(fetched.includes(videoSeg1), false, "DASH video segments must not be downloaded for ASR");
+}
+
+{
+  const originalFetch = context.fetch;
+  const originalRequestWebFfmpeg = context.requestWebFfmpeg;
+  const originalEnsureWebFfmpegFrame = context.ensureWebFfmpegFrame;
+  const originalWarmWebFfmpegFrame = context.warmWebFfmpegFrame;
+  const mpdUrl = "https://cdn.example.test/manifest/webm-opus.mpd";
+  let ffmpegRequested = false;
+  context.ensureWebFfmpegFrame = async () => {};
+  context.warmWebFfmpegFrame = () => {};
+  context.fetch = async url => {
+    const href = String(url);
+    if (href === mpdUrl) {
+      return {
+        ok: true,
+        status: 200,
+        text: async () => `<?xml version="1.0" encoding="UTF-8"?>
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" mediaPresentationDuration="PT10S" type="static">
+  <Period>
+    <AdaptationSet mimeType="audio/webm" contentType="audio" codecs="opus">
+      <Representation id="audio-opus" bandwidth="96000">
+        <BaseURL>audio/</BaseURL>
+        <SegmentTemplate initialization="init.webm" media="seg-$Number$.webm" startNumber="1" timescale="1000">
+          <SegmentTimeline>
+            <S d="5000" r="1" />
+          </SegmentTimeline>
+        </SegmentTemplate>
+      </Representation>
+    </AdaptationSet>
+  </Period>
+</MPD>`,
+        arrayBuffer: async () => vm.runInContext("new Uint8Array([]).buffer", context),
+        headers: { get: () => "application/dash+xml" }
+      };
+    }
+    return {
+      ok: true,
+      status: 200,
+      text: async () => "",
+      arrayBuffer: async () => vm.runInContext("new Uint8Array([1, 2, 3]).buffer", context),
+      headers: { get: () => "audio/webm" }
+    };
+  };
+  context.requestWebFfmpeg = async () => {
+    ffmpegRequested = true;
+    throw new Error("Web FFmpeg should not receive DASH WebM/Opus fragments");
+  };
+
+  try {
+    await assert.rejects(
+      context.extractAudioWithWebFfmpeg({
+        tabId: 9,
+        jobId: "dash-webm-opus-rejected-test",
+        sourceUrl: mpdUrl,
+        kind: "dash",
+        ext: "mpd",
+        cacheNamespace: "dash-webm-opus-rejected-test",
+        asrChunkSeconds: 900,
+        duration: 10
+      }),
+      /DASH WebM\/Opus/
+    );
+    assert.equal(ffmpegRequested, false);
+  } finally {
+    context.fetch = originalFetch;
+    context.requestWebFfmpeg = originalRequestWebFfmpeg;
+    context.ensureWebFfmpegFrame = originalEnsureWebFfmpegFrame;
+    context.warmWebFfmpegFrame = originalWarmWebFfmpegFrame;
+  }
 }
 
 {
@@ -1985,6 +2368,211 @@ ${videoSegment}
   assert.ok(fetched.includes(pageMaster), "X page HTML master playlist should be used when same-name audio companion is absent");
   assert.ok(fetched.includes(audioSegment), "audio companion segment should be downloaded for extraction");
   assert.equal(fetched.includes(videoSegment), false, "video-only HLS segment should not be fed to Web FFmpeg for ASR");
+}
+
+{
+  const originalFetch = context.fetch;
+  const originalRequestWebFfmpeg = context.requestWebFfmpeg;
+  const originalCaches = context.caches;
+  const originalResponse = context.Response;
+  const originalSendMessage = chrome.runtime.sendMessage;
+  const fetched = [];
+  const cache = new Map();
+  const sourceVideo = "https://video.twimg.com/amplify_video/2059183692569071878/pl/avc1/540x540/qaXSEeWSgekNJ8wE.m3u8?tag=16";
+  const guessedAudio128 = "https://video.twimg.com/amplify_video/2059183692569071878/pl/mp4a/128000/qaXSEeWSgekNJ8wE.m3u8?tag=16";
+  const fallbackAudio64 = "https://video.twimg.com/amplify_video/2059183692569071878/pl/mp4a/64000/qaXSEeWSgekNJ8wE.m3u8?tag=16";
+  const videoSegment = "https://video.twimg.com/amplify_video/2059183692569071878/pl/avc1/540x540/video-00001.m4s";
+  const audioSegment = "https://video.twimg.com/amplify_video/2059183692569071878/pl/mp4a/64000/audio-00001.m4s";
+  context.Response = class {
+    constructor(body) {
+      this.body = body;
+    }
+
+    async arrayBuffer() {
+      return this.body;
+    }
+  };
+  context.caches = {
+    open: async () => ({
+      put: async (url, response) => cache.set(url, response),
+      match: async url => cache.get(url) || null,
+      delete: async url => cache.delete(url)
+    })
+  };
+  context.fetch = async url => {
+    const href = String(url);
+    fetched.push(href);
+    if (href === guessedAudio128) {
+      return {
+        ok: false,
+        status: 404,
+        text: async () => "",
+        arrayBuffer: async () => vm.runInContext("new Uint8Array([]).buffer", context),
+        headers: { get: () => "text/plain" }
+      };
+    }
+    if (href === fallbackAudio64) {
+      return {
+        ok: true,
+        status: 200,
+        text: async () => `#EXTM3U
+#EXT-X-MAP:URI="/amplify_video/2059183692569071878/pl/mp4a/64000/audio-init.mp4"
+#EXTINF:4.000,
+${audioSegment}
+#EXT-X-ENDLIST`,
+        arrayBuffer: async () => vm.runInContext("new Uint8Array([]).buffer", context),
+        headers: { get: () => "application/vnd.apple.mpegurl" }
+      };
+    }
+    if (href === sourceVideo) {
+      return {
+        ok: true,
+        status: 200,
+        text: async () => `#EXTM3U
+#EXT-X-MAP:URI="/amplify_video/2059183692569071878/pl/avc1/540x540/video-init.mp4"
+#EXTINF:4.000,
+${videoSegment}
+#EXT-X-ENDLIST`,
+        arrayBuffer: async () => vm.runInContext("new Uint8Array([]).buffer", context),
+        headers: { get: () => "application/vnd.apple.mpegurl" }
+      };
+    }
+    return {
+      ok: true,
+      status: 200,
+      text: async () => "",
+      arrayBuffer: async () => vm.runInContext("new Uint8Array([1, 2, 3]).buffer", context),
+      headers: { get: () => "video/mp4" }
+    };
+  };
+  context.requestWebFfmpeg = async payload => ({
+    file: {
+      name: payload.outputName,
+      mime: "audio/mpeg",
+      buffer: vm.runInContext("new Uint8Array([7, 8]).buffer", context)
+    },
+    bytes: 2
+  });
+  chrome.runtime.sendMessage = async message => ({ domains: testDomainsFromUrls(message.urls) });
+
+  try {
+    await context.extractHlsAudioWithWebFfmpeg({
+      tabId: 6,
+      jobId: "x-video-twimg-derived-audio-404-fallback-test",
+      sourceUrl: guessedAudio128,
+      originalSourceUrl: sourceVideo,
+      hlsAudioCandidateUrls: [guessedAudio128, fallbackAudio64],
+      pageUrl: "https://x.com/jaynitx/status/2059183692569071878",
+      cacheNamespace: "x-video-twimg-derived-audio-404-fallback-test",
+      asrChunkSeconds: 900,
+      duration: 4
+    });
+  } finally {
+    context.fetch = originalFetch;
+    context.requestWebFfmpeg = originalRequestWebFfmpeg;
+    context.caches = originalCaches;
+    context.Response = originalResponse;
+    chrome.runtime.sendMessage = originalSendMessage;
+  }
+
+  assert.ok(fetched.includes(fallbackAudio64), "the next X audio sibling candidate should be tried after a 404");
+  assert.ok(fetched.includes(audioSegment), "fallback audio segment should be downloaded for extraction");
+  assert.equal(fetched.includes(videoSegment), false, "video-only original HLS segment should not be fed to Web FFmpeg when an audio sibling works");
+}
+
+{
+  const originalFetch = context.fetch;
+  const originalRequestWebFfmpeg = context.requestWebFfmpeg;
+  const originalCaches = context.caches;
+  const originalResponse = context.Response;
+  const originalSendMessage = chrome.runtime.sendMessage;
+  const fetched = [];
+  const cache = new Map();
+  const sourceVideo = "https://video.twimg.com/amplify_video/2059183692569071878/pl/avc1/540x540/qaXSEeWSgekNJ8wE.m3u8?tag=16";
+  const missingAudio128 = "https://video.twimg.com/amplify_video/2059183692569071878/pl/mp4a/128000/qaXSEeWSgekNJ8wE.m3u8?tag=16";
+  const videoSegment = "https://video.twimg.com/amplify_video/2059183692569071878/pl/avc1/540x540/video-00001.m4s";
+  let ffmpegCalled = false;
+  context.Response = class {
+    constructor(body) {
+      this.body = body;
+    }
+
+    async arrayBuffer() {
+      return this.body;
+    }
+  };
+  context.caches = {
+    open: async () => ({
+      put: async (url, response) => cache.set(url, response),
+      match: async url => cache.get(url) || null,
+      delete: async url => cache.delete(url)
+    })
+  };
+  context.fetch = async url => {
+    const href = String(url);
+    fetched.push(href);
+    if (href === missingAudio128) {
+      return {
+        ok: false,
+        status: 404,
+        text: async () => "",
+        arrayBuffer: async () => vm.runInContext("new Uint8Array([]).buffer", context),
+        headers: { get: () => "text/plain" }
+      };
+    }
+    if (href === sourceVideo) {
+      return {
+        ok: true,
+        status: 200,
+        text: async () => `#EXTM3U
+#EXT-X-MAP:URI="/amplify_video/2059183692569071878/pl/avc1/540x540/video-init.mp4"
+#EXTINF:4.000,
+${videoSegment}
+#EXT-X-ENDLIST`,
+        arrayBuffer: async () => vm.runInContext("new Uint8Array([]).buffer", context),
+        headers: { get: () => "application/vnd.apple.mpegurl" }
+      };
+    }
+    return {
+      ok: true,
+      status: 200,
+      text: async () => "",
+      arrayBuffer: async () => vm.runInContext("new Uint8Array([1, 2, 3]).buffer", context),
+      headers: { get: () => "video/mp4" }
+    };
+  };
+  context.requestWebFfmpeg = async () => {
+    ffmpegCalled = true;
+    throw new Error("video-only HLS should not reach FFmpeg");
+  };
+  chrome.runtime.sendMessage = async message => ({ domains: testDomainsFromUrls(message.urls) });
+
+  let errorMessage = "";
+  try {
+    await context.extractHlsAudioWithWebFfmpeg({
+      tabId: 7,
+      jobId: "x-video-twimg-video-only-preflight-test",
+      sourceUrl: missingAudio128,
+      originalSourceUrl: sourceVideo,
+      hlsAudioCandidateUrls: [missingAudio128],
+      pageUrl: "https://x.com/jaynitx/status/2059183692569071878",
+      cacheNamespace: "x-video-twimg-video-only-preflight-test",
+      asrChunkSeconds: 900,
+      duration: 4
+    });
+  } catch (error) {
+    errorMessage = error.message || String(error);
+  } finally {
+    context.fetch = originalFetch;
+    context.requestWebFfmpeg = originalRequestWebFfmpeg;
+    context.caches = originalCaches;
+    context.Response = originalResponse;
+    chrome.runtime.sendMessage = originalSendMessage;
+  }
+
+  assert.match(errorMessage, /没有可用音频轨/);
+  assert.equal(ffmpegCalled, false, "video-only HLS must be rejected before Web FFmpeg runs");
+  assert.equal(fetched.includes(videoSegment), false, "video-only HLS segments should not be downloaded for ASR preflight");
 }
 
 {

@@ -26,17 +26,21 @@ Languages: [简体中文](README.md) · [English](README-en.md)
 
 ## 演示截图
 
-![设置界面 哔哩哔哩](docs/assets/readme/bilibili-settings-demo.jpg)
+![哔哩哔哩视频 / 配置界面](docs/assets/readme/bilibili-settings-demo.jpg)
 
-*设置界面 哔哩哔哩*
+*哔哩哔哩视频 / 配置界面*
 
-![任务界面 TED](docs/assets/readme/ted-task-demo.jpg)
+![TED视频 / 主界面](docs/assets/readme/ted-task-demo.jpg)
 
-*任务界面 TED*
+*TED视频 / 主界面*
 
-![全屏播放 ニコニコ動画](docs/assets/readme/niconico-fullscreen-demo.jpg)
+![X / 完整字幕](docs/assets/readme/x-full-subtitles-demo.jpg)
 
-*全屏播放 ニコニコ動画*
+*X / 完整字幕*
+
+![ニコニコ動画 / 全屏播放](docs/assets/readme/niconico-fullscreen-demo.jpg)
+
+*ニコニコ動画 / 全屏播放*
 
 ## 安装
 

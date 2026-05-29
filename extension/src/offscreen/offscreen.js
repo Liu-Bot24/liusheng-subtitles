@@ -23,13 +23,46 @@ const WEB_FFMPEG_ASR_LOGICAL_CHUNK_MAX_SECONDS = 30 * 60;
 const WEB_FFMPEG_ASR_LONG_FILE_CHUNK_MAX_SECONDS = 2 * 60 * 60;
 const WEB_FFMPEG_ASR_CONTEXT_OVERLAP_SECONDS = 2;
 const WEB_FFMPEG_ASR_VAD_SPLIT_MIN_SILENCE_SECONDS = 2;
-const WEB_FFMPEG_WORKER_RECYCLE_INTERNAL_CHUNKS = 48;
+const WEB_FFMPEG_PERFORMANCE_MODES = ["auto", "stable", "fast"];
+const WEB_FFMPEG_RECYCLE_LIMITS = {
+  auto: 40,
+  stable: 24,
+  fast: 64
+};
 const WEB_FFMPEG_READY_TIMEOUT_MS = 30 * 1000;
 const WEB_FFMPEG_IDLE_TIMEOUT_MS = 120 * 1000;
 const WEB_FFMPEG_ABSOLUTE_TIMEOUT_MS = 30 * 60 * 1000;
 let webFfmpegFrame = null;
 let webFfmpegReady = null;
 const webFfmpegPending = new Map();
+
+function normalizeWebFfmpegPerformanceMode(value) {
+  return WEB_FFMPEG_PERFORMANCE_MODES.includes(value) ? value : "auto";
+}
+
+function hlsWebFfmpegRecycleBaseLimit(mode) {
+  return WEB_FFMPEG_RECYCLE_LIMITS[normalizeWebFfmpegPerformanceMode(mode)];
+}
+
+function createHlsWebFfmpegRecyclePolicy(mode) {
+  const normalizedMode = normalizeWebFfmpegPerformanceMode(mode);
+  return {
+    mode: normalizedMode,
+    limit: hlsWebFfmpegRecycleBaseLimit(normalizedMode),
+    lastRecycleIndex: 0,
+    shouldRecycleBefore(index) {
+      return index > 0 && index - this.lastRecycleIndex >= this.limit;
+    },
+    noteRecycle(index) {
+      this.lastRecycleIndex = index;
+    },
+    noteFfmpegFailure() {
+      if (this.mode === "auto") {
+        this.limit = WEB_FFMPEG_RECYCLE_LIMITS.stable;
+      }
+    }
+  };
+}
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === MESSAGE.OFFSCREEN_WEB_FFMPEG_EXTRACT_AUDIO) {
@@ -100,6 +133,12 @@ async function extractAudioWithWebFfmpeg(message) {
   if (isHlsSource(message)) {
     return extractHlsAudioWithWebFfmpeg(message);
   }
+  if (isDashSource(message)) {
+    return extractDashAudioWithWebFfmpeg(message);
+  }
+  if (isMseFragmentSource(message)) {
+    return extractMseFragmentAudioWithWebFfmpeg(message);
+  }
   reportWebFfmpegExtractionProgress(message, {
     phase: "download",
     percent: 5,
@@ -139,6 +178,180 @@ async function extractAudioWithWebFfmpeg(message) {
     });
   });
   return persistWebFfmpegAudioResult(result, message.cacheNamespace || id);
+}
+
+async function extractMseFragmentAudioWithWebFfmpeg(message) {
+  const fragments = normalizeMseMessageFragments(message.mseFragments);
+  const hasInit = fragments.some(fragment => fragment.segmentType === "init");
+  const mediaFragments = fragments.filter(fragment => fragment.segmentType !== "init");
+  if (!hasInit || !mediaFragments.length) {
+    throw new Error("MSE/fMP4 媒体源缺少初始化片段或媒体片段，无法装配音频。");
+  }
+  reportWebFfmpegExtractionProgress(message, {
+    phase: "download",
+    percent: 5,
+    totalSegments: fragments.length,
+    message: "正在下载 MSE/fMP4 音频片段"
+  });
+  const fetchOptions = buildMediaFetchOptions(message);
+  await updateMediaHeaderRuleDomains(message, fragments.map(fragment => fragment.url));
+  const downloaded = await downloadMseFragmentBuffers(fragments, fetchOptions, message);
+  const inputBuffer = concatenateArrayBuffers(downloaded.map(item => item.buffer));
+  if (!inputBuffer.byteLength) {
+    throw new Error("MSE/fMP4 片段装配结果为空。");
+  }
+  reportWebFfmpegExtractionProgress(message, {
+    phase: "ffmpeg",
+    percent: 50,
+    downloadedSegments: downloaded.length,
+    totalSegments: fragments.length,
+    message: "MSE/fMP4 片段已装配，正在提取音频"
+  });
+  const id = `extract-mse-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const result = await requestWebFfmpeg({
+    app: WEB_FFMPEG_APP,
+    type: "extract-audio",
+    id,
+    file: {
+      name: "mse-fragments.m4a",
+      mime: "audio/mp4",
+      buffer: inputBuffer
+    },
+    options: {
+      format: "mp3",
+      chunkSeconds: message.asrChunkSeconds || message.chunkSeconds,
+      overlapSeconds: WEB_FFMPEG_ASR_CONTEXT_OVERLAP_SECONDS,
+      duration: message.duration
+    }
+  }, [inputBuffer], progress => {
+    reportWebFfmpegExtractionProgress(message, {
+      phase: "ffmpeg",
+      percent: 50 + (Number(progress.percent || 0) * 0.49),
+      downloadedSegments: downloaded.length,
+      totalSegments: fragments.length,
+      message: progress.message
+        ? `正在用 Web FFmpeg 提取 MSE/fMP4 音频：${progress.message}`
+        : "正在用 Web FFmpeg 提取 MSE/fMP4 音频"
+    });
+  });
+  const persisted = await persistWebFfmpegAudioResult(result, message.cacheNamespace || id);
+  return {
+    ...persisted,
+    duration: pickFiniteNumber(persisted.duration, message.duration),
+    sourceType: "mse-fragments"
+  };
+}
+
+async function extractDashAudioWithWebFfmpeg(message) {
+  const sourceUrl = String(message.sourceUrl || "");
+  const fetchOptions = buildMediaFetchOptions(message);
+  let fragments = normalizeMseMessageFragments(message.dashFragments);
+  let duration = pickFiniteNumber(message.duration, 0);
+  if (!fragments.length) {
+    reportWebFfmpegExtractionProgress(message, {
+      phase: "playlist",
+      percent: 3,
+      message: "正在解析 DASH 音频清单"
+    });
+    const text = await fetchText(sourceUrl, fetchOptions, "DASH MPD 下载失败");
+    const dashAudio = selectDashAudioFragments(text, sourceUrl, duration);
+    fragments = dashAudio.fragments;
+    duration = pickFiniteNumber(dashAudio.duration, duration);
+  }
+  if (dashFragmentsContainUnsupportedWebmOpus(fragments)) {
+    throw new Error("DASH WebM/Opus fragments need a dedicated reconstruction path before ASR.");
+  }
+  const hasInit = fragments.some(fragment => fragment.segmentType === "init");
+  const mediaFragments = fragments.filter(fragment => fragment.segmentType !== "init");
+  if (!hasInit || !mediaFragments.length) {
+    throw new Error("DASH 音频轨缺少初始化片段或媒体片段，无法装配音频。");
+  }
+  reportWebFfmpegExtractionProgress(message, {
+    phase: "download",
+    percent: 5,
+    totalSegments: fragments.length,
+    message: "正在下载 DASH 音频片段"
+  });
+  await updateMediaHeaderRuleDomains(message, [sourceUrl, ...fragments.map(fragment => fragment.url)]);
+  const downloaded = await downloadMseFragmentBuffers(fragments, fetchOptions, message);
+  const inputBuffer = concatenateArrayBuffers(downloaded.map(item => item.buffer));
+  if (!inputBuffer.byteLength) {
+    throw new Error("DASH 音频片段装配结果为空。");
+  }
+  reportWebFfmpegExtractionProgress(message, {
+    phase: "ffmpeg",
+    percent: 50,
+    downloadedSegments: downloaded.length,
+    totalSegments: fragments.length,
+    message: "DASH 音频片段已装配，正在提取音频"
+  });
+  const id = `extract-dash-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const result = await requestWebFfmpeg({
+    app: WEB_FFMPEG_APP,
+    type: "extract-audio",
+    id,
+    file: {
+      name: "dash-audio.m4a",
+      mime: "audio/mp4",
+      buffer: inputBuffer
+    },
+    options: {
+      format: "mp3",
+      chunkSeconds: message.asrChunkSeconds || message.chunkSeconds,
+      overlapSeconds: WEB_FFMPEG_ASR_CONTEXT_OVERLAP_SECONDS,
+      duration
+    }
+  }, [inputBuffer], progress => {
+    reportWebFfmpegExtractionProgress(message, {
+      phase: "ffmpeg",
+      percent: 50 + (Number(progress.percent || 0) * 0.49),
+      downloadedSegments: downloaded.length,
+      totalSegments: fragments.length,
+      message: progress.message
+        ? `正在用 Web FFmpeg 提取 DASH 音频：${progress.message}`
+        : "正在用 Web FFmpeg 提取 DASH 音频"
+    });
+  });
+  const persisted = await persistWebFfmpegAudioResult(result, message.cacheNamespace || id);
+  return {
+    ...persisted,
+    duration: pickFiniteNumber(persisted.duration, duration),
+    sourceType: "dash"
+  };
+}
+
+async function downloadMseFragmentBuffers(fragments, fetchOptions, message) {
+  const results = new Array(fragments.length);
+  let nextIndex = 0;
+  let completed = 0;
+  const workerCount = Math.min(
+    WEB_FFMPEG_HLS_SEGMENT_DOWNLOAD_CONCURRENCY,
+    Math.max(1, fragments.length)
+  );
+  async function worker() {
+    while (nextIndex < fragments.length) {
+      const itemIndex = nextIndex;
+      nextIndex += 1;
+      const fragment = fragments[itemIndex];
+      const buffer = await fetchBinary(
+        fragment.url,
+        fetchOptions,
+        fragment.byteRange,
+        `MSE/fMP4 片段下载失败（第 ${itemIndex + 1}/${fragments.length} 个）`
+      );
+      results[itemIndex] = { fragment, buffer };
+      completed += 1;
+      reportWebFfmpegExtractionProgress(message, {
+        phase: "download",
+        percent: 5 + (completed / Math.max(1, fragments.length)) * 40,
+        downloadedSegments: completed,
+        totalSegments: fragments.length,
+        message: `正在下载 MSE/fMP4 音频片段 ${completed}/${fragments.length}`
+      });
+    }
+  }
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  return results;
 }
 
 async function collectSpeechAudioWithWebFfmpeg(message) {
@@ -191,20 +404,14 @@ async function extractHlsAudioWithWebFfmpeg(message) {
   });
   let playlistUrl = message.sourceUrl;
   let playlistText = "";
-  await updateMediaHeaderRuleDomains(message, [
-    playlistUrl,
-    ...buildLikelyAudioCompanionPlaylistUrls(playlistUrl)
-  ]);
-  const companion = await fetchLikelyAudioCompanionPlaylist(playlistUrl, fetchOptions) ||
-    await fetchVideoTwimgPageMasterPlaylist(playlistUrl, message.pageUrl, fetchOptions);
-  if (companion) {
-    playlistUrl = companion.url;
-    playlistText = companion.text;
-  } else {
-    playlistText = await fetchText(playlistUrl, fetchOptions);
-  }
+  const initialPlaylist = await resolveInitialHlsPlaylist(message, fetchOptions);
+  playlistUrl = initialPlaylist.url;
+  playlistText = initialPlaylist.text;
   const master = parseHlsMasterPlaylist(playlistText, playlistUrl);
   if (master.variants.length) {
+    if (master.variants.every(hlsVariantIsClearlyVideoOnly)) {
+      throw new Error("当前 HLS master 只包含纯视频变体，没有可用音频轨；请刷新媒体源或选择包含音频的来源。");
+    }
     const variant = chooseHlsVariantForAsr(master.variants);
     await updateMediaHeaderRuleDomains(message, master.variants.map(item => item.url));
     playlistUrl = variant.url;
@@ -214,6 +421,9 @@ async function extractHlsAudioWithWebFfmpeg(message) {
     parseHlsMediaPlaylist(playlistText, playlistUrl),
     pickFiniteNumber(message.duration, 0)
   );
+  if (hlsPlaylistIsClearlyVideoOnly(playlistUrl, playlistText, message)) {
+    throw new Error("当前 HLS 播放列表是纯视频轨，没有可用音频轨；已尝试音频候选但未找到可用来源。");
+  }
   await updateMediaHeaderRuleDomains(message, hlsMediaHeaderRuleUrls(media));
   if (media.unsupportedEncryption) {
     throw new Error(`当前 HLS 使用 ${media.unsupportedEncryption} 加密，浏览器内 Web FFmpeg 暂不能预处理。`);
@@ -243,6 +453,7 @@ async function extractHlsAudioWithWebFfmpeg(message) {
   let downloadedSegments = 0;
   const downloadedSegmentIds = new Set();
   let nextGroupDownload = null;
+  const recyclePolicy = createHlsWebFfmpegRecyclePolicy(message.webFfmpegPerformance);
   const startGroupDownload = (group, index) => {
     reportWebFfmpegExtractionProgress(message, {
       phase: "download",
@@ -279,7 +490,7 @@ async function extractHlsAudioWithWebFfmpeg(message) {
   };
   for (let index = 0; index < groups.length; index += 1) {
     const group = groups[index];
-    if (message.webFfmpegUrl && index > 0 && index % WEB_FFMPEG_WORKER_RECYCLE_INTERNAL_CHUNKS === 0) {
+    if (message.webFfmpegUrl && recyclePolicy.shouldRecycleBefore(index)) {
       reportWebFfmpegExtractionProgress(message, {
         phase: "ffmpeg",
         percent: hlsExtractionPercent(index, 0, groups.length),
@@ -291,6 +502,7 @@ async function extractHlsAudioWithWebFfmpeg(message) {
         message: `正在重置 Web FFmpeg 工作区，准备处理第 ${index + 1}/${groups.length} 个内部媒体切片`
       });
       await reloadWebFfmpegFrame(message.webFfmpegUrl);
+      recyclePolicy.noteRecycle(index);
     }
     const groupDownload = nextGroupDownload || startGroupDownload(group, index);
     nextGroupDownload = null;
@@ -369,6 +581,7 @@ async function extractHlsAudioWithWebFfmpeg(message) {
         if (!message.webFfmpegUrl) {
           throw error;
         }
+        recyclePolicy.noteFfmpegFailure();
         reportWebFfmpegExtractionProgress(message, {
           phase: "ffmpeg",
           percent: hlsExtractionPercent(index, 0.9, groups.length),
@@ -381,6 +594,7 @@ async function extractHlsAudioWithWebFfmpeg(message) {
         });
         try {
           await reloadWebFfmpegFrame(message.webFfmpegUrl);
+          recyclePolicy.noteRecycle(index);
           const retryDownload = await downloadHlsGroupResources(group, fetchOptions, index);
           const retryPlaylistSegments = [];
           const retryFiles = [...retryDownload.files];
@@ -415,6 +629,7 @@ async function extractHlsAudioWithWebFfmpeg(message) {
           throw new Error(`${retryError.message || retryError}（已重置 Web FFmpeg 后重试，仍然失败；原错误：${error.message || error}）`);
         }
       } else {
+        recyclePolicy.noteFfmpegFailure();
         reportWebFfmpegExtractionProgress(message, {
           phase: "ffmpeg",
           percent: hlsExtractionPercent(index, 0.9, groups.length),
@@ -439,6 +654,7 @@ async function extractHlsAudioWithWebFfmpeg(message) {
         try {
           if (message.webFfmpegUrl) {
             await reloadWebFfmpegFrame(message.webFfmpegUrl);
+            recyclePolicy.noteRecycle(index);
           }
           result = await runHlsAudioExtraction(message, {
             index,
@@ -1046,6 +1262,348 @@ function isHlsSource(message) {
   );
 }
 
+function isDashSource(message) {
+  const url = String(message.sourceUrl || "").toLowerCase();
+  const mime = String(message.mime || "").toLowerCase();
+  return (
+    message.kind === "dash" ||
+    message.ext === "mpd" ||
+    /\.mpd(?:$|[?#])/i.test(url) ||
+    mime.includes("dash+xml")
+  );
+}
+
+function isMseFragmentSource(message) {
+  return message.kind === "mse-fragments" || message.ffmpegInputType === "mse-fragments";
+}
+
+function normalizeMseMessageFragments(fragments) {
+  return (Array.isArray(fragments) ? fragments : [])
+    .map(fragment => ({
+      url: String(fragment?.url || ""),
+      name: String(fragment?.name || fragment?.filename || ""),
+      segmentType: String(fragment?.segmentType || "").toLowerCase() === "init" ? "init" : "media",
+      duration: Number(fragment?.duration || 0) || 0,
+      start: Number(fragment?.start || 0) || 0,
+      end: Number(fragment?.end || 0) || 0,
+      byteRange: normalizeByteRange(fragment?.byteRange)
+    }))
+    .filter(fragment => /^https?:\/\//i.test(fragment.url));
+}
+
+function selectDashAudioFragments(text, baseUrl, fallbackDuration = 0) {
+  const parsed = parseDashManifest(text, baseUrl);
+  const representations = parsed.adaptationSets
+    .flatMap(set => set.representations)
+    .filter(item => item.role === "audio")
+    .sort((left, right) =>
+      Math.abs((left.bandwidth || 128000) - 128000) -
+      Math.abs((right.bandwidth || 128000) - 128000)
+    );
+  const representation = representations.find(item => !isUnsupportedDashWebmOpusRepresentation(item)) || representations[0];
+  if (!representation) {
+    throw new Error("DASH MPD 中没有可用音频轨。");
+  }
+  if (isUnsupportedDashWebmOpusRepresentation(representation)) {
+    throw new Error("DASH WebM/Opus fragments need a dedicated reconstruction path before ASR.");
+  }
+  const duration = pickFiniteNumber(parsed.duration, fallbackDuration);
+  const fragments = expandDashRepresentationFragments(representation, duration);
+  if (!fragments.some(fragment => fragment.segmentType === "init") ||
+      !fragments.some(fragment => fragment.segmentType === "media")) {
+    throw new Error("DASH 音频轨没有可装配的 init+media 分片。");
+  }
+  return { fragments, duration };
+}
+
+function dashFragmentsContainUnsupportedWebmOpus(fragments = []) {
+  return (Array.isArray(fragments) ? fragments : []).some(fragment => {
+    const text = `${fragment?.url || ""} ${fragment?.name || ""}`.toLowerCase();
+    const mp4Container = /\.(?:mp4|m4a|m4s|cmf|cmfa|cmfv)(?:$|[?#])/i.test(text);
+    const webmOrOggContainer = /\.(?:webm|weba|opus|ogg|oga)(?:$|[?#])/i.test(text);
+    return webmOrOggContainer && !mp4Container;
+  });
+}
+
+function isUnsupportedDashWebmOpusRepresentation(representation = {}) {
+  return dashRepresentationContainerFamily(representation) === "webm-ogg";
+}
+
+function dashRepresentationContainerFamily(representation = {}) {
+  const template = representation.segmentTemplate || {};
+  const text = [
+    representation.mimeType,
+    representation.codecs,
+    representation.baseUrl,
+    template.initialization,
+    template.media
+  ].map(value => String(value || "").toLowerCase()).join(" ");
+  const mp4Container = /(?:mp4|m4a|m4s|cmf|cmfa|cmfv|iso\.segment)/.test(text);
+  const webmOrOggContainer = /(?:webm|weba|ogg|oga)/.test(text) ||
+    (!mp4Container && /(?:^|[\s,])opus(?:[\s,]|$)/.test(text));
+  if (webmOrOggContainer && !mp4Container) {
+    return "webm-ogg";
+  }
+  if (mp4Container) {
+    return "mp4";
+  }
+  return "unknown";
+}
+
+function parseDashManifest(text, baseUrl = "") {
+  const duration = parseDashIsoDuration(matchDashAttr(text, "mediaPresentationDuration"));
+  const adaptationSets = [];
+  for (const adaptationBlock of matchDashElements(text, "AdaptationSet")) {
+    const adaptationAttrs = parseDashXmlAttributes(adaptationBlock.open);
+    const adaptationBaseUrl = firstDashElementText(adaptationBlock.body, "BaseURL") || "";
+    const contentType = String(adaptationAttrs.contentType || "").toLowerCase();
+    const mimeType = String(adaptationAttrs.mimeType || "").toLowerCase();
+    const role = inferDashRole({ contentType, mimeType, codecs: adaptationAttrs.codecs });
+    const representations = [];
+    for (const representationBlock of matchDashElements(adaptationBlock.body, "Representation")) {
+      const representationAttrs = parseDashXmlAttributes(representationBlock.open);
+      const representationBaseUrl = firstDashElementText(representationBlock.body, "BaseURL") || adaptationBaseUrl;
+      const segmentTemplate = parseDashSegmentTemplate(representationBlock.body) || parseDashSegmentTemplate(adaptationBlock.body);
+      representations.push({
+        id: representationAttrs.id || "",
+        role,
+        mimeType: representationAttrs.mimeType || adaptationAttrs.mimeType || "",
+        codecs: representationAttrs.codecs || adaptationAttrs.codecs || "",
+        bandwidth: Number(representationAttrs.bandwidth || 0) || 0,
+        baseUrl: resolveDashUrl(representationBaseUrl, baseUrl),
+        segmentTemplate
+      });
+    }
+    adaptationSets.push({ role, representations });
+  }
+  return { duration, adaptationSets };
+}
+
+function parseDashSegmentTemplate(body) {
+  const match = String(body || "").match(/<SegmentTemplate\b([^>]*)>([\s\S]*?)<\/SegmentTemplate>|<SegmentTemplate\b([^>]*)\/>/i);
+  if (!match) {
+    return null;
+  }
+  const attrs = parseDashXmlAttributes(match[1] || match[3] || "");
+  return {
+    initialization: attrs.initialization || "",
+    media: attrs.media || "",
+    startNumber: Number(attrs.startNumber || 1) || 1,
+    timescale: Number(attrs.timescale || 1) || 1,
+    duration: Number(attrs.duration || 0) || 0,
+    timeline: parseDashSegmentTimeline(match[2] || "")
+  };
+}
+
+function parseDashSegmentTimeline(body) {
+  const timeline = [];
+  const timelineMatch = String(body || "").match(/<SegmentTimeline\b[^>]*>([\s\S]*?)<\/SegmentTimeline>/i);
+  if (!timelineMatch) {
+    return timeline;
+  }
+  for (const segmentMatch of timelineMatch[1].matchAll(/<S\b([^>]*)\/?>/gi)) {
+    const attrs = parseDashXmlAttributes(segmentMatch[1]);
+    timeline.push({
+      t: Number(attrs.t || 0) || 0,
+      d: Number(attrs.d || 0) || 0,
+      r: Number(attrs.r || 0) || 0
+    });
+  }
+  return timeline;
+}
+
+function expandDashRepresentationFragments(representation = {}, fallbackDuration = 0) {
+  const template = representation.segmentTemplate || null;
+  if (!template?.initialization || !template?.media) {
+    return [];
+  }
+  const initUrl = resolveDashUrl(
+    expandDashTemplateUrl(template.initialization, representation, template.startNumber),
+    representation.baseUrl || ""
+  );
+  return [
+    {
+      url: initUrl,
+      segmentType: "init",
+      role: representation.role || "audio",
+      duration: 0,
+      start: 0,
+      end: 0
+    },
+    ...expandDashMediaSegments(representation, fallbackDuration)
+  ].filter(fragment => /^https?:\/\//i.test(fragment.url));
+}
+
+function expandDashMediaSegments(representation = {}, fallbackDuration = 0) {
+  const template = representation.segmentTemplate || null;
+  if (!template?.media) {
+    return [];
+  }
+  const timescale = Number(template.timescale || 1) || 1;
+  const startNumber = Number(template.startNumber || 1) || 1;
+  const timeline = Array.isArray(template.timeline) ? template.timeline : [];
+  const output = [];
+  if (timeline.length) {
+    let number = startNumber;
+    let cursorUnits = Number(timeline[0]?.t || 0) || 0;
+    for (let index = 0; index < timeline.length; index += 1) {
+      const item = timeline[index] || {};
+      if (Number.isFinite(Number(item.t)) && Number(item.t) > 0) {
+        cursorUnits = Number(item.t);
+      }
+      const durationUnits = Number(item.d || 0) || 0;
+      if (durationUnits <= 0) {
+        continue;
+      }
+      const repeat = normalizeDashTimelineRepeat(item.r, cursorUnits, durationUnits, timeline[index + 1], fallbackDuration, timescale);
+      for (let offset = 0; offset <= repeat; offset += 1) {
+        output.push(createDashMediaSegment(representation, template, number, cursorUnits / timescale, durationUnits / timescale));
+        number += 1;
+        cursorUnits += durationUnits;
+      }
+    }
+    return output;
+  }
+  const segmentDuration = Number(template.duration || 0) / timescale;
+  const totalDuration = Number(fallbackDuration || 0) || 0;
+  if (segmentDuration <= 0 || totalDuration <= 0) {
+    return [];
+  }
+  const count = Math.ceil(totalDuration / segmentDuration);
+  for (let index = 0; index < count; index += 1) {
+    const start = index * segmentDuration;
+    const duration = Math.min(segmentDuration, Math.max(0, totalDuration - start));
+    if (duration > 0) {
+      output.push(createDashMediaSegment(representation, template, startNumber + index, start, duration));
+    }
+  }
+  return output;
+}
+
+function normalizeDashTimelineRepeat(value, cursorUnits, durationUnits, nextItem, fallbackDuration, timescale) {
+  const repeat = Number(value || 0) || 0;
+  if (repeat >= 0) {
+    return repeat;
+  }
+  const nextStart = Number(nextItem?.t || 0) || 0;
+  if (nextStart > cursorUnits) {
+    return Math.max(0, Math.ceil((nextStart - cursorUnits) / durationUnits) - 1);
+  }
+  const fallbackUnits = Number(fallbackDuration || 0) * (Number(timescale || 1) || 1);
+  if (fallbackUnits > cursorUnits) {
+    return Math.max(0, Math.ceil((fallbackUnits - cursorUnits) / durationUnits) - 1);
+  }
+  return 0;
+}
+
+function createDashMediaSegment(representation, template, number, start, duration) {
+  return {
+    url: resolveDashUrl(
+      expandDashTemplateUrl(template.media, representation, number),
+      representation.baseUrl || ""
+    ),
+    segmentType: "media",
+    role: representation.role || "audio",
+    duration,
+    start,
+    end: start + duration
+  };
+}
+
+function expandDashTemplateUrl(value, representation = {}, number = 1) {
+  return String(value || "")
+    .replace(/\$RepresentationID\$/g, String(representation.id || ""))
+    .replace(/\$Bandwidth\$/g, String(representation.bandwidth || ""))
+    .replace(/\$Number(?:%0(\d+)d)?\$/g, (_match, width) => {
+      const text = String(number);
+      const size = Number(width || 0) || 0;
+      return size > 0 ? text.padStart(size, "0") : text;
+    });
+}
+
+function inferDashRole({ contentType = "", mimeType = "", codecs = "" } = {}) {
+  const text = `${contentType} ${mimeType} ${codecs}`.toLowerCase();
+  if (text.includes("audio") || /(?:mp4a|opus|vorbis|flac)/i.test(text)) {
+    return "audio";
+  }
+  if (text.includes("video") || /(?:avc|hvc|hev|vp8|vp9|av01)/i.test(text)) {
+    return "video";
+  }
+  return "unknown";
+}
+
+function matchDashElements(text, tagName) {
+  const items = [];
+  const pattern = new RegExp(`<${tagName}\\b([^>]*?)\\/>|<${tagName}\\b([^>]*)>([\\s\\S]*?)<\\/${tagName}>`, "gi");
+  let match;
+  while ((match = pattern.exec(String(text || "")))) {
+    items.push({ open: match[1] || match[2] || "", body: match[3] || "" });
+  }
+  return items;
+}
+
+function firstDashElementText(text, tagName) {
+  const pattern = new RegExp(`<${tagName}\\b[^>]*>([\\s\\S]*?)<\\/${tagName}>`, "i");
+  const match = String(text || "").match(pattern);
+  return match ? decodeDashXmlEntities(match[1].trim()) : "";
+}
+
+function parseDashXmlAttributes(value) {
+  const attrs = {};
+  const pattern = /([:\w-]+)\s*=\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')/g;
+  let match;
+  while ((match = pattern.exec(String(value || "")))) {
+    attrs[match[1]] = decodeDashXmlEntities(String(match[2] || "").slice(1, -1));
+  }
+  return attrs;
+}
+
+function matchDashAttr(text, attrName) {
+  const match = String(text || "").match(new RegExp(`${attrName}\\s*=\\s*["']([^"']+)["']`, "i"));
+  return match?.[1] || "";
+}
+
+function parseDashIsoDuration(value) {
+  const match = String(value || "").match(/^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?)?$/i);
+  if (!match) {
+    return 0;
+  }
+  return (Number(match[1] || 0) * 86400) +
+    (Number(match[2] || 0) * 3600) +
+    (Number(match[3] || 0) * 60) +
+    Number(match[4] || 0);
+}
+
+function resolveDashUrl(value, baseUrl = "") {
+  try {
+    return new URL(String(value || ""), baseUrl || undefined).href;
+  } catch {
+    return String(value || "");
+  }
+}
+
+function decodeDashXmlEntities(value) {
+  return String(value || "")
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">");
+}
+
+function concatenateArrayBuffers(buffers) {
+  const parts = (Array.isArray(buffers) ? buffers : [])
+    .filter(buffer => buffer && Number(buffer.byteLength) > 0);
+  const total = parts.reduce((sum, buffer) => sum + buffer.byteLength, 0);
+  const output = new Uint8Array(total);
+  let offset = 0;
+  for (const buffer of parts) {
+    output.set(new Uint8Array(buffer), offset);
+    offset += buffer.byteLength;
+  }
+  return output.buffer;
+}
+
 function isLongFileAsrMode(message = {}) {
   return message.asrMode === "long-file" || message.longFileMode === true;
 }
@@ -1121,6 +1679,77 @@ function isRetryableMediaFetchError(error) {
   }
   const message = String(error?.message || error || "").toLowerCase();
   return /failed to fetch|networkerror|load failed|network|timeout|aborted/.test(message);
+}
+
+async function resolveInitialHlsPlaylist(message, fetchOptions) {
+  const sourceUrl = String(message.sourceUrl || "");
+  const originalSourceUrl = originalHlsSourceUrl(message, sourceUrl);
+  const explicitAudioUrls = normalizeHttpUrlList(message.hlsAudioCandidateUrls);
+  const sourceCompanionUrls = buildLikelyAudioCompanionPlaylistUrls(sourceUrl);
+  const originalCompanionUrls = originalSourceUrl ? buildLikelyAudioCompanionPlaylistUrls(originalSourceUrl) : [];
+  const companionUrls = uniqueHttpUrls([
+    ...explicitAudioUrls,
+    ...sourceCompanionUrls,
+    ...originalCompanionUrls
+  ].filter(url => url !== sourceUrl));
+  await updateMediaHeaderRuleDomains(message, [
+    sourceUrl,
+    originalSourceUrl,
+    ...companionUrls
+  ]);
+  const companion = await fetchFirstUsableAudioCompanionPlaylist(companionUrls, fetchOptions) ||
+    await fetchVideoTwimgPageMasterPlaylist(sourceUrl, message.pageUrl, fetchOptions) ||
+    (originalSourceUrl ? await fetchVideoTwimgPageMasterPlaylist(originalSourceUrl, message.pageUrl, fetchOptions) : null);
+  if (companion) {
+    return companion;
+  }
+  try {
+    return { url: sourceUrl, text: await fetchText(sourceUrl, fetchOptions) };
+  } catch (error) {
+    if (!originalSourceUrl) {
+      throw error;
+    }
+    return {
+      url: originalSourceUrl,
+      text: await fetchText(originalSourceUrl, fetchOptions)
+        .catch(originalError => {
+          throw new Error(`${originalError.message || originalError}（已回退到原始 HLS 播放列表，仍然失败；原错误：${error.message || error}）`);
+        })
+    };
+  }
+}
+
+async function fetchFirstUsableAudioCompanionPlaylist(urls, fetchOptions) {
+  for (const url of uniqueHttpUrls(urls)) {
+    const companion = await fetchLikelyAudioCompanionPlaylistCandidate(url, fetchOptions);
+    if (companion) {
+      return companion;
+    }
+  }
+  return null;
+}
+
+function originalHlsSourceUrl(message, sourceUrl) {
+  const original = String(message.originalSourceUrl || "");
+  if (!/^https?:\/\//i.test(original) || original === sourceUrl || !/\.m3u8(?:$|[?#])/i.test(original)) {
+    return "";
+  }
+  return original;
+}
+
+function normalizeHttpUrlList(values = []) {
+  return uniqueHttpUrls(Array.isArray(values) ? values : []);
+}
+
+function uniqueHttpUrls(values = []) {
+  const output = [];
+  for (const value of Array.isArray(values) ? values : []) {
+    const url = String(value || "");
+    if (/^https?:\/\//i.test(url) && !output.includes(url)) {
+      output.push(url);
+    }
+  }
+  return output;
 }
 
 async function waitForMediaFetchRetry(attempt) {
@@ -1449,6 +2078,7 @@ function parseHlsMasterPlaylist(text, baseUrl) {
       bandwidth: Number(attrs.BANDWIDTH || attrs["AVERAGE-BANDWIDTH"] || 0) || 0,
       resolution: String(attrs.RESOLUTION || ""),
       codecs: String(attrs.CODECS || ""),
+      audioGroup: String(attrs.AUDIO || ""),
       audioOnly: hlsStreamInfIsAudioOnly(attrs)
     });
   }
@@ -1468,6 +2098,77 @@ function hlsStreamInfIsAudioOnly(attrs = {}) {
 
 function isHlsAudioCodec(codec) {
   return /^(?:mp4a|ac-3|ec-3|opus|vorbis|flac|alac)(?:\.|$)/i.test(String(codec || ""));
+}
+
+function isHlsVideoCodec(codec) {
+  return /^(?:avc1|avc3|hvc1|hev1|vp09|vp9|av01|dvhe|dvh1)(?:\.|$)/i.test(String(codec || ""));
+}
+
+function hlsVariantHasAudioEvidence(variant = {}) {
+  if (variant.audioOnly || variant.audioGroup) {
+    return true;
+  }
+  return String(variant.codecs || "")
+    .split(",")
+    .map(codec => codec.trim())
+    .some(isHlsAudioCodec);
+}
+
+function hlsVariantIsClearlyVideoOnly(variant = {}) {
+  if (hlsVariantHasAudioEvidence(variant)) {
+    return false;
+  }
+  const codecs = String(variant.codecs || "")
+    .split(",")
+    .map(codec => codec.trim())
+    .filter(Boolean);
+  return Boolean(variant.resolution) &&
+    codecs.length > 0 &&
+    codecs.every(isHlsVideoCodec);
+}
+
+function hlsPlaylistIsClearlyVideoOnly(playlistUrl, playlistText, message = {}) {
+  const master = parseHlsMasterPlaylist(playlistText, playlistUrl);
+  if (master.variants.length) {
+    return master.variants.every(hlsVariantIsClearlyVideoOnly);
+  }
+  const media = parseHlsMediaPlaylist(playlistText, playlistUrl);
+  const evidenceUrls = [
+    playlistUrl,
+    media.mapUrl,
+    ...media.segments.map(item => item.map?.url).filter(Boolean),
+    ...media.segments.slice(0, 3).map(item => item.url)
+  ].filter(Boolean);
+  if (evidenceUrls.some(url => inferHlsRoleFromUrl(url) === "audio")) {
+    return false;
+  }
+  return hlsMediaLooksFragmentedMp4(media) && evidenceUrls.some(url => inferHlsRoleFromUrl(url) === "video");
+}
+
+function hlsMediaLooksFragmentedMp4(media = {}) {
+  const sample = media.mapUrl || media.segments?.[0]?.map?.url || media.segments?.[0]?.url || "";
+  return /\.(?:m4s|m4a|m4v|cmf|cmfa|cmfv|mp4)(?:$|[?#])/i.test(sample);
+}
+
+function inferHlsRoleFromUrl(rawUrl) {
+  let path = "";
+  try {
+    const url = new URL(rawUrl);
+    path = `${url.pathname} ${url.search}`.toLowerCase();
+  } catch {
+    path = String(rawUrl || "").toLowerCase();
+  }
+  if (/(?:^|[-_/])(?:audio|aac|m4a|mp3|opus)(?:[-_.\/]|$)/i.test(path) ||
+    /(?:^|[-_/])(?:f\d+[-_.])?a\d+(?=[-_.\/]|$)/i.test(path) ||
+    /\/mp4a\//i.test(path)) {
+    return "audio";
+  }
+  if (/(?:^|[-_/])(?:video|h264|h265|hevc|avc1|vp9)(?:[-_.\/]|$)/i.test(path) ||
+    /(?:^|[-_/])(?:f\d+[-_.])?v\d+(?=[-_.\/]|$)/i.test(path) ||
+    /\/avc1\//i.test(path)) {
+    return "video";
+  }
+  return "unknown";
 }
 
 function parseHlsMediaPlaylist(text, baseUrl) {
@@ -1764,9 +2465,24 @@ function chooseHlsVariantForAsr(variants) {
     if (a.audioOnly !== b.audioOnly) {
       return a.audioOnly ? -1 : 1;
     }
+    const leftAudioRank = hlsVariantAudioRank(a);
+    const rightAudioRank = hlsVariantAudioRank(b);
+    if (leftAudioRank !== rightAudioRank) {
+      return leftAudioRank - rightAudioRank;
+    }
     return (a.bandwidth || Number.MAX_SAFE_INTEGER) - (b.bandwidth || Number.MAX_SAFE_INTEGER) ||
       hlsResolutionPixels(a.resolution) - hlsResolutionPixels(b.resolution);
   })[0];
+}
+
+function hlsVariantAudioRank(variant) {
+  if (hlsVariantHasAudioEvidence(variant)) {
+    return 0;
+  }
+  if (hlsVariantIsClearlyVideoOnly(variant)) {
+    return 2;
+  }
+  return 1;
 }
 
 function hlsResolutionPixels(resolution) {

@@ -65,6 +65,7 @@ export const FuguangMediaAssetModel = (() => {
       dimensions: normalizeDimensions(input.dimensions, input),
       requestContext: input.requestContext || null,
       relation: input.relation || null,
+      segmentType: String(input.segmentType || ""),
       siteAdapter: String(input.siteAdapter || ""),
       evidence: normalizeEvidenceList(input.evidence),
       warnings: normalizeWarningList(input.warnings)
@@ -100,6 +101,7 @@ export const FuguangMediaAssetModel = (() => {
         container: String(input.expectedAudio?.container || "mp3-output"),
         duration: positiveNumber(input.expectedAudio?.duration)
       },
+      normalizeStrategy: normalizeAudioStrategy(input.normalizeStrategy, input.ffmpegInput, input.kind),
       warnings
     };
   }
@@ -204,7 +206,112 @@ export const FuguangMediaAssetModel = (() => {
       type: String(input.type || ""),
       url: String(input.url || ""),
       headers: input.headers && typeof input.headers === "object" ? { ...input.headers } : {},
-      credentials: String(input.credentials || "include")
+      credentials: String(input.credentials || "include"),
+      audioCandidateUrls: normalizeHttpUrlList(input.audioCandidateUrls),
+      fragments: Array.isArray(input.fragments) ? input.fragments.map(normalizeFfmpegFragment).filter(fragment => fragment.url) : []
+    };
+  }
+
+  function normalizeHttpUrlList(values = []) {
+    const output = [];
+    for (const value of Array.isArray(values) ? values : []) {
+      const url = String(value || "");
+      if (/^https?:\/\//i.test(url) && !output.includes(url)) {
+        output.push(url);
+      }
+    }
+    return output;
+  }
+
+  function normalizeFfmpegFragment(input = {}) {
+    const byteRange = normalizeFfmpegByteRange(input.byteRange);
+    return {
+      url: String(input.url || ""),
+      name: String(input.name || input.filename || ""),
+      segmentType: String(input.segmentType || ""),
+      role: normalizeMediaRole(input.role),
+      duration: positiveNumber(input.duration),
+      start: positiveNumber(input.start),
+      end: positiveNumber(input.end),
+      byteRange
+    };
+  }
+
+  function normalizeFfmpegByteRange(input = null) {
+    if (!input || typeof input !== "object") {
+      return null;
+    }
+    const offset = Number(input.offset);
+    const length = Number(input.length);
+    if (!Number.isFinite(offset) || !Number.isFinite(length) || offset < 0 || length <= 0) {
+      return null;
+    }
+    return {
+      offset: Math.floor(offset),
+      length: Math.floor(length)
+    };
+  }
+
+  function normalizeAudioStrategy(strategy = null, ffmpegInput = {}, planKind = "") {
+    const inferred = inferAudioStrategy(ffmpegInput, planKind);
+    return {
+      type: String(strategy?.type || inferred.type),
+      action: String(strategy?.action || inferred.action),
+      inputType: String(strategy?.inputType || ffmpegInput?.type || inferred.inputType || ""),
+      requiresAssembly: Boolean(strategy?.requiresAssembly ?? inferred.requiresAssembly),
+      output: normalizeStrategyOutput(strategy?.output)
+    };
+  }
+
+  function inferAudioStrategy(ffmpegInput = {}, planKind = "") {
+    const inputType = String(ffmpegInput?.type || "");
+    if (inputType === "hls") {
+      return {
+        type: "hls-playlist",
+        action: "parse-playlist-extract-audio",
+        inputType,
+        requiresAssembly: true
+      };
+    }
+    if (inputType === "dash") {
+      return {
+        type: "dash-manifest",
+        action: "parse-manifest-extract-audio",
+        inputType,
+        requiresAssembly: true
+      };
+    }
+    if (inputType === "mse-fragments") {
+      return {
+        type: "fmp4-fragments",
+        action: "assemble-fragments-extract-audio",
+        inputType,
+        requiresAssembly: true
+      };
+    }
+    if (String(planKind || "") === "muxed-media") {
+      return {
+        type: "muxed-media-file",
+        action: "extract-audio-track",
+        inputType: inputType || "direct",
+        requiresAssembly: false
+      };
+    }
+    return {
+      type: "direct-audio-file",
+      action: "transcode-or-remux-audio",
+      inputType: inputType || "direct",
+      requiresAssembly: false
+    };
+  }
+
+  function normalizeStrategyOutput(output = null) {
+    return {
+      codec: String(output?.codec || "mp3"),
+      container: String(output?.container || "mp3"),
+      sampleRate: positiveNumber(output?.sampleRate) || 16000,
+      channels: positiveNumber(output?.channels) || 1,
+      bitrate: positiveNumber(output?.bitrate) || 64000
     };
   }
 

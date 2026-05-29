@@ -68,4 +68,13 @@ const model = context.FuguangMediaAssetModel;
   assert.equal(plan.primaryAsset.role, "audio");
   assert.equal(plan.ffmpegInput.credentials, "include");
   assert.equal(plan.expectedAudio.container, "mp3-output");
+  assert.deepEqual(JSON.parse(JSON.stringify(plan.normalizeStrategy.output)), {
+    codec: "mp3",
+    container: "mp3",
+    sampleRate: 16000,
+    channels: 1,
+    bitrate: 64000
+  });
+  assert.equal(plan.normalizeStrategy.type, "hls-playlist");
+  assert.equal(plan.normalizeStrategy.action, "parse-playlist-extract-audio");
 }

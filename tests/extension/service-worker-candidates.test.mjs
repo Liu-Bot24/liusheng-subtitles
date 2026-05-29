@@ -283,17 +283,69 @@ vm.runInContext(source, context, { filename: "service-worker.js" });
     assert.equal(executionCandidate.originalSourceUrl, "https://cdn.example.test/video-h264-720p.m3u8");
     assert.equal(executionCandidate.sourcePlanUsed, true);
 
+    const dashSourcePlan = {
+      kind: "dash-audio",
+      primaryUrl: "https://cdn.example.test/audio/",
+      primaryRole: "audio",
+      ffmpegInput: {
+        type: "dash",
+        url: "https://cdn.example.test/video.mpd",
+        fragments: [
+          { url: "https://cdn.example.test/audio/init.mp4", segmentType: "init", role: "audio" },
+          { url: "https://cdn.example.test/audio/seg-1.m4s", segmentType: "media", role: "audio", duration: 5, start: 0, end: 5 }
+        ]
+      }
+    };
     const dashCandidate = context.resolveAudioSourceExecutionCandidate({
       url: "https://cdn.example.test/video.mpd",
       kind: "dash",
       ext: "mpd",
-      sourcePlan: {
-        primaryUrl: "https://cdn.example.test/audio/",
-        ffmpegInput: { type: "dash", url: "https://cdn.example.test/video.mpd" }
-      }
+      sourcePlanTrusted: true,
+      sourcePlan: dashSourcePlan
     });
-    assert.equal(dashCandidate.sourcePlanUsed, undefined);
+    assert.equal(dashCandidate.sourcePlanUsed, true);
     assert.equal(dashCandidate.url, "https://cdn.example.test/video.mpd");
+    assert.equal(dashCandidate.kind, "dash");
+    assert.equal(dashCandidate.dashFragments.length, 2);
+
+    const dashResponse = await context.startBrowserPreload(
+      1,
+      {
+        url: "https://cdn.example.test/video.mpd",
+        kind: "dash",
+        ext: "mpd",
+        duration: 120,
+        sourcePlanTrusted: true,
+        sourcePlan: dashSourcePlan
+      },
+      {
+        title: "DASH source plan start",
+        pageUrl: "https://example.test/watch/dash-source-plan",
+        sourceUrl: "https://cdn.example.test/video.mpd",
+        duration: 120
+      },
+      {
+        asr: {
+          providerType: "openai",
+          baseUrl: "https://asr.example.test/v1",
+          model: "whisper",
+          apiKey: "test"
+        },
+        translation: {
+          providerType: "openai",
+          baseUrl: "https://llm.example.test/v1",
+          model: "llm",
+          apiKey: "test"
+        },
+        targetLanguage: "zh-CN",
+        asrWorkers: 1,
+        workers: 1,
+        chunkSeconds: 900
+      }
+    );
+    assert.equal(dashResponse.job.sourceUrl, "https://cdn.example.test/video.mpd");
+    assert.equal(dashResponse.job.metadata.executionSourceUrl, "https://cdn.example.test/video.mpd");
+    assert.equal(queuedJobId, dashResponse.job.id);
 
     const response = await context.startBrowserPreload(
       1,
@@ -337,6 +389,52 @@ vm.runInContext(source, context, { filename: "service-worker.js" });
     assert.equal(response.job.metadata.executionSourceUrl, "https://cdn.example.test/audio-aac-128k.m3u8");
     assert.equal(response.job.metadata.originalSourceUrl, "https://cdn.example.test/video-h264-720p.m3u8");
     assert.equal(queuedJobId, response.job.id);
+
+    const directAudioExecutionCandidate = context.resolveAudioSourceExecutionCandidate({
+      url: "https://video.twimg.com/amplify_video/2058970000000000053/pl/avc1/650x360/video-only.m3u8",
+      kind: "hls",
+      ext: "m3u8",
+      role: "playlist",
+      contentType: "application/vnd.apple.mpegurl",
+      sourcePlanTrusted: true,
+      sourcePlan: {
+        kind: "direct-audio",
+        primaryUrl: "https://video.twimg.com/amplify_video/2058970000000000053/audio/128000/audio-track.mp4",
+        primaryRole: "audio",
+        ffmpegInput: {
+          type: "direct",
+          url: "https://video.twimg.com/amplify_video/2058970000000000053/audio/128000/audio-track.mp4"
+        }
+      }
+    });
+    assert.equal(directAudioExecutionCandidate.url, "https://video.twimg.com/amplify_video/2058970000000000053/audio/128000/audio-track.mp4");
+    assert.equal(directAudioExecutionCandidate.kind, "audio");
+    assert.equal(directAudioExecutionCandidate.ext, "mp4");
+    assert.equal(directAudioExecutionCandidate.contentType, "audio/mp4");
+
+    const muxedExecutionCandidate = context.resolveAudioSourceExecutionCandidate({
+      url: "https://cdn.example.test/source/video-playlist.m3u8",
+      filename: "video-playlist.m3u8",
+      fileName: "video-playlist.m3u8",
+      kind: "hls",
+      ext: "m3u8",
+      role: "playlist",
+      contentType: "application/vnd.apple.mpegurl",
+      sourcePlanTrusted: true,
+      sourcePlan: {
+        kind: "muxed-media",
+        primaryUrl: "https://cdn.example.test/media/clip.mp4",
+        primaryRole: "muxed",
+        ffmpegInput: {
+          type: "direct",
+          url: "https://cdn.example.test/media/clip.mp4"
+        }
+      }
+    });
+    assert.equal(muxedExecutionCandidate.url, "https://cdn.example.test/media/clip.mp4");
+    assert.equal(muxedExecutionCandidate.filename, "clip.mp4");
+    assert.equal(muxedExecutionCandidate.fileName, "clip.mp4");
+    assert.equal(muxedExecutionCandidate.contentType, "video/mp4");
   } finally {
     context.runBrowserPreloadJob = originalRunBrowserPreloadJob;
   }
@@ -376,20 +474,54 @@ vm.runInContext(source, context, { filename: "service-worker.js" });
   assert.equal(crossOrigin.url, "https://audio-cdn.example.test/audio-aac-128k.m3u8");
   assert.equal(crossOrigin.requestHeaders, null);
 
+  const mseCandidate = context.resolveAudioSourceExecutionCandidate({
+    url: "https://cdn.example.test/dash/manifest.mpd",
+    kind: "dash",
+    ext: "mpd",
+    sourcePlanTrusted: true,
+    requestHeaders: { authorization: "Bearer source-token" },
+    sourcePlan: {
+      kind: "mse-fragments",
+      executable: true,
+      primaryRole: "audio",
+      ffmpegInput: {
+        type: "mse-fragments",
+        url: "https://cdn.example.test/dash/seg-00001.m4s",
+        fragments: [
+          { url: "https://cdn.example.test/dash/init.mp4", segmentType: "init" },
+          { url: "https://cdn.example.test/dash/seg-00001.m4s", segmentType: "media" },
+          { url: "https://cdn.example.test/dash/seg-00002.m4s", segmentType: "media" }
+        ]
+      }
+    }
+  });
+  assert.equal(mseCandidate.kind, "mse-fragments");
+  assert.equal(mseCandidate.ext, "m4s");
+  assert.equal(mseCandidate.sourcePlanUsed, true);
+  assert.equal(mseCandidate.mseFragments.length, 3);
+  assert.equal(mseCandidate.normalizeStrategy.type, "fmp4-fragments");
+  assert.equal(mseCandidate.requestHeaders.authorization, "Bearer source-token");
+
   assert.throws(
     () => context.resolveAudioSourceExecutionCandidate({
       url: "https://cdn.example.test/dash/seg-00001.m4s",
       kind: "audio",
       ext: "m4s",
-      sourcePlanTrusted: true,
+      sourcePlanTrusted: false,
       sourcePlan: {
         kind: "mse-fragments",
-        executable: false,
-        ffmpegInput: { type: "mse-fragments", url: "https://cdn.example.test/dash/seg-00001.m4s" },
-        warnings: [{ code: "unsupported-mse-fragments", message: "MSE fragments need assembly first." }]
+        executable: true,
+        ffmpegInput: {
+          type: "mse-fragments",
+          url: "https://cdn.example.test/dash/seg-00001.m4s",
+          fragments: [
+            { url: "https://cdn.example.test/dash/init.mp4", segmentType: "init" },
+            { url: "https://cdn.example.test/dash/seg-00001.m4s", segmentType: "media" }
+          ]
+        }
       }
     }),
-    /MSE fragments/
+    /后台校验/
   );
 }
 
@@ -1210,6 +1342,7 @@ vm.runInContext(source, context, { filename: "service-worker.js" });
     selectedLlmProfileId: "test_llm",
     sourceLanguage: "japanese",
     targetLanguage: "zh-CN",
+    webFfmpegPerformance: "fast",
     asrWorkers: 7,
     asrProfiles: [
       { id: "openai_whisper", name: "OpenAI Whisper", providerType: "openai", baseUrl: "https://api.openai.com/v1", model: "whisper-1", apiKey: "asr-key" }
@@ -1225,16 +1358,62 @@ vm.runInContext(source, context, { filename: "service-worker.js" });
     const config = await context.getModelConfig();
     assert.equal(config.asr.language, "ja");
     assert.equal(config.asrWorkers, 1);
+    assert.equal(config.webFfmpegPerformance, "fast");
     assert.ok(context.browserAsrRequestFields(config.asr, config.asr.language).some(([name, value]) => name === "language" && value === "ja"));
 
     stored.sourceLanguage = "auto";
     const autoConfig = await context.getModelConfig();
     assert.equal(Object.hasOwn(autoConfig.asr, "language"), false);
     assert.equal(context.browserAsrRequestFields(autoConfig.asr, autoConfig.asr.language).some(([name]) => name === "language"), false);
+
+    stored.webFfmpegPerformance = "turbo";
+    const invalidPerformanceConfig = await context.getModelConfig();
+    assert.equal(invalidPerformanceConfig.webFfmpegPerformance, "auto");
   } finally {
     chrome.storage.local.get = originalLocalGet;
     chrome.storage.local.set = originalLocalSet;
     chrome.storage.sync.remove = originalSyncRemove;
+  }
+}
+
+{
+  const originalEnsureOffscreenDocument = context.ensureOffscreenDocument;
+  const originalGetWebFfmpegConfig = context.getWebFfmpegConfig;
+  const originalWithMediaRequestHeaderRules = context.withMediaRequestHeaderRules;
+  const originalSendMessage = chrome.runtime.sendMessage;
+  let offscreenMessage = null;
+  context.ensureOffscreenDocument = async () => {};
+  context.getWebFfmpegConfig = async () => ({ url: "chrome-extension://test-extension/web-ffmpeg/index.html" });
+  context.withMediaRequestHeaderRules = async (_url, _pageUrl, fn) => fn();
+  chrome.runtime.sendMessage = async message => {
+    offscreenMessage = message;
+    return { ok: true, result: { chunks: [] } };
+  };
+  try {
+    const result = await context.extractCandidateAudioInBrowser({
+      tabId: 9,
+      candidate: {
+        url: "https://cdn.example.test/video.m3u8",
+        kind: "hls",
+        ext: "m3u8",
+        duration: 120,
+        pageUrl: "https://example.test/watch"
+      },
+      metadata: { duration: 120, pageUrl: "https://example.test/watch" },
+      modelConfig: {
+        chunkSeconds: 900,
+        webFfmpegPerformance: "stable"
+      },
+      browserAsrChunkSeconds: 900,
+      job: { id: "job-web-ffmpeg-performance" }
+    });
+    assert.deepEqual(result, { chunks: [] });
+    assert.equal(offscreenMessage?.webFfmpegPerformance, "stable");
+  } finally {
+    context.ensureOffscreenDocument = originalEnsureOffscreenDocument;
+    context.getWebFfmpegConfig = originalGetWebFfmpegConfig;
+    context.withMediaRequestHeaderRules = originalWithMediaRequestHeaderRules;
+    chrome.runtime.sendMessage = originalSendMessage;
   }
 }
 
@@ -3359,10 +3538,19 @@ vm.runInContext(source, context, { filename: "service-worker.js" });
   assert.equal(normalizedEmptyVadFiltered.length, 0);
 }
 
-function seedPage(tabId, { title = "Video", url = "https://example.test/watch/1", duration = 600 } = {}) {
+function seedPage(tabId, { title = "Video", url = "https://example.test/watch/1", duration = 600, poster = "", currentSrc = "" } = {}) {
   const state = context.getState(tabId);
   state.page = { title, url };
-  state.context = { hasMedia: true, duration, href: url, title, currentTime: 0, frameId: 0 };
+  state.context = {
+    hasMedia: true,
+    duration,
+    href: url,
+    title,
+    currentTime: 0,
+    frameId: 0,
+    poster,
+    currentSrc
+  };
   return state;
 }
 
@@ -3750,6 +3938,582 @@ function add(tabId, candidate) {
 }
 
 {
+  const tabId = 137;
+  seedPage(tabId, { title: "Long HLS page with short video preview", url: "https://missav.example.test/mimk-107", duration: 7209 });
+  add(tabId, {
+    url: "https://fourhoi.example.test/miaa-710/hls/640x360/main.m3u8",
+    kind: "hls",
+    ext: "m3u8",
+    contentType: "application/vnd.apple.mpegurl",
+    source: "xhr-body",
+    initiator: "https://missav.example.test/mimk-107"
+  });
+  add(tabId, {
+    url: "https://fourhoi.example.test/miaa-710/preview.mp4",
+    kind: "media",
+    ext: "mp4",
+    contentType: "video/mp4",
+    source: "xhr-body",
+    initiator: "https://missav.example.test/mimk-107"
+  });
+
+  const candidates = context.getDisplayCandidates(tabId);
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0].url, "https://fourhoi.example.test/miaa-710/hls/640x360/main.m3u8");
+  assert.notEqual(candidates[0].sourcePlan?.ffmpegInput?.url, "https://fourhoi.example.test/miaa-710/preview.mp4");
+}
+
+{
+  const tabId = 138;
+  seedPage(tabId, { title: "Direct MP4 video", url: "https://example.test/watch/direct-mp4", duration: 90 });
+  add(tabId, {
+    url: "https://media.example.test/video/full.mp4",
+    kind: "media",
+    ext: "mp4",
+    contentType: "video/mp4",
+    source: "media-element",
+    duration: 90,
+    initiator: "https://example.test/watch/direct-mp4"
+  });
+
+  const candidates = context.getDisplayCandidates(tabId);
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0].sourcePlan.kind, "muxed-media");
+  assert.equal(candidates[0].sourcePlan.ffmpegInput.url, "https://media.example.test/video/full.mp4");
+}
+
+{
+  const tabId = 139;
+  seedPage(tabId, { title: "Long DASH page with short video preview", url: "https://dash.example.test/watch/long", duration: 7209 });
+  add(tabId, {
+    url: "https://cdn.example.test/long/manifest.mpd",
+    kind: "dash",
+    ext: "mpd",
+    contentType: "application/dash+xml",
+    source: "xhr-body",
+    initiator: "https://dash.example.test/watch/long"
+  });
+  add(tabId, {
+    url: "https://cdn.example.test/long/preview.mp4",
+    kind: "media",
+    ext: "mp4",
+    contentType: "video/mp4",
+    source: "xhr-body",
+    initiator: "https://dash.example.test/watch/long"
+  });
+
+  const candidates = context.getDisplayCandidates(tabId);
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0].url, "https://cdn.example.test/long/manifest.mpd");
+  assert.notEqual(candidates[0].sourcePlan?.ffmpegInput?.url, "https://cdn.example.test/long/preview.mp4");
+}
+
+{
+  const tabId = 140;
+  seedPage(tabId, { title: "Direct MP4 video with noisy playback fragments", url: "https://example.test/watch/direct-mp4-noisy", duration: 90 });
+  add(tabId, {
+    url: "https://media.example.test/video/full.mp4",
+    kind: "media",
+    ext: "mp4",
+    contentType: "video/mp4",
+    source: "media-element",
+    duration: 90,
+    initiator: "https://example.test/watch/direct-mp4-noisy"
+  });
+  for (let index = 0; index < 120; index += 1) {
+    add(tabId, {
+      url: `https://media.example.test/video/segments/noise-${String(index).padStart(3, "0")}.m4s`,
+      kind: "segment",
+      role: "video",
+      ext: "m4s",
+      contentType: "video/mp4",
+      source: "request",
+      duration: 2,
+      initiator: "https://example.test/watch/direct-mp4-noisy"
+    });
+  }
+
+  const candidates = context.getDisplayCandidates(tabId);
+  assert.equal(candidates.some(candidate => candidate.url === "https://media.example.test/video/full.mp4"), true);
+  const directMp4 = candidates.find(candidate => candidate.url === "https://media.example.test/video/full.mp4");
+  assert.equal(directMp4.sourcePlan.kind, "muxed-media");
+  assert.equal(directMp4.sourcePlan.ffmpegInput.url, "https://media.example.test/video/full.mp4");
+}
+
+{
+  const tabId = 127;
+  seedPage(tabId, {
+    title: "X status with related videos",
+    url: "https://x.com/jaynitx/status/2059183692569071878",
+    duration: 82
+  });
+  add(tabId, {
+    url: "https://video.twimg.com/amplify_video/2059000000000000001/pl/avc1/488x270/related-146s.m3u8?tag=16",
+    kind: "hls",
+    ext: "m3u8",
+    contentType: "application/vnd.apple.mpegurl",
+    source: "xhr-body",
+    duration: 146,
+    videoWidth: 488,
+    videoHeight: 270,
+    initiator: "https://x.com/jaynitx/status/2059183692569071878"
+  });
+  add(tabId, {
+    url: "https://video.twimg.com/amplify_video/2059000000000000002/pl/avc1/320x320/related-32s.m3u8?tag=16",
+    kind: "hls",
+    ext: "m3u8",
+    contentType: "application/vnd.apple.mpegurl",
+    source: "xhr-body",
+    duration: 32,
+    videoWidth: 320,
+    videoHeight: 320,
+    initiator: "https://x.com/jaynitx/status/2059183692569071878"
+  });
+  add(tabId, {
+    url: "https://video.twimg.com/amplify_video/2059183692569071878/pl/avc1/650x360/status-82s.m3u8?tag=16",
+    kind: "hls",
+    ext: "m3u8",
+    contentType: "application/vnd.apple.mpegurl",
+    source: "xhr-body",
+    duration: 82,
+    videoWidth: 650,
+    videoHeight: 360,
+    initiator: "https://x.com/jaynitx/status/2059183692569071878"
+  });
+
+  const candidates = context.getDisplayCandidates(tabId);
+  assert.equal(candidates.length, 0);
+}
+
+{
+  const tabId = 128;
+  seedPage(tabId, {
+    title: "X status with scrolled related video",
+    url: "https://x.com/jaynitx/status/2059183692569071878",
+    duration: 146
+  });
+  add(tabId, {
+    url: "https://video.twimg.com/amplify_video/2059000000000000001/pl/avc1/488x270/related-146s.m3u8?tag=16",
+    kind: "hls",
+    ext: "m3u8",
+    contentType: "application/vnd.apple.mpegurl",
+    source: "xhr-body",
+    duration: 146,
+    videoWidth: 488,
+    videoHeight: 270,
+    statusId: "2059000000000000001",
+    initiator: "https://x.com/jaynitx/status/2059183692569071878"
+  });
+  add(tabId, {
+    url: "https://video.twimg.com/amplify_video/2059183692569071878/pl/avc1/650x360/status-82s.m3u8?tag=16",
+    kind: "hls",
+    ext: "m3u8",
+    contentType: "application/vnd.apple.mpegurl",
+    source: "xhr-body",
+    duration: 82,
+    videoWidth: 650,
+    videoHeight: 360,
+    statusId: "2059183692569071878",
+    initiator: "https://x.com/jaynitx/status/2059183692569071878"
+  });
+
+  const candidates = context.getDisplayCandidates(tabId);
+  assert.equal(candidates.length, 0);
+}
+
+{
+  const tabId = 129;
+  seedPage(tabId, {
+    title: "X status with unassigned related video",
+    url: "https://x.com/jaynitx/status/2059183692569071878",
+    duration: 146
+  });
+  add(tabId, {
+    url: "https://video.twimg.com/amplify_video/2059000000000000003/pl/avc1/320x180/related-146s-no-status.m3u8?tag=16",
+    kind: "hls",
+    ext: "m3u8",
+    contentType: "application/vnd.apple.mpegurl",
+    source: "xhr-body",
+    duration: 146,
+    videoWidth: 320,
+    videoHeight: 180,
+    initiator: "https://x.com/jaynitx/status/2059183692569071878"
+  });
+  add(tabId, {
+    url: "https://video.twimg.com/amplify_video/2059183692569071878/pl/avc1/650x360/status-82s.m3u8?tag=16",
+    kind: "hls",
+    ext: "m3u8",
+    contentType: "application/vnd.apple.mpegurl",
+    source: "xhr-body",
+    duration: 82,
+    videoWidth: 650,
+    videoHeight: 360,
+    statusId: "2059183692569071878",
+    initiator: "https://x.com/jaynitx/status/2059183692569071878"
+  });
+
+  const candidates = context.getDisplayCandidates(tabId);
+  assert.equal(candidates.length, 0);
+}
+
+{
+  const tabId = 130;
+  seedPage(tabId, {
+    title: "X status with HLS video and incomplete MSE fragments",
+    url: "https://x.com/jaynitx/status/2059183692569071878",
+    duration: 82
+  });
+  add(tabId, {
+    url: "https://video.twimg.com/amplify_video/2059183692569071878/pl/avc1/650x360/_6Jux_HKzlwgTTC3.m3u8?tag=16",
+    kind: "hls",
+    ext: "m3u8",
+    contentType: "application/vnd.apple.mpegurl",
+    source: "xhr-body",
+    duration: 82,
+    videoWidth: 650,
+    videoHeight: 360,
+    statusId: "2059183692569071878",
+    initiator: "https://x.com/jaynitx/status/2059183692569071878"
+  });
+  add(tabId, {
+    url: "https://video.twimg.com/amplify_video/2059183692569071878/audio/seg-00001.m4s",
+    kind: "segment",
+    ext: "m4s",
+    role: "audio",
+    contentType: "video/iso.segment",
+    source: "xhr-body",
+    duration: 82,
+    statusId: "2059183692569071878",
+    initiator: "https://x.com/jaynitx/status/2059183692569071878"
+  });
+  add(tabId, {
+    url: "https://video.twimg.com/amplify_video/2059183692569071878/audio/seg-00002.m4s",
+    kind: "segment",
+    ext: "m4s",
+    role: "audio",
+    contentType: "video/iso.segment",
+    source: "xhr-body",
+    duration: 82,
+    statusId: "2059183692569071878",
+    initiator: "https://x.com/jaynitx/status/2059183692569071878"
+  });
+
+  const candidates = context.getDisplayCandidates(tabId);
+  assert.equal(candidates.length, 0);
+}
+
+{
+  const tabId = 131;
+  seedPage(tabId, {
+    title: "X status with sniffed fMP4 audio init",
+    url: "https://x.com/jaynitx/status/2059183692569071878",
+    duration: 82
+  });
+  context.addPageMediaCandidate(tabId, {
+    url: "https://video.twimg.com/amplify_video/2059183692569071878/track/init-001.m4s",
+    kind: "media",
+    ext: "m4s",
+    role: "audio",
+    segmentType: "init",
+    contentType: "audio/mp4",
+    source: "fetch-body",
+    href: "https://x.com/jaynitx/status/2059183692569071878"
+  }, 0);
+  context.addPageMediaCandidate(tabId, {
+    url: "https://video.twimg.com/amplify_video/2059183692569071878/track/00001.m4s",
+    kind: "media",
+    ext: "m4s",
+    contentType: "video/iso.segment",
+    source: "request",
+    href: "https://x.com/jaynitx/status/2059183692569071878"
+  }, 0);
+  context.addPageMediaCandidate(tabId, {
+    url: "https://video.twimg.com/amplify_video/2059183692569071878/track/00002.m4s",
+    kind: "media",
+    ext: "m4s",
+    contentType: "video/iso.segment",
+    source: "request",
+    href: "https://x.com/jaynitx/status/2059183692569071878"
+  }, 0);
+
+  const [candidate] = context.getDisplayCandidates(tabId);
+  assert.equal(candidate.sourcePlan.kind, "mse-fragments");
+  assert.equal(candidate.sourcePlan.executable, true);
+  assert.equal(candidate.sourcePlan.primaryRole, "audio");
+  assert.equal(candidate.sourcePlan.ffmpegInput.fragments[0].segmentType, "init");
+}
+
+{
+  const tabId = 132;
+  seedPage(tabId, {
+    title: "X status with video playlist and direct audio tracks",
+    url: "https://x.com/jaynitx/status/2059183692569071878",
+    duration: 82
+  });
+  add(tabId, {
+    url: "https://video.twimg.com/amplify_video/2058970000000000053/pl/avc1/650x360/_thevh61CDhTYNfJ.m3u8?tag=16",
+    kind: "hls",
+    ext: "m3u8",
+    contentType: "application/vnd.apple.mpegurl",
+    source: "xhr-body",
+    duration: 82,
+    videoWidth: 650,
+    videoHeight: 360,
+    initiator: "https://x.com/jaynitx/status/2059183692569071878"
+  });
+  add(tabId, {
+    url: "https://video.twimg.com/amplify_video/2058970000000000053/audio/128000/audio-track.mp4",
+    kind: "audio",
+    ext: "mp4",
+    contentType: "audio/mp4",
+    source: "xhr-body",
+    initiator: "https://x.com/jaynitx/status/2059183692569071878"
+  });
+  add(tabId, {
+    url: "https://video.twimg.com/amplify_video/2058970000000000053/audio/64000/audio-track.mp4",
+    kind: "audio",
+    ext: "mp4",
+    contentType: "audio/mp4",
+    source: "xhr-body",
+    initiator: "https://x.com/jaynitx/status/2059183692569071878"
+  });
+  add(tabId, {
+    url: "https://video.twimg.com/amplify_video/2059000000000000001/pl/avc1/488x270/related-146s.m3u8?tag=16",
+    kind: "hls",
+    ext: "m3u8",
+    contentType: "application/vnd.apple.mpegurl",
+    source: "xhr-body",
+    duration: 146,
+    videoWidth: 488,
+    videoHeight: 270,
+    initiator: "https://x.com/jaynitx/status/2059183692569071878"
+  });
+
+  const candidates = context.getDisplayCandidates(tabId);
+  const [candidate] = candidates;
+  assert.match(candidate.url, /\/avc1\/650x360\/_thevh61CDhTYNfJ\.m3u8/);
+  assert.equal(candidate.duration, 82);
+  assert.equal(candidate.sourcePlan.kind, "direct-audio");
+  assert.equal(candidate.sourcePlan.ffmpegInput.type, "direct");
+  assert.match(candidate.sourcePlan.ffmpegInput.url, /\/audio\/(?:128000|64000)\/audio-track\.mp4/);
+  assert.equal(candidate.variants.some(variant => variant.role === "audio" && variant.contentType === "audio/mp4"), true);
+}
+
+{
+  const tabId = 133;
+  seedPage(tabId, {
+    title: "X status with video-only variants",
+    url: "https://x.com/jaynitx/status/2059183692569071878",
+    duration: 82
+  });
+  add(tabId, {
+    url: "https://video.twimg.com/amplify_video/2058958000000000001/pl/avc1/1280x720/vpwTXNBBAaBghL_g.m3u8?tag=27",
+    kind: "hls",
+    ext: "m3u8",
+    role: "video",
+    contentType: "application/vnd.apple.mpegurl",
+    source: "json-parse",
+    duration: 82,
+    videoWidth: 1280,
+    videoHeight: 720,
+    initiator: "https://x.com/jaynitx/status/2059183692569071878"
+  });
+  add(tabId, {
+    url: "https://video.twimg.com/amplify_video/2058958000000000001/vid/avc1/2160x2160/mYURGjflKU62W4IR.mp4?tag=27",
+    kind: "media",
+    ext: "mp4",
+    role: "video",
+    contentType: "video/mp4",
+    source: "json-parse",
+    duration: 82,
+    videoWidth: 2160,
+    videoHeight: 2160,
+    initiator: "https://x.com/jaynitx/status/2059183692569071878"
+  });
+  add(tabId, {
+    url: "https://video.twimg.com/amplify_video/2058958000000000001/vid/avc1/1280x720/fallback.mp4?tag=27",
+    kind: "media",
+    ext: "mp4",
+    role: "video",
+    contentType: "video/mp4",
+    source: "json-parse",
+    duration: 82,
+    videoWidth: 1280,
+    videoHeight: 720,
+    initiator: "https://x.com/jaynitx/status/2059183692569071878"
+  });
+
+  const candidates = context.getDisplayCandidates(tabId);
+  assert.equal(candidates.length, 0);
+}
+
+{
+  const tabId = 134;
+  seedPage(tabId, {
+    title: "X status with player master audio renditions",
+    url: "https://x.com/jaynitx/status/2059183692569071878",
+    duration: 82
+  });
+  add(tabId, {
+    url: "https://video.twimg.com/amplify_video/2059183631126667264/pl/ujqQBpTjKwgRUz5h.m3u8?tag=14&v=cfc",
+    kind: "hls",
+    ext: "m3u8",
+    playlistType: "master",
+    contentType: "application/vnd.apple.mpegurl",
+    source: "fetch-body",
+    duration: 82,
+    statusId: "2059183692569071878",
+    initiator: "https://x.com/jaynitx/status/2059183692569071878"
+  });
+  add(tabId, {
+    url: "https://video.twimg.com/amplify_video/2059183631126667264/pl/mp4a/32000/GbDAND4wQKvzaKjK.m3u8",
+    kind: "hls",
+    ext: "m3u8",
+    role: "audio",
+    playlistType: "audio",
+    contentType: "application/vnd.apple.mpegurl",
+    source: "fetch-body",
+    duration: 82,
+    statusId: "2059183692569071878",
+    initiator: "https://x.com/jaynitx/status/2059183692569071878"
+  });
+  add(tabId, {
+    url: "https://video.twimg.com/amplify_video/2059183631126667264/pl/mp4a/64000/nYblN7k8RN5JSUbL.m3u8",
+    kind: "hls",
+    ext: "m3u8",
+    role: "audio",
+    playlistType: "audio",
+    contentType: "application/vnd.apple.mpegurl",
+    source: "fetch-body",
+    duration: 82,
+    statusId: "2059183692569071878",
+    initiator: "https://x.com/jaynitx/status/2059183692569071878"
+  });
+  add(tabId, {
+    url: "https://video.twimg.com/amplify_video/2059183631126667264/pl/mp4a/128000/8gx0bryi1XnA-oNu.m3u8",
+    kind: "hls",
+    ext: "m3u8",
+    role: "audio",
+    playlistType: "audio",
+    contentType: "application/vnd.apple.mpegurl",
+    source: "fetch-body",
+    duration: 82,
+    statusId: "2059183692569071878",
+    initiator: "https://x.com/jaynitx/status/2059183692569071878"
+  });
+  add(tabId, {
+    url: "https://video.twimg.com/amplify_video/2059183631126667264/pl/avc1/1280x720/px2HLtDW23cRvY8h.m3u8",
+    kind: "hls",
+    ext: "m3u8",
+    role: "video",
+    contentType: "application/vnd.apple.mpegurl",
+    source: "fetch-body",
+    duration: 82,
+    videoWidth: 1280,
+    videoHeight: 720,
+    statusId: "2059183692569071878",
+    initiator: "https://x.com/jaynitx/status/2059183692569071878"
+  });
+  add(tabId, {
+    url: "https://video.twimg.com/amplify_video/2059183631126667264/vid/avc1/1280x720/6B5Ja8knj279z4U-.mp4?tag=14",
+    kind: "media",
+    ext: "mp4",
+    role: "video",
+    contentType: "video/mp4",
+    source: "json-parse",
+    duration: 82,
+    videoWidth: 1280,
+    videoHeight: 720,
+    statusId: "2059183692569071878",
+    initiator: "https://x.com/jaynitx/status/2059183692569071878"
+  });
+
+  const candidates = context.getDisplayCandidates(tabId);
+  assert.equal(candidates.length, 1);
+  const [candidate] = candidates;
+  assert.equal(candidate.role, "audio");
+  assert.match(candidate.url, /\/pl\/mp4a\/128000\/8gx0bryi1XnA-oNu\.m3u8$/);
+  assert.equal(candidate.sourcePlan.kind, "hls-audio");
+  assert.equal(candidate.sourcePlan.executable, true);
+  assert.equal(candidate.sourcePlan.ffmpegInput.type, "hls");
+  assert.match(candidate.sourcePlan.ffmpegInput.url, /\/pl\/mp4a\/128000\/8gx0bryi1XnA-oNu\.m3u8$/);
+  assert.equal(candidate.variants.some(variant => /\/vid\/avc1\//.test(variant.url)), true);
+}
+
+{
+  const tabId = 135;
+  seedPage(tabId, {
+    title: "X status with visible media poster",
+    url: "https://x.com/jaynitx/status/2059183692569071878",
+    duration: 82,
+    poster: "https://pbs.twimg.com/amplify_video_thumb/2059183631126667264/img/9DBL3kfKP41LFG2H.jpg"
+  });
+  add(tabId, {
+    url: "https://video.twimg.com/amplify_video/2049389439542304768/pl/mp4a/128000/related-audio.m3u8",
+    kind: "hls",
+    ext: "m3u8",
+    role: "audio",
+    contentType: "application/vnd.apple.mpegurl",
+    source: "xhr-body",
+    duration: 82,
+    initiator: "https://x.com/jaynitx/status/2059183692569071878"
+  });
+  add(tabId, {
+    url: "https://video.twimg.com/amplify_video/2059183631126667264/pl/mp4a/128000/8gx0bryi1XnA-oNu.m3u8",
+    kind: "hls",
+    ext: "m3u8",
+    role: "audio",
+    contentType: "application/vnd.apple.mpegurl",
+    source: "xhr-body",
+    duration: 82,
+    initiator: "https://x.com/jaynitx/status/2059183692569071878"
+  });
+
+  const candidates = context.getDisplayCandidates(tabId);
+  assert.equal(candidates.length, 1);
+  assert.match(candidates[0].url, /2059183631126667264/);
+  assert.doesNotMatch(candidates[0].url, /2049389439542304768/);
+}
+
+{
+  const tabId = 136;
+  seedPage(tabId, {
+    title: "X status keeps durable media source while segments stream",
+    url: "https://x.com/jaynitx/status/2059183692569071878",
+    duration: 82,
+    poster: "https://pbs.twimg.com/amplify_video_thumb/2059183631126667264/img/9DBL3kfKP41LFG2H.jpg"
+  });
+  add(tabId, {
+    url: "https://video.twimg.com/amplify_video/2059183631126667264/pl/mp4a/128000/8gx0bryi1XnA-oNu.m3u8",
+    kind: "hls",
+    ext: "m3u8",
+    role: "audio",
+    contentType: "application/vnd.apple.mpegurl",
+    source: "fetch-body",
+    duration: 82,
+    statusId: "2059183692569071878",
+    initiator: "https://x.com/jaynitx/status/2059183692569071878"
+  });
+  for (let i = 0; i < 120; i += 1) {
+    add(tabId, {
+      url: `https://video.twimg.com/amplify_video/2059183631126667264/vid/avc1/1280x720/segment-${String(i).padStart(3, "0")}.m4s`,
+      kind: "segment",
+      ext: "m4s",
+      role: "video",
+      contentType: "video/iso.segment",
+      source: "request",
+      duration: 82,
+      statusId: "2059183692569071878",
+      initiator: "https://x.com/jaynitx/status/2059183692569071878"
+    });
+  }
+
+  const candidates = context.getDisplayCandidates(tabId);
+  assert.equal(candidates.length, 1);
+  assert.match(candidates[0].url, /\/pl\/mp4a\/128000\/8gx0bryi1XnA-oNu\.m3u8$/);
+}
+
+{
   const tabId = 123;
   seedPage(tabId, {
     title: "DECO*27 - 愛言葉Ⅳ feat. 初音ミク - ニコニコ動画",
@@ -3904,10 +4668,8 @@ function add(tabId, candidate) {
     requiresSignatureDeciphering: true
   });
 
-  const [candidate] = context.getDisplayCandidates(tabId);
-  assert.equal(candidate.sourcePlan.kind, "direct-audio");
-  assert.equal(candidate.sourcePlan.executable, false);
-  assert.equal(candidate.sourcePlan.warnings[0].code, "requires-signature-deciphering");
+  const candidates = context.getDisplayCandidates(tabId);
+  assert.equal(candidates.length, 0);
 }
 
 {
