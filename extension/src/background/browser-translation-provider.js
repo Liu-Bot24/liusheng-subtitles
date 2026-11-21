@@ -392,7 +392,9 @@ export const FuguangBrowserTranslationProvider = (() => {
   // gateways for moderation blocks, so it counts as moderation only when worded that way and the wording
   // does not point at the account itself.
   const BROWSER_TRANSLATION_ACCOUNT_STATUSES = new Set([401, 402, 404]);
-  const BROWSER_TRANSLATION_ACCOUNT_WORDING = /(account|api[\s_-]?key|permission|organization|billing|deactivat|disabled|banned|suspend|账号|账户|密钥|权限|封禁|禁用|停用)/;
+  // Only explicit account, key or billing failures; words like "organization" or "policy" also appear in
+  // moderation messages ("your organization's content safety policy").
+  const BROWSER_TRANSLATION_ACCOUNT_WORDING = /((?:account|organization|账号|账户).{0,60}(?:deactivat|disabled|banned|suspend|terminated|封禁|禁用|停用|冻结)|(?:deactivat|disabled|banned|suspend|terminated|封禁|禁用|停用|冻结).{0,30}(?:account|organization|账号|账户)|api[\s_-]?key|access key|billing|insufficient (?:balance|quota|credit)|quota exceeded|permission denied|does not have (?:access|permission)|not authorized to (?:use|access)|密钥|余额不足|欠费|没有权限|无权)/;
 
   function browserTranslationErrorStatus(error) {
     return error && typeof error === "object" ? Number(error.status || 0) || 0 : 0;

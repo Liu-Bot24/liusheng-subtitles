@@ -35,10 +35,21 @@ test("moderation blocks are recognized by provider code or wording", () => {
     httpError(400, "The response was filtered", "content_filter"),
     httpError(400, "Content Exists Risk"),
     httpError(400, "内容安全审核未通过"),
-    httpError(403, "Forbidden: content safety policy violation")
+    httpError(403, "Forbidden: content safety policy violation"),
+    httpError(403, "Request blocked by your organization's content safety policy", "content_filter")
   ]) {
     assert.equal(provider.browserTranslationErrorIsContentPolicy(error), true, error.message);
     assert.equal(provider.browserTranslationErrorIsPermanent(error), false, error.message);
+  }
+});
+
+test("a 403 without moderation evidence is an account or access failure", () => {
+  for (const error of [
+    httpError(403, "Forbidden"),
+    httpError(403, "Permission denied for this model"),
+    httpError(403, "This API key does not have access to the model")
+  ]) {
+    assert.equal(provider.browserTranslationErrorIsPermanent(error), true, error.message);
   }
 });
 
