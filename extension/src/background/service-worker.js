@@ -15,7 +15,6 @@ var normalizeAsrTimeoutMs = FuguangBrowserAsrProvider.normalizeAsrTimeoutMs;
 var ASR_VAD_SPLIT_MIN_SILENCE_SECONDS = FuguangBrowserAsrPostprocess.ASR_VAD_SPLIT_MIN_SILENCE_SECONDS;
 var filterAsrSegmentsByChunkOwnership = FuguangBrowserAsrPostprocess.filterAsrSegmentsByChunkOwnership;
 var filterAsrDistributedRepeatedRuns = FuguangBrowserAsrPostprocess.filterAsrDistributedRepeatedRuns;
-var filterAsrKnownHallucinationPhrases = FuguangBrowserAsrPostprocess.filterAsrKnownHallucinationPhrases;
 var filterAsrSegmentsByHallucinationGuard = FuguangBrowserAsrPostprocess.filterAsrSegmentsByHallucinationGuard;
 var filterAsrSegmentsBySpeechActivity = FuguangBrowserAsrPostprocess.filterAsrSegmentsBySpeechActivity;
 var filterAsrStrictVadRecoverySegments = FuguangBrowserAsrPostprocess.filterAsrStrictVadRecoverySegments;
@@ -1617,10 +1616,10 @@ async function processBrowserFunAsrChunk(record, chunk, options = {}) {
       return;
     }
     const sourceSegments = normalizeBrowserSourceSegmentsForTranslation(
-      filterAsrKnownHallucinationPhrases(normalizeDashScopeFunAsrResult(payload, chunk, {
+      normalizeDashScopeFunAsrResult(payload, chunk, {
         labelSpeakers,
         chunkLabelIndex: index
-      })),
+      }),
       index
     );
     markBrowserAudioChunkAsrResult(chunk, sourceSegments, null);

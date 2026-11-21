@@ -731,8 +731,7 @@ export const FuguangBrowserAsrPostprocess = (() => {
     const runFilteredSegments = options.disableCustomRunFilters
       ? qualityFilteredSegments
       : filterAsrLowInformationRuns(filterAsrSuspiciousRepeatedRuns(filterAsrRepeatedRuns(qualityFilteredSegments)));
-    // Known credit lines are removed under every filter policy: they are training-data artifacts, not speech.
-    const output = filterAsrKnownHallucinationPhrases(runFilteredSegments)
+    const output = runFilteredSegments
       .map(({ rawSegment, ...segment }) => {
         const asrQuality = asrSegmentQualityFromRawSegment(rawSegment);
         return asrQuality ? { ...segment, asrQuality } : segment;
@@ -1466,90 +1465,6 @@ export const FuguangBrowserAsrPostprocess = (() => {
     return /[^\p{Script=Latin}\p{Number}_]/u.test(text);
   }
   
-  // Subtitle-credit lines that Whisper-family models reproduce from their training data on silence, music
-  // and endings. Each marker names a specific credit, so ordinary speech does not contain it. Markers are
-  // compared against normalizeAsrHallucinationText output (lowercase, no spaces or punctuation).
-  const ASR_KNOWN_HALLUCINATION_MARKERS = [
-    "明镜与点点",
-    "明镜和点点",
-    "明鏡與點點",
-    "明鏡和點點",
-    "不吝点赞订阅转发打赏",
-    "不吝點贊訂閱轉發打賞",
-    "不吝點讚訂閱轉發打賞",
-    "amaraorg",
-    "中文字幕志愿者",
-    "中文字幕志願者",
-    "优优独播剧场",
-    "優優獨播劇場",
-    "yoyotelevisionseriesexclusive"
-  ];
-
-  function asrTextHasKnownHallucinationMarker(text) {
-    const normalized = normalizeAsrHallucinationText(text);
-    return Boolean(normalized) && ASR_KNOWN_HALLUCINATION_MARKERS.some(marker => normalized.includes(marker));
-  }
-
-  // Removes known credit lines. A segment that is only a credit line is dropped; when the line is appended to
-  // real speech, only that sentence and the words that spell it are removed.
-  function filterAsrKnownHallucinationPhrases(segments) {
-    if (!Array.isArray(segments) || !segments.length) {
-      return [];
-    }
-    return segments.flatMap(segment => {
-      const stripped = stripAsrKnownHallucinationSentences(segment);
-      return stripped ? [stripped] : [];
-    });
-  }
-
-  function stripAsrKnownHallucinationSentences(segment) {
-    const text = String(segment?.text || "");
-    if (!asrTextHasKnownHallucinationMarker(text)) {
-      return segment;
-    }
-    const sentences = text.split(/(?<=[。！？!?\n])/u);
-    const removed = sentences.filter(sentence => asrTextHasKnownHallucinationMarker(sentence));
-    const keptText = sentences.filter(sentence => !asrTextHasKnownHallucinationMarker(sentence)).join("").trim();
-    if (!removed.length || !normalizeAsrHallucinationText(keptText)) {
-      return null;
-    }
-    const output = { ...segment, text: keptText };
-    if (!Array.isArray(segment.words) || !segment.words.length) {
-      return output;
-    }
-    const wordKeys = segment.words.map(word => normalizeAsrHallucinationText(word?.text ?? word?.word));
-    const joined = wordKeys.join("");
-    const removedRanges = [];
-    for (const sentence of removed) {
-      const key = normalizeAsrHallucinationText(sentence);
-      const index = key ? joined.indexOf(key) : -1;
-      if (index >= 0) {
-        removedRanges.push([index, index + key.length]);
-      }
-    }
-    if (!removedRanges.length) {
-      return output;
-    }
-    let offset = 0;
-    const keptWords = segment.words.filter((word, index) => {
-      const start = offset;
-      offset += wordKeys[index].length;
-      const end = offset;
-      return !removedRanges.some(([from, to]) => start < to && end > from && end > start);
-    });
-    if (!keptWords.length) {
-      return output;
-    }
-    const starts = keptWords.map(word => Number(word?.start)).filter(Number.isFinite);
-    const ends = keptWords.map(word => Number(word?.end)).filter(Number.isFinite);
-    return {
-      ...output,
-      words: keptWords,
-      ...(starts.length ? { start: Math.min(...starts) } : {}),
-      ...(ends.length ? { end: Math.max(...ends) } : {})
-    };
-  }
-
   function normalizeAsrHallucinationText(text) {
     return String(text || "")
       .toLowerCase()
@@ -1626,7 +1541,6 @@ export const FuguangBrowserAsrPostprocess = (() => {
     ASR_VAD_SPLIT_MIN_SILENCE_SECONDS,
     filterAsrSegmentsByChunkOwnership,
     filterAsrDistributedRepeatedRuns,
-    filterAsrKnownHallucinationPhrases,
     filterAsrSegmentsByHallucinationGuard,
     filterAsrSegmentsBySpeechActivity,
     filterAsrStrictVadRecoverySegments,
