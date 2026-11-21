@@ -1,5 +1,5 @@
 (() => {
-  const PAGE_SNIFFER_REVISION = "20261122-activation-gated-site-probes";
+  const PAGE_SNIFFER_REVISION = "20261122-route-bound-site-probes";
   // The service worker sets this flag right before re-injecting the sniffer for a page the user opened the
   // extension on. Site API probes (which run with the user's site session) only start after that.
   const activationRequested = window.__fuguangPageSnifferActivationPending === true;
@@ -109,6 +109,9 @@
   let lastDocumentMarkupSignature = "";
   let fmp4BinaryInspections = 0;
   let siteApiProbesEnabled = activationRequested;
+  // Opening the extension authorizes site lookups for the page address it was opened on. The delayed retries
+  // below must not carry that over to another route the page navigates to in the meantime.
+  let siteApiProbeActivatedHref = activationRequested ? String(location.href || "") : "";
   const seenPerformanceUrls = new Set();
   const timers = [];
   const contextTimer = setInterval(reportPageContext, 1200);
@@ -220,6 +223,7 @@
   function rescan(options = {}) {
     if (options?.activate === true) {
       siteApiProbesEnabled = true;
+      siteApiProbeActivatedHref = String(location.href || "");
       // Opening the extension re-reports everything already seen, in case the worker lost its copy.
       seenPerformanceUrls.clear();
       lastDocumentMarkupSignature = "";
@@ -247,8 +251,13 @@
     timers.push(setTimeout(probeBilibiliPlayurl, 7000));
   }
 
+  function siteApiProbesAllowedHere() {
+    return siteApiProbesEnabled && Boolean(siteApiProbeActivatedHref) &&
+      siteApiProbeActivatedHref === String(location.href || "");
+  }
+
   async function probeXTwitterTweetMedia() {
-    if (!siteApiProbesEnabled) {
+    if (!siteApiProbesAllowedHere()) {
       return;
     }
     const statusId = readXTwitterStatusId();
@@ -264,11 +273,11 @@
     try {
       const operation = await resolveXTwitterTweetResultOperation();
       const bearer = operation.bearer || X_TWITTER_BEARER_FALLBACK;
-      if (!operation.queryId || !bearer) {
+      if (!operation.queryId || !bearer || !siteApiProbesAllowedHere()) {
         return;
       }
       const response = await fetchXTwitterTweetResult(statusId, operation, bearer);
-      if (!response || response.ok === false) {
+      if (!response || response.ok === false || !siteApiProbesAllowedHere()) {
         return;
       }
       const text = await response.text();
@@ -461,6 +470,9 @@
 
   async function probeXTwitterHlsManifests(urls) {
     for (const url of Array.isArray(urls) ? urls.slice(0, 4) : []) {
+      if (!siteApiProbesAllowedHere()) {
+        return;
+      }
       try {
         const response = await originalFetch.call(window, url, { credentials: "include" });
         if (response.ok === false) {
@@ -474,7 +486,7 @@
   }
 
   async function probeBilibiliPlayurl() {
-    if (!siteApiProbesEnabled) {
+    if (!siteApiProbesAllowedHere()) {
       return;
     }
     const routeKey = readBilibiliRouteKey();
@@ -482,7 +494,7 @@
     if (!ids.bvid || !ids.cid) {
       return;
     }
-    if (routeKey && routeKey !== readBilibiliRouteKey()) {
+    if ((routeKey && routeKey !== readBilibiliRouteKey()) || !siteApiProbesAllowedHere()) {
       return;
     }
     const key = `${ids.bvid}:${ids.cid}`;
@@ -510,7 +522,7 @@
         return;
       }
       const json = await response.json();
-      if (routeKey && routeKey !== readBilibiliRouteKey()) {
+      if ((routeKey && routeKey !== readBilibiliRouteKey()) || !siteApiProbesAllowedHere()) {
         return;
       }
       postBilibiliPlayurlMedia(json?.data || json?.result || {});

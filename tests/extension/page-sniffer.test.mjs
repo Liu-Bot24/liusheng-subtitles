@@ -91,7 +91,7 @@ const source = fs.readFileSync(new URL("../../extension/src/content/page-sniffer
     pageFetch,
     "re-activating the sniffer must not remove a page-installed fetch wrapper"
   );
-  assert.equal(harness.context.window.__fuguangPageSnifferRevision, "20261122-activation-gated-site-probes");
+  assert.equal(harness.context.window.__fuguangPageSnifferRevision, "20261122-route-bound-site-probes");
   assert.doesNotThrow(() => vm.runInContext(`
     JSON.parse('{"value":1}', (_key, value) =>
       value && value.value === 1
@@ -482,6 +482,36 @@ const source = fs.readFileSync(new URL("../../extension/src/content/page-sniffer
   );
 }
 
+{
+  const requestedUrls = [];
+  const harness = createHarness({
+    locationHref: "https://www.bilibili.com/video/BV1RouteA",
+    fetchResponses(url) {
+      requestedUrls.push(String(url));
+      return null;
+    },
+    windowOverrides: {
+      __INITIAL_STATE__: { videoData: { bvid: "BV1RouteA", aid: 1, cid: 11 } }
+    }
+  });
+  activateSniffer(harness);
+  await flushPromises();
+  const requestsOnActivatedRoute = requestedUrls.filter(url => url.includes("api.bilibili.com")).length;
+  assert.ok(requestsOnActivatedRoute > 0, "the activated route is probed");
+  harness.context.location.href = "https://www.bilibili.com/video/BV1RouteB";
+  harness.context.location.pathname = "/video/BV1RouteB";
+  harness.context.window.__INITIAL_STATE__ = { videoData: { bvid: "BV1RouteB", aid: 2, cid: 22 } };
+  harness.context.window.__fuguangLastBilibiliPlayurlProbe = null;
+  for (const callback of harness.timerCallbacks.splice(0)) {
+    callback();
+  }
+  await flushPromises();
+  assert.equal(
+    requestedUrls.filter(url => url.includes("api.bilibili.com")).length,
+    requestsOnActivatedRoute,
+    "delayed probes must not reach a route the extension was never opened on"
+  );
+}
 function activateSniffer(harness) {
   harness.context.window.__fuguangPageSnifferActivationPending = true;
   vm.runInContext(source, harness.context, { filename: "page-sniffer.js" });
@@ -497,6 +527,7 @@ function createHarness({
   windowOverrides = {}
 } = {}) {
   const messages = [];
+  const timerCallbacks = [];
   let nextTimer = 1;
   const window = {
     fetch(input) {
@@ -574,13 +605,14 @@ function createHarness({
       return id;
     },
     clearTimeout() {},
-    setTimeout() {
+    setTimeout(callback) {
+      timerCallbacks.push(callback);
       const id = nextTimer;
       nextTimer += 1;
       return id;
     }
   });
-  return { context, messages };
+  return { context, messages, timerCallbacks };
 }
 
 function createFakeResponse(url, body, headers = {}) {
