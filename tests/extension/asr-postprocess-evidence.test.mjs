@@ -21,31 +21,25 @@ function distributedRun(phrase, quality) {
   return segments;
 }
 
-test("frequent repeats reported as clear speech are kept", () => {
-  for (const phrase of ["Thank you so much", "谢谢大家", "ありがとうございます"]) {
-    const output = postprocess.filterAsrDistributedRepeatedRuns(
-      distributedRun(phrase, { noSpeechProbability: 0.01, avgLogProbability: -0.1 })
-    );
-    assert.equal(output.filter(segment => segment.text === phrase).length, 8, phrase);
+// Whisper emits its hallucinations with quality numbers inside its own acceptance thresholds, so those
+// numbers must not be enough to keep a line the repeat or low-information rules flag.
+const HALLUCINATION_QUALITY = { noSpeechProbability: 0.3, avgLogProbability: -0.4 };
+
+test("frequent repeats are dropped even when their quality numbers look like speech", () => {
+  for (const phrase of ["Thank you for watching", "请不吝点赞 订阅 转发 打赏支持明镜与点点栏目", "ご視聴ありがとうございました"]) {
+    for (const quality of [undefined, HALLUCINATION_QUALITY, { noSpeechProbability: 0.01, avgLogProbability: -0.1 }]) {
+      const output = postprocess.filterAsrDistributedRepeatedRuns(distributedRun(phrase, quality));
+      assert.equal(output.some(segment => segment.text === phrase), false, phrase);
+      assert.equal(output.filter(segment => segment.text.startsWith("different line")).length, 8);
+    }
   }
 });
 
-test("frequent repeats without quality numbers or with weak quality are still dropped", () => {
-  const blind = postprocess.filterAsrDistributedRepeatedRuns(distributedRun("Thank you for watching"));
-  assert.equal(blind.some(segment => segment.text === "Thank you for watching"), false);
-  const weak = postprocess.filterAsrDistributedRepeatedRuns(
-    distributedRun("Thank you for watching", { noSpeechProbability: 0.85, avgLogProbability: -1.4 })
-  );
-  assert.equal(weak.some(segment => segment.text === "Thank you for watching"), false);
-});
-
-test("a long low-information line is kept only when the recognizer is confident", () => {
-  const confident = normalizeOne({ start: 0, end: 3.5, text: "对对对", no_speech_prob: 0.02, avg_logprob: -0.15 });
-  assert.equal(confident.length, 1);
-  const blind = normalizeOne({ start: 0, end: 3.5, text: "对对对" });
-  assert.equal(blind.length, 0);
-  const weak = normalizeOne({ start: 0, end: 3.5, text: "对对对", no_speech_prob: 0.8, avg_logprob: -1.3 });
-  assert.equal(weak.length, 0);
+test("a long low-information line is dropped whatever its quality numbers say", () => {
+  for (const extra of [{}, { no_speech_prob: 0.4, avg_logprob: -0.5 }, { no_speech_prob: 0.02, avg_logprob: -0.15 }]) {
+    assert.equal(normalizeOne({ start: 0, end: 3.5, text: "对对对", ...extra }).length, 0);
+  }
+  assert.equal(normalizeOne({ start: 0, end: 1.2, text: "对对对", no_speech_prob: 0.02, avg_logprob: -0.15 }).length, 1);
 });
 
 test("the no-speech check reads the quality numbers normalized segments actually carry", () => {
@@ -67,32 +61,4 @@ test("the no-speech check reads the quality numbers normalized segments actually
     postprocess.filterAsrSegmentsByHallucinationGuard(normalized, CHUNK, { disableCustomRunFilters: true }).length,
     0
   );
-});
-
-test("a missing quality value is not read as confident speech", () => {
-  const nulls = normalizeOne({ start: 0, end: 3.5, text: "对对对", no_speech_prob: null, avg_logprob: null });
-  assert.equal(nulls.length, 0);
-  const empty = normalizeOne({ start: 0, end: 3.5, text: "对对对", no_speech_prob: "", avg_logprob: "" });
-  assert.equal(empty.length, 0);
-});
-
-test("a mostly confident repeat is kept even when a few occurrences are weak", () => {
-  // Spread over more than ten minutes so the medium-frequency rule applies, not only the high-count one.
-  const clear = { noSpeechProbability: 0.01, avgLogProbability: -0.1 };
-  const segments = [];
-  for (let index = 0; index < 8; index += 1) {
-    const start = index * 100;
-    segments.push({ start, end: start + 1.5, text: "Thank you so much", asrQuality: { ...clear } });
-    segments.push({ start: start + 10, end: start + 11.5, text: `different line ${index}`, asrQuality: { ...clear } });
-  }
-  let weakened = 0;
-  for (const segment of segments) {
-    if (segment.text === "Thank you so much" && weakened < 2) {
-      segment.asrQuality = { noSpeechProbability: 0.9, avgLogProbability: -1.5 };
-      segment.end = segment.start + 4;
-      weakened += 1;
-    }
-  }
-  const output = postprocess.filterAsrDistributedRepeatedRuns(segments);
-  assert.equal(output.filter(segment => segment.text === "Thank you so much").length, 8);
 });
