@@ -630,10 +630,14 @@ assert.equal(context.browserTranslationProviderConcurrency({ modelConfig: { work
       matureAsrPlan: {},
       signal: controller.signal
     });
-    for (let index = 0; index < 40 && !requestSignal; index += 1) {
-      await new Promise(resolve => setImmediate(resolve));
+    // Wait by wall-clock deadline, not a fixed number of ticks: a slow CI runner may need more turns
+    // before the request reaches fetch.
+    const deadline = Date.now() + 5000;
+    while (!requestSignal && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 5));
     }
-    assert.equal(requestSignal?.aborted, false);
+    assert.ok(requestSignal, "the request reached fetch");
+    assert.equal(requestSignal.aborted, false);
     controller.abort(new Error("任务已停止。"));
     await assert.rejects(request, error => error?.name === "AbortError" && /任务已停止/.test(error.message));
     assert.equal(requestSignal.aborted, true);
