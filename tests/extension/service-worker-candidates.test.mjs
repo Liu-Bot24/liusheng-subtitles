@@ -4186,6 +4186,16 @@ assert.equal(context.browserTranslationProviderConcurrency({ modelConfig: { work
     });
     await context.writeTabCandidateSnapshot(tabId);
   }
+  vm.runInContext(`
+    tabState.get(1116).candidates[0].requestHeaders = { authorization: "Bearer snapshot-test-token" };
+    tabState.get(1116).candidates[0].requestHeadersByOrigin = { "https://cdn.example.test": { authorization: "Bearer snapshot-test-token" } };
+  `, context);
+  await context.writeTabCandidateSnapshot(1116);
+  assert.equal(
+    JSON.stringify(sessionStore["tabCandidates:1116"]).includes("snapshot-test-token"),
+    false,
+    "captured request headers must not be copied into session storage"
+  );
   vm.runInContext("tabState.delete(1116); tabState.delete(1117);", context);
 
   await context.restoreTabCandidateSnapshots();

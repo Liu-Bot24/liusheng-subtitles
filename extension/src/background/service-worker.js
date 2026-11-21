@@ -10059,10 +10059,17 @@ async function writeTabCandidateSnapshot(tabId) {
       },
       mediaFrameId: state.mediaFrameId ?? null,
       mediaDocumentId: state.mediaDocumentId || "",
-      candidates: state.candidates,
+      candidates: candidatesWithoutRequestHeaders(state.candidates),
       savedAt: Date.now()
     }
   });
+}
+
+// Captured request headers (an authorization header, for instance) stay in worker memory only. A restored
+// candidate gets them again from the page's next matching media request.
+function candidatesWithoutRequestHeaders(candidates) {
+  return JSON.parse(JSON.stringify(candidates, (key, value) =>
+    key === "requestHeaders" || key === "requestHeadersByOrigin" ? undefined : value));
 }
 
 function forgetTabCandidateSnapshot(tabId) {
