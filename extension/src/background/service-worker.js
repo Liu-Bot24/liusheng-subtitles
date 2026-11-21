@@ -422,14 +422,6 @@ function frameNavigationKey(tabId, frameId) {
   return `${tabId}:${frameId}`;
 }
 
-function historyUpdateKeepsPageIdentity(details) {
-  const key = frameNavigationKey(details.tabId, details.frameId);
-  const previousUrl = frameNavigationUrls.get(key);
-  frameNavigationUrls.set(key, details.url || "");
-  return Boolean(previousUrl && details.url) &&
-    normalizeBrowserPageIdentity(previousUrl) === normalizeBrowserPageIdentity(details.url);
-}
-
 chrome.webNavigation.onCommitted.addListener(details => {
   frameNavigationUrls.set(frameNavigationKey(details.tabId, details.frameId), details.url || "");
   if (details.frameId === 0) {
@@ -493,15 +485,35 @@ function sidepanelIsWatchingTab(tabId) {
   return false;
 }
 
-chrome.webNavigation.onHistoryStateUpdated?.addListener(details => {
-  if (historyUpdateKeepsPageIdentity(details)) {
+chrome.webNavigation.onHistoryStateUpdated?.addListener(details => handleHistoryStateUpdated(details));
+
+function handleHistoryStateUpdated(details) {
+  const key = frameNavigationKey(details.tabId, details.frameId);
+  const state = tabState.get(details.tabId);
+  const previousUrl = frameNavigationUrls.get(key) ||
+    (details.frameId === 0 ? state?.page?.url || state?.context?.href || "" : "");
+  frameNavigationUrls.set(key, details.url || "");
+  if (previousUrl && details.url &&
+      normalizeBrowserPageIdentity(previousUrl) === normalizeBrowserPageIdentity(details.url)) {
     return undefined;
   }
-  if (details.frameId === 0) {
+  if (details.frameId !== 0) {
+    return clearFrameNavigationState(details.tabId, details.frameId);
+  }
+  if (previousUrl) {
     return clearTopLevelNavigationState(details.tabId, { detachSubtitles: true });
   }
-  return clearFrameNavigationState(details.tabId, details.frameId);
-});
+  // A restarted worker does not know the previous address. Memory is cleared at once as before, but the saved
+  // list is dropped only if it belongs to another page; a same-page update (tracking parameters, a hash)
+  // leaves it for the restore.
+  const cleared = clearTopLevelNavigationState(details.tabId, { detachSubtitles: true, keepSnapshot: true });
+  return Promise.all([cleared, savedTabCandidateSnapshotPageUrl(details.tabId)]).then(([, savedPageUrl]) => {
+    if (!savedPageUrl || !details.url ||
+        normalizeBrowserPageIdentity(savedPageUrl) !== normalizeBrowserPageIdentity(details.url)) {
+      forgetTabCandidateSnapshot(details.tabId);
+    }
+  });
+}
 
 chrome.tabs.onRemoved.addListener(tabId => {
   tabState.delete(tabId);
@@ -513,13 +525,15 @@ chrome.tabs.onRemoved.addListener(tabId => {
   }
 });
 
-async function clearTopLevelNavigationState(tabId, { detachSubtitles = false } = {}) {
+async function clearTopLevelNavigationState(tabId, { detachSubtitles = false, keepSnapshot = false } = {}) {
   const state = tabState.get(tabId);
   if (state) {
     invalidateManualVttAttachment(state);
   }
   tabState.delete(tabId);
-  forgetTabCandidateSnapshot(tabId);
+  if (!keepSnapshot) {
+    forgetTabCandidateSnapshot(tabId);
+  }
   scheduleSidepanelStatusChange(tabId);
   if (detachSubtitles) {
     await broadcastMessageToFrames(tabId, { type: MESSAGE.DETACH_PRELOAD_VTT });
@@ -10087,18 +10101,38 @@ function scheduleTabCandidateSnapshot(tabId) {
 
 async function writeTabCandidateSnapshot(tabId) {
   const storage = chrome.storage?.session;
-  const state = tabState.get(tabId);
   if (!storage?.set) {
     return;
   }
+  const generation = tabNavigationGenerations.get(tabId) || 0;
+  // While a restarted worker is still restoring, a write must not replace the saved list with the thinner
+  // live one; it waits and then writes the merged list.
+  if (tabCandidateSnapshotRestorePromise) {
+    await tabCandidateSnapshotRestorePromise.catch(() => {});
+  }
+  let state = tabState.get(tabId);
   if (!state?.candidates?.length) {
-    await storage.remove?.(tabCandidateSnapshotKey(tabId));
+    if ((tabNavigationGenerations.get(tabId) || 0) === generation) {
+      await storage.remove?.(tabCandidateSnapshotKey(tabId));
+    }
+    return;
+  }
+  let pageUrl = state.page?.url || state.context?.href || frameNavigationUrls.get(frameNavigationKey(tabId, 0)) || "";
+  if (!pageUrl) {
+    pageUrl = (await chrome.tabs.get(tabId).catch(() => null))?.url || "";
+  }
+  if ((tabNavigationGenerations.get(tabId) || 0) !== generation) {
+    // The tab navigated during the wait; this list belongs to the previous page.
+    return;
+  }
+  state = tabState.get(tabId);
+  if (!state?.candidates?.length) {
     return;
   }
   const context = state.context || {};
   await storage.set({
     [tabCandidateSnapshotKey(tabId)]: {
-      pageUrl: state.page?.url || context.href || "",
+      pageUrl,
       page: state.page || {},
       context: {
         href: context.href || "",
@@ -10129,6 +10163,38 @@ async function writeTabCandidateSnapshot(tabId) {
 function candidatesWithoutRequestHeaders(candidates) {
   return JSON.parse(JSON.stringify(candidates, (key, value) =>
     key === "requestHeaders" || key === "requestHeadersByOrigin" ? undefined : value));
+}
+
+async function savedTabCandidateSnapshotPageUrl(tabId) {
+  try {
+    const key = tabCandidateSnapshotKey(tabId);
+    const stored = await chrome.storage?.session?.get?.(key);
+    return String(stored?.[key]?.pageUrl || "");
+  } catch {
+    return "";
+  }
+}
+
+// Fills only what the live value lacks, level by level, so nested details such as a stored response size
+// survive a live report that carries only some response headers.
+function fillMissingCandidateFields(live, saved) {
+  if (!isPlainCandidateObject(live) || !isPlainCandidateObject(saved)) {
+    return live;
+  }
+  const merged = { ...live };
+  for (const [field, value] of Object.entries(saved)) {
+    const current = merged[field];
+    if (current === undefined || current === null || current === "") {
+      merged[field] = value;
+    } else if (isPlainCandidateObject(current) && isPlainCandidateObject(value)) {
+      merged[field] = fillMissingCandidateFields(current, value);
+    }
+  }
+  return merged;
+}
+
+function isPlainCandidateObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function forgetTabCandidateSnapshot(tabId) {
@@ -10181,16 +10247,7 @@ async function restoreTabCandidateSnapshot(storage, key, snapshot, generationsAt
   // Live reports win; the snapshot only fills fields that a fresh but thinner report has not supplied.
   state.candidates = state.candidates.map(candidate => {
     const saved = snapshotByFingerprint.get(candidateFingerprint(candidate));
-    if (!saved) {
-      return candidate;
-    }
-    const merged = { ...candidate };
-    for (const [field, value] of Object.entries(saved)) {
-      if (merged[field] === undefined || merged[field] === null || merged[field] === "") {
-        merged[field] = value;
-      }
-    }
-    return merged;
+    return saved ? fillMissingCandidateFields(candidate, saved) : candidate;
   });
   const known = new Set(state.candidates.map(candidateFingerprint));
   const missing = [...snapshotByFingerprint.entries()]
@@ -10212,5 +10269,7 @@ async function restoreTabCandidateSnapshot(storage, key, snapshot, generationsAt
     frameNavigationUrls.set(frameNavigationKey(tabId, 0), tab.url);
   }
   scheduleSidepanelStatusChange(tabId);
+  // Persist the merged list, so a live report written during the restore does not leave a thinner copy.
+  scheduleTabCandidateSnapshot(tabId);
   return missing.length > 0;
 }

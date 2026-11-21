@@ -4169,7 +4169,10 @@ assert.equal(context.browserTranslationProviderConcurrency({ modelConfig: { work
   const originalTabsGet = chrome.tabs.get;
   chrome.storage.session = {
     async get(keys) {
-      return keys === null ? { ...sessionStore } : {};
+      if (keys === null) {
+        return { ...sessionStore };
+      }
+      return Object.fromEntries([].concat(keys).filter(key => key in sessionStore).map(key => [key, structuredClone(sessionStore[key])]));
     },
     async set(values) {
       Object.assign(sessionStore, structuredClone(values));
@@ -4260,6 +4263,68 @@ assert.equal(context.browserTranslationProviderConcurrency({ modelConfig: { work
   assert.equal(merged.length, 1, "a live report and its snapshot copy stay one candidate");
   assert.equal(vm.runInContext(`tabState.get(1121).candidates[0].restoredOnlyField`, context), "from-snapshot",
     "fields only the snapshot knows are filled into the live candidate");
+
+  // Nested details are filled level by level: a live report with only some response headers keeps the
+  // stored size.
+  tabUrls.set(1122, "https://example.test/show?id=7");
+  seedPage(1122, { url: "https://example.test/show?id=7", duration: 300 });
+  context.addPageMediaCandidate(1122, { url: "https://cdn.example.test/show-1122/master.m3u8", source: "fetch-url", kind: "hls", ext: "m3u8" });
+  vm.runInContext(`tabState.get(1122).candidates[0].responseHeaders = { contentType: "application/vnd.apple.mpegurl", size: 4096 };`, context);
+  await context.writeTabCandidateSnapshot(1122);
+  vm.runInContext("tabState.delete(1122);", context);
+  seedPage(1122, { url: "https://example.test/show?id=7", duration: 300 });
+  context.addPageMediaCandidate(1122, { url: "https://cdn.example.test/show-1122/master.m3u8", source: "fetch-url", kind: "hls", ext: "m3u8" });
+  vm.runInContext(`tabState.get(1122).candidates[0].responseHeaders = { contentType: "application/vnd.apple.mpegurl" };`, context);
+  await context.restoreTabCandidateSnapshots();
+  assert.equal(vm.runInContext(`tabState.get(1122).candidates[0].responseHeaders.size`, context), 4096,
+    "a nested field only the snapshot knows is kept");
+
+  // A live report written while the restore is still checking the tab must not replace the saved list.
+  tabUrls.set(1123, "https://example.test/show?id=7");
+  seedPage(1123, { url: "https://example.test/show?id=7", duration: 300 });
+  context.addPageMediaCandidate(1123, { url: "https://cdn.example.test/show-1123/saved.m3u8", source: "fetch-url", kind: "hls", ext: "m3u8" });
+  await context.writeTabCandidateSnapshot(1123);
+  vm.runInContext("tabState.delete(1123);", context);
+  let releaseSlowTabsGet;
+  const slowTabsGet = new Promise(resolve => {
+    releaseSlowTabsGet = resolve;
+  });
+  chrome.tabs.get = async tabId => {
+    await slowTabsGet;
+    return tabUrls.has(tabId) ? { id: tabId, title: "Show", url: tabUrls.get(tabId) } : null;
+  };
+  vm.runInContext("tabCandidateSnapshotRestorePromise = restoreTabCandidateSnapshots();", context);
+  context.addPageMediaCandidate(1123, { url: "https://cdn.example.test/show-1123/live.m3u8", source: "fetch-url", kind: "hls", ext: "m3u8" });
+  const earlyWrite = context.writeTabCandidateSnapshot(1123);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  releaseSlowTabsGet();
+  await vm.runInContext("tabCandidateSnapshotRestorePromise", context);
+  await earlyWrite;
+  const savedUrls = (sessionStore["tabCandidates:1123"]?.candidates || []).map(candidate => candidate.url).sort();
+  assert.deepEqual(savedUrls, ["https://cdn.example.test/show-1123/live.m3u8", "https://cdn.example.test/show-1123/saved.m3u8"],
+    "the saved list keeps both the restored and the live candidate");
+  assert.equal(sessionStore["tabCandidates:1123"]?.pageUrl, "https://example.test/show?id=7",
+    "the saved list keeps its page address");
+  chrome.tabs.get = async tabId => (tabUrls.has(tabId) ? { id: tabId, title: "Show", url: tabUrls.get(tabId) } : null);
+
+  // A restarted worker gets a history update that only adds tracking parameters: the saved list survives.
+  tabUrls.set(1124, "https://example.test/show?id=7");
+  seedPage(1124, { url: "https://example.test/show?id=7", duration: 300 });
+  context.addPageMediaCandidate(1124, { url: "https://cdn.example.test/show-1124/master.m3u8", source: "fetch-url", kind: "hls", ext: "m3u8" });
+  await context.writeTabCandidateSnapshot(1124);
+  vm.runInContext("tabState.delete(1124); frameNavigationUrls.delete('1124:0');", context);
+  const originalHistorySendMessage = chrome.tabs.sendMessage;
+  chrome.tabs.sendMessage = async () => ({ ok: true });
+  tabUrls.set(1124, "https://example.test/show?id=7&utm_source=share");
+  await webNavigationHistoryListeners[0]({ tabId: 1124, frameId: 0, url: "https://example.test/show?id=7&utm_source=share" });
+  assert.ok("tabCandidates:1124" in sessionStore, "a same-page update after a restart keeps the saved list");
+  await context.restoreTabCandidateSnapshots();
+  assert.ok(context.getState(1124).candidates.some(candidate => candidate.url === "https://cdn.example.test/show-1124/master.m3u8"),
+    "the saved list is restored after the update");
+  vm.runInContext("tabState.delete(1124); frameNavigationUrls.delete('1124:0');", context);
+  await webNavigationHistoryListeners[0]({ tabId: 1124, frameId: 0, url: "https://example.test/show?id=8" });
+  assert.equal("tabCandidates:1124" in sessionStore, false, "an update to another page drops the saved list");
+  chrome.tabs.sendMessage = originalHistorySendMessage;
   chrome.storage.session = originalSession;
   chrome.tabs.get = originalTabsGet;
 }
