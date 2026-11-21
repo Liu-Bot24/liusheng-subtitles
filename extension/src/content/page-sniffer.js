@@ -1,11 +1,15 @@
 (() => {
-  const PAGE_SNIFFER_REVISION = "20260901-bilibili-route-identity";
+  const PAGE_SNIFFER_REVISION = "20261122-activation-gated-site-probes";
+  // The service worker sets this flag right before re-injecting the sniffer for a page the user opened the
+  // extension on. Site API probes (which run with the user's site session) only start after that.
+  const activationRequested = window.__fuguangPageSnifferActivationPending === true;
+  delete window.__fuguangPageSnifferActivationPending;
   if (
     window.__fuguangPageSnifferRevision === PAGE_SNIFFER_REVISION &&
     typeof window.__fuguangPageSnifferRescan === "function"
   ) {
     try {
-      window.__fuguangPageSnifferRescan();
+      window.__fuguangPageSnifferRescan({ activate: activationRequested });
     } catch {
       // Page inspection must never affect the host page.
     }
@@ -21,6 +25,8 @@
   const MAX_DOCUMENT_MARKUP_SCAN_CHARS = 2_000_000;
   const MAX_FMP4_BINARY_INSPECTIONS = 80;
   const MAX_FMP4_BINARY_INSPECTION_BYTES = 768 * 1024;
+  const MAX_TEXT_RESPONSE_INSPECTION_BYTES = 8 * 1024 * 1024;
+  const MAX_OBJECT_INSPECTION_NODES = 50_000;
   const X_TWITTER_TWEET_RESULT_FALLBACK = {
     queryId: "SgZWKwvBiOKrSC0QeOGvXw",
     operationName: "TweetResultByRestId",
@@ -102,6 +108,7 @@
   let lastContextSignature = "";
   let lastDocumentMarkupSignature = "";
   let fmp4BinaryInspections = 0;
+  let siteApiProbesEnabled = activationRequested;
   const seenPerformanceUrls = new Set();
   const timers = [];
   const contextTimer = setInterval(reportPageContext, 1200);
@@ -111,7 +118,7 @@
   reportPageContext();
   scheduleInitialScan();
   window.__fuguangPageSnifferCleanup = cleanup;
-  window.__fuguangPageSnifferRescan = scheduleInitialScan;
+  window.__fuguangPageSnifferRescan = rescan;
   window.__fuguangPageSnifferRevision = PAGE_SNIFFER_REVISION;
 
   const fuguangFetch = function fuguangFetch(input, init) {
@@ -150,7 +157,10 @@
         } else if (this.response && typeof this.response === "object") {
           if (this.response instanceof ArrayBuffer) {
             inspectBinaryResponse(this.response, url, "xhr-body", this.getResponseHeader?.("content-type") || "", this.getResponseHeader?.("content-length") || "");
-          } else if (typeof this.response.arrayBuffer === "function") {
+          } else if (
+            typeof this.response.arrayBuffer === "function" &&
+            shouldInspectFmp4Response(url, this.getResponseHeader?.("content-type") || this.response.type || "", String(this.response.size ?? this.getResponseHeader?.("content-length") ?? ""))
+          ) {
             this.response.arrayBuffer()
               .then(buffer => safelyInspect(() => inspectBinaryResponse(buffer, url, "xhr-body", this.getResponseHeader?.("content-type") || "", this.getResponseHeader?.("content-length") || "")))
               .catch(() => {});
@@ -199,12 +209,22 @@
     if (window.__fuguangPageSnifferCleanup === cleanup) {
       delete window.__fuguangPageSnifferCleanup;
     }
-    if (window.__fuguangPageSnifferRescan === scheduleInitialScan) {
+    if (window.__fuguangPageSnifferRescan === rescan) {
       delete window.__fuguangPageSnifferRescan;
     }
     if (window.__fuguangPageSnifferRevision === PAGE_SNIFFER_REVISION) {
       delete window.__fuguangPageSnifferRevision;
     }
+  }
+
+  function rescan(options = {}) {
+    if (options?.activate === true) {
+      siteApiProbesEnabled = true;
+      // Opening the extension re-reports everything already seen, in case the worker lost its copy.
+      seenPerformanceUrls.clear();
+      lastDocumentMarkupSignature = "";
+    }
+    scheduleInitialScan();
   }
 
   function scheduleInitialScan() {
@@ -228,6 +248,9 @@
   }
 
   async function probeXTwitterTweetMedia() {
+    if (!siteApiProbesEnabled) {
+      return;
+    }
     const statusId = readXTwitterStatusId();
     if (!statusId) {
       return;
@@ -451,6 +474,9 @@
   }
 
   async function probeBilibiliPlayurl() {
+    if (!siteApiProbesEnabled) {
+      return;
+    }
     const routeKey = readBilibiliRouteKey();
     const ids = await resolveBilibiliVideoIds();
     if (!ids.bvid || !ids.cid) {
@@ -698,7 +724,7 @@
 
   function inspectResponse(response) {
     const contentType = response.headers?.get("content-type") || "";
-    if (shouldInspectTextResponse(response.url, contentType)) {
+    if (shouldInspectTextResponse(response.url, contentType, response.headers?.get("content-length") || "")) {
       response
         .clone()
         .text()
@@ -714,8 +740,21 @@
     }
   }
 
-  function shouldInspectTextResponse(url, contentType) {
+  function shouldInspectTextResponse(url, contentType, contentLength = "") {
     const normalized = contentType.toLowerCase();
+    // Streaming bodies never finish, so a cloned reader would buffer them for the page's lifetime.
+    if (
+      normalized.includes("event-stream") ||
+      normalized.includes("ndjson") ||
+      normalized.includes("jsonl") ||
+      normalized.includes("multipart/")
+    ) {
+      return false;
+    }
+    const length = Number(contentLength);
+    if (contentLength !== "" && Number.isFinite(length) && length > MAX_TEXT_RESPONSE_INSPECTION_BYTES) {
+      return false;
+    }
     const classified = classifyUrl(url);
     return (
       classified?.kind === "hls" ||
@@ -887,10 +926,11 @@
     }
   }
 
-  function inspectObject(value, source, depth = 0, seen = new WeakSet()) {
-    if (!value || depth > MAX_DEPTH) {
+  function inspectObject(value, source, depth = 0, seen = new WeakSet(), budget = { nodes: MAX_OBJECT_INSPECTION_NODES }) {
+    if (!value || depth > MAX_DEPTH || budget.nodes <= 0) {
       return;
     }
+    budget.nodes -= 1;
     if (typeof value === "string") {
       inspectText(value, location.href, source);
       return;
@@ -905,10 +945,10 @@
     inspectStructuredMediaObject(value, source);
     inspectXTwitterTweetMedia(value, source);
     if (Array.isArray(value)) {
-      value.forEach(item => inspectObject(item, source, depth + 1, seen));
+      value.forEach(item => inspectObject(item, source, depth + 1, seen, budget));
       return;
     }
-    Object.values(value).forEach(item => inspectObject(item, source, depth + 1, seen));
+    Object.values(value).forEach(item => inspectObject(item, source, depth + 1, seen, budget));
   }
 
   function inspectText(text, baseUrl, source) {

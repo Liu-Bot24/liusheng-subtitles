@@ -656,6 +656,15 @@ async function activatePage(tabId) {
   }
   await injectPageScript(tabId, ["src/content/subtitle-overlay.js"], { allFrames: true });
   await injectPageScript(tabId, ["src/content/media-bridge.js"], { allFrames: true });
+  // Site API probes in the sniffer use the user's site session, so they only start once the user opens the
+  // extension on this page. The flag is consumed by the sniffer injection that follows.
+  await injectPageScript(tabId, null, {
+    allFrames: true,
+    world: "MAIN",
+    func: () => {
+      window.__fuguangPageSnifferActivationPending = true;
+    }
+  }).catch(() => {});
   await injectPageScript(tabId, ["src/content/page-sniffer.js"], { allFrames: true, world: "MAIN" });
   await refreshTabInfo(tabId);
 }
@@ -663,9 +672,13 @@ async function activatePage(tabId) {
 async function injectPageScript(tabId, files, options = {}) {
   const injection = {
     target: { tabId, allFrames: Boolean(options.allFrames) },
-    files,
     injectImmediately: true
   };
+  if (typeof options.func === "function") {
+    injection.func = options.func;
+  } else {
+    injection.files = files;
+  }
   if (options.world) {
     injection.world = options.world;
   }

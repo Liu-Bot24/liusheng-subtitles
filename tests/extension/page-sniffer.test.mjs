@@ -91,7 +91,7 @@ const source = fs.readFileSync(new URL("../../extension/src/content/page-sniffer
     pageFetch,
     "re-activating the sniffer must not remove a page-installed fetch wrapper"
   );
-  assert.equal(harness.context.window.__fuguangPageSnifferRevision, "20260901-bilibili-route-identity");
+  assert.equal(harness.context.window.__fuguangPageSnifferRevision, "20261122-activation-gated-site-probes");
   assert.doesNotThrow(() => vm.runInContext(`
     JSON.parse('{"value":1}', (_key, value) =>
       value && value.value === 1
@@ -167,6 +167,13 @@ const source = fs.readFileSync(new URL("../../extension/src/content/page-sniffer
     }
   });
   vm.runInContext(source, harness.context, { filename: "page-sniffer.js" });
+  await flushPromises();
+  assert.deepEqual(
+    requestedUrls.filter(url => url.includes("api.bilibili.com")),
+    [],
+    "Bilibili API probes must not run before the user opens the extension on this page"
+  );
+  activateSniffer(harness);
   await flushPromises();
 
   const media = harness.messages.filter(message => message.type === "FUGUANG_PAGE_SNIFFER_MEDIA").map(message => message.media);
@@ -285,8 +292,14 @@ const source = fs.readFileSync(new URL("../../extension/src/content/page-sniffer
       }
     }
   });
+  harness.context.window.__fuguangPageSnifferActivationPending = true;
   vm.runInContext(source, harness.context, { filename: "page-sniffer.js" });
   await flushPromises();
+  assert.equal(
+    "__fuguangPageSnifferActivationPending" in harness.context.window,
+    false,
+    "the sniffer must consume the activation flag"
+  );
 
   const media = harness.messages.filter(message => message.type === "FUGUANG_PAGE_SNIFFER_MEDIA").map(message => message.media);
   assert.ok(requestedUrls.some(url => url.includes("cid=222")), "Bilibili p=2 must request the second page CID");
@@ -400,10 +413,12 @@ const source = fs.readFileSync(new URL("../../extension/src/content/page-sniffer
 #EXT-X-MEDIA:NAME="Audio",TYPE=AUDIO,GROUP-ID="audio-128000",AUTOSELECT=YES,URI="/amplify_video/2059183631126667264/pl/mp4a/128000/8gx0bryi1XnA-oNu.m3u8"
 #EXT-X-STREAM-INF:AVERAGE-BANDWIDTH=499344,BANDWIDTH=663810,RESOLUTION=1280x720,CODECS="mp4a.40.2,avc1.64001F",AUDIO="audio-128000"
 /amplify_video/2059183631126667264/pl/avc1/1280x720/px2HLtDW23cRvY8h.m3u8`;
+  const requestedUrls = [];
   const harness = createHarness({
     locationHref: "https://x.com/jaynitx/status/2059183692569071878",
     scripts: [{ src: mainScriptUrl, textContent: "" }],
     fetchResponses(url) {
+      requestedUrls.push(String(url));
       if (url === mainScriptUrl) {
         return createFakeResponse(url, mainScript, { "content-type": "application/javascript" });
       }
@@ -419,6 +434,10 @@ const source = fs.readFileSync(new URL("../../extension/src/content/page-sniffer
   vm.runInContext(source, harness.context, { filename: "page-sniffer.js" });
   await flushPromises();
   await flushPromises();
+  assert.deepEqual(requestedUrls, [], "X API probes must not run before the user opens the extension on this page");
+  activateSniffer(harness);
+  await flushPromises();
+  await flushPromises();
 
   const media = harness.messages.filter(message => message.type === "FUGUANG_PAGE_SNIFFER_MEDIA").map(message => message.media);
   assert.ok(
@@ -429,6 +448,43 @@ const source = fs.readFileSync(new URL("../../extension/src/content/page-sniffer
     media.some(item => item.url === "https://video.twimg.com/amplify_video/2059183631126667264/pl/mp4a/128000/8gx0bryi1XnA-oNu.m3u8" && item.role === "audio"),
     "X GraphQL probe should fetch the HLS master and expose the audio rendition"
   );
+}
+
+{
+  const manifestUrl = "https://cdn.example.test/stream/master.m3u8";
+  const body = JSON.stringify({ playlist: manifestUrl });
+  const cases = [
+    { label: "server-sent events", headers: { "content-type": "text/event-stream" }, url: "https://example.test/events" },
+    { label: "ndjson stream", headers: { "content-type": "application/x-ndjson" }, url: "https://example.test/feed" },
+    { label: "oversized JSON", headers: { "content-type": "application/json", "content-length": String(64 * 1024 * 1024) }, url: "https://example.test/huge.json" }
+  ];
+  for (const item of cases) {
+    const response = createFakeResponse(item.url, body, item.headers);
+    let clones = 0;
+    response.clone = () => {
+      clones += 1;
+      return createFakeResponse(item.url, body, item.headers);
+    };
+    const harness = createHarness({ locationHref: "https://example.test/watch", fetchResponse: response });
+    vm.runInContext(source, harness.context, { filename: "page-sniffer.js" });
+    await harness.context.window.fetch(item.url);
+    await flushPromises();
+    assert.equal(clones, 0, `${item.label} bodies must not be cloned and buffered for inspection`);
+  }
+  const normal = createFakeResponse("https://example.test/api.json", body, { "content-type": "application/json", "content-length": String(body.length) });
+  const harness = createHarness({ locationHref: "https://example.test/watch", fetchResponse: normal });
+  vm.runInContext(source, harness.context, { filename: "page-sniffer.js" });
+  await harness.context.window.fetch("https://example.test/api.json");
+  await flushPromises();
+  assert.ok(
+    harness.messages.some(message => message.type === "FUGUANG_PAGE_SNIFFER_MEDIA" && message.media?.url === manifestUrl),
+    "ordinary JSON responses are still scanned for media addresses"
+  );
+}
+
+function activateSniffer(harness) {
+  harness.context.window.__fuguangPageSnifferActivationPending = true;
+  vm.runInContext(source, harness.context, { filename: "page-sniffer.js" });
 }
 
 function createHarness({
