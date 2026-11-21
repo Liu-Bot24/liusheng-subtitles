@@ -2513,7 +2513,7 @@ async function renderSubtitles(jobId, job = null) {
   }
   const requestId = ++subtitleLoadRequestId;
   pendingSubtitleSignature = pendingKey;
-  const pending = loadSubtitleCuesWithUserEdits(jobId, renderedSubtitleJobId !== jobId);
+  const pending = loadSubtitleCuesWithUserEdits(jobId, !(renderedSubtitleJobId === jobId && subtitleCues.length > 0));
   pendingSubtitlePromise = pending;
   let result;
   try {
@@ -2528,7 +2528,11 @@ async function renderSubtitles(jobId, job = null) {
     return;
   }
   if (result.source === "transcript") {
-    jobTranscriptBase = { jobId: String(jobId || ""), signature: result.baseSignature || jobTranscriptSignature(result.transcript) };
+    jobTranscriptBase = {
+      jobId: String(jobId || ""),
+      signature: result.baseSignature || jobTranscriptSignature(result.transcript),
+      transcript: null
+    };
     if (result.editedEntry) {
       applyUserEditedCacheEntry(jobId, result.editedEntry);
       startSubtitleFollow();
@@ -2546,6 +2550,9 @@ async function renderSubtitles(jobId, job = null) {
   subtitleCueSource = result.source;
   currentTranscript = result.transcript || (result.source === "transcript" ? transcriptFromCues(cues) : null);
   subtitleCues = cues;
+  if (result.source === "transcript" && jobTranscriptBase) {
+    jobTranscriptBase.transcript = currentTranscript;
+  }
   activeCueIndex = preserveExistingPresentation ? previousActiveCueIndex : -1;
   renderSubtitleCueList({ preserveScroll: preserveExistingPresentation, scrollState });
   startSubtitleFollow();
@@ -2590,6 +2597,9 @@ async function userEditedCacheEntryForJob(jobId, baseSignature) {
 function applyUserEditedCacheEntry(jobId, entry) {
   const cues = cuesFromTranscript(entry.transcript);
   currentTranscript = entry.transcript;
+  if (jobTranscriptBase) {
+    jobTranscriptBase.transcript = entry.transcript;
+  }
   currentSubtitleCacheEntry = entry;
   cachedSubtitleLoadedKey = entry.id || "";
   subtitleCueSource = "transcript";
@@ -2603,7 +2613,10 @@ function applyUserEditedCacheEntry(jobId, entry) {
 
 function currentUserEditsMarker(entryJobId) {
   const jobId = String(entryJobId || "");
-  if (!jobId || jobTranscriptBase?.jobId !== jobId || !jobTranscriptBase.signature) {
+  // Only edits made on the transcript that came from this task (or on its restored edited copy) carry the
+  // task marker; imported or otherwise loaded subtitles never do, even when they share the task id.
+  if (!jobId || jobTranscriptBase?.jobId !== jobId || !jobTranscriptBase.signature ||
+      !currentTranscript || jobTranscriptBase.transcript !== currentTranscript) {
     return null;
   }
   if (!manualSubtitleOverrideMatches(jobId)) {

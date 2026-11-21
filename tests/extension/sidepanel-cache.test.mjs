@@ -6842,6 +6842,7 @@ const editedSubtitlesSurviveReopenState = await vm.runInContext(`
     const originalGetSubtitleCacheEntryForCurrentPage = getSubtitleCacheEntryForCurrentPage;
     const originalAttachCurrentSubtitlesToPage = attachCurrentSubtitlesToPage;
     const originalLoadSubtitleCues = loadSubtitleCues;
+    const originalParseSubtitleImportText = FuguangSubtitleFormat.parseSubtitleImportText;
     let savedEntry = null;
     let taskTranslation = "任务原译文";
     const job = { translation: { segmentCount: 1, chunksDone: 1, chunksFailed: 0, vttPath: "browser-memory" } };
@@ -6882,6 +6883,25 @@ const editedSubtitlesSurviveReopenState = await vm.runInContext(`
       await renderSubtitles("job-edit-reopen", job);
       const afterReopen = subtitleCues[0]?.text;
 
+      FuguangSubtitleFormat.parseSubtitleImportText = () => ({
+        transcript: {
+          source: [{ start: 0, end: 1, text: "imported line" }],
+          translated: [{ start: 0, end: 1, text: "导入的译文" }],
+          chunkStatuses: []
+        },
+        metadata: {},
+        format: "srt"
+      });
+      elements.subtitleImportFile.files = [{ name: "other.srt", type: "application/x-subrip", text: async () => "" }];
+      await importSubtitleFile();
+      subtitleCues[0].text = "改过的导入译文";
+      currentTranscript.translated[0].text = "改过的导入译文";
+      await persistSubtitleEdits();
+      const importMarker = savedEntry?.userEdits || null;
+      reopenPanel();
+      await renderSubtitles("job-edit-reopen", job);
+      const afterImportReopen = subtitleCues[0]?.text;
+
       taskTranslation = "重新翻译后的译文";
       reopenPanel();
       await renderSubtitles("job-edit-reopen", job);
@@ -6891,6 +6911,8 @@ const editedSubtitlesSurviveReopenState = await vm.runInContext(`
         savedMarkerJobId: savedMarker?.jobId || "",
         savedMarkerHasBase: Boolean(savedMarker?.baseSignature),
         afterReopen,
+        importMarker,
+        afterImportReopen,
         afterRetranslation
       };
     } finally {
@@ -6898,6 +6920,8 @@ const editedSubtitlesSurviveReopenState = await vm.runInContext(`
       getSubtitleCacheEntryForCurrentPage = originalGetSubtitleCacheEntryForCurrentPage;
       attachCurrentSubtitlesToPage = originalAttachCurrentSubtitlesToPage;
       loadSubtitleCues = originalLoadSubtitleCues;
+      FuguangSubtitleFormat.parseSubtitleImportText = originalParseSubtitleImportText;
+      elements.subtitleImportFile.files = [];
       manualSubtitleOverride = null;
       jobTranscriptBase = null;
     }
@@ -6908,5 +6932,7 @@ assert.deepEqual(JSON.parse(JSON.stringify(editedSubtitlesSurviveReopenState)), 
   savedMarkerJobId: "job-edit-reopen",
   savedMarkerHasBase: true,
   afterReopen: "用户改过的译文",
+  importMarker: null,
+  afterImportReopen: "任务原译文",
   afterRetranslation: "重新翻译后的译文"
 }, "edits saved for a task must come back when the panel reopens, until the task's own subtitles change");
