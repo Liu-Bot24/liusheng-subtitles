@@ -4,6 +4,7 @@ import vm from "node:vm";
 
 const webNavigationCommittedListeners = [];
 const webNavigationHistoryListeners = [];
+const webNavigationCompletedListeners = [];
 const webRequestBeforeSendHeadersListeners = [];
 const webRequestHeadersReceivedListeners = [];
 const runtimeConnectListeners = [];
@@ -105,6 +106,7 @@ const chrome = {
     getAllFrames: async () => [],
     onCommitted: { addListener: listener => webNavigationCommittedListeners.push(listener) },
     onHistoryStateUpdated: { addListener: listener => webNavigationHistoryListeners.push(listener) },
+    onCompleted: { addListener: listener => webNavigationCompletedListeners.push(listener) },
     onTabReplaced: { addListener }
   },
   webRequest: {
@@ -17627,5 +17629,42 @@ assert.equal(context.shouldRetryBrowserAsrClipRequestError({
   } finally {
     chrome.alarms.create = originalAlarmCreate;
     chrome.alarms.get = originalAlarmGet;
+  }
+}
+{
+  const originalExecuteScript = chrome.scripting.executeScript;
+  const injections = [];
+  chrome.scripting.executeScript = async injection => {
+    injections.push({ tabId: injection.target?.tabId, files: injection.files || null, func: Boolean(injection.func) });
+    return [];
+  };
+  const incoming = [];
+  const port = {
+    name: "fuguang-sidepanel-status-v1",
+    onMessage: { addListener: listener => incoming.push(listener) },
+    onDisconnect: { addListener: () => {} },
+    postMessage: () => {}
+  };
+  try {
+    runtimeConnectListeners[0](port);
+    incoming[0]({ type: "FUGUANG_SIDEPANEL_SUBSCRIBE", tabId: 1130 });
+    for (const listener of webNavigationCompletedListeners) {
+      listener({ tabId: 1131, frameId: 0, url: "https://www.bilibili.com/video/BV1Other" });
+      listener({ tabId: 1130, frameId: 3, url: "https://example.test/frame" });
+    }
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(injections.length, 0, "tabs the panel is not showing, and subframes, are not activated");
+    for (const listener of webNavigationCompletedListeners) {
+      listener({ tabId: 1130, frameId: 0, url: "https://www.bilibili.com/video/BV1Reload" });
+    }
+    await new Promise(resolve => setTimeout(resolve, 0));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.ok(
+      injections.some(item => item.tabId === 1130 && item.func) &&
+        injections.some(item => item.tabId === 1130 && item.files?.includes("src/content/page-sniffer.js")),
+      "a reload of the tab the panel shows activates the new document"
+    );
+  } finally {
+    chrome.scripting.executeScript = originalExecuteScript;
   }
 }

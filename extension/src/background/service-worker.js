@@ -438,6 +438,25 @@ chrome.webNavigation.onCommitted.addListener(details => {
   return clearFrameNavigationState(details.tabId, details.frameId);
 });
 
+// The side panel activates a page once per tab and address. When the page reloads, or loads a new
+// document at the same address, while the panel is still showing that tab, the new document is activated
+// here so its site lookups keep working for the page the user has the extension open on.
+chrome.webNavigation.onCompleted?.addListener?.(details => {
+  if (details?.frameId !== 0 || !sidepanelIsWatchingTab(details.tabId)) {
+    return;
+  }
+  activatePage(details.tabId).catch(() => {});
+});
+
+function sidepanelIsWatchingTab(tabId) {
+  for (const subscribedTabId of sidepanelStatusPorts.values()) {
+    if (subscribedTabId === tabId) {
+      return true;
+    }
+  }
+  return false;
+}
+
 chrome.webNavigation.onHistoryStateUpdated?.addListener(details => {
   if (historyUpdateKeepsPageIdentity(details)) {
     return undefined;
