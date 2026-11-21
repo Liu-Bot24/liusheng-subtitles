@@ -341,18 +341,19 @@
       if (!stillCurrent()) {
         return {};
       }
-      const text = await fetchXTwitterScriptText(src);
+      const { text, truncated } = await fetchXTwitterScriptText(src);
       if (text) {
         scriptTexts.push(text);
       }
-      const operation = extractXTwitterOperationConfig(text, "TweetResultByRestId");
-      const bearer = inlineBearer || extractXTwitterBearerToken(text);
+      // In a script cut at the read cap, only fields that end before the cut are used.
+      const operation = extractXTwitterOperationConfig(text, "TweetResultByRestId", { complete: truncated });
+      const bearer = inlineBearer || extractXTwitterBearerToken(text, { terminated: truncated });
       if (operation.queryId && bearer) {
         return { ...operation, bearer };
       }
     }
     const externalText = scriptTexts.join("\n");
-    const fallbackBearer = inlineBearer || extractXTwitterBearerToken(externalText) || X_TWITTER_BEARER_FALLBACK;
+    const fallbackBearer = inlineBearer || extractXTwitterBearerToken(externalText, { terminated: true }) || X_TWITTER_BEARER_FALLBACK;
     return { ...X_TWITTER_TWEET_RESULT_FALLBACK, bearer: fallbackBearer };
   }
 
@@ -366,23 +367,30 @@
     try {
       const response = await originalFetch.call(window, src, { credentials: "omit", cache: "force-cache" });
       if (response.ok === false) {
-        return "";
+        return { text: "", truncated: false };
       }
       return await readResponseTextWithinLimit(response, MAX_X_SCRIPT_READ_BYTES, { truncate: true });
     } catch {
-      return "";
+      return { text: "", truncated: false };
     }
   }
 
-  function extractXTwitterBearerToken(text) {
-    return String(text || "").match(/Bearer\s+([A-Za-z0-9%._-]+)/)?.[1] || "";
+  function extractXTwitterBearerToken(text, { terminated = false } = {}) {
+    const source = String(text || "");
+    for (const match of source.matchAll(/Bearer\s+([A-Za-z0-9%._-]+)/g)) {
+      // A token running into the end of a cut text may be missing its tail.
+      if (!terminated || match.index + match[0].length < source.length) {
+        return match[1];
+      }
+    }
+    return "";
   }
 
-  function extractXTwitterOperationConfig(text, operationName) {
+  function extractXTwitterOperationConfig(text, operationName, { complete = false } = {}) {
     const source = String(text || "");
     const marker = `operationName:"${operationName}"`;
     const index = source.indexOf(marker);
-    if (index < 0) {
+    if (index < 0 || (complete && index + 4000 > source.length)) {
       return {};
     }
     const segment = source.slice(Math.max(0, index - 1000), index + 4000);
@@ -802,15 +810,16 @@
 
   // Content-Length can be missing or describe the compressed size, so the cap is enforced on the bytes
   // actually read; a body that grows past it is cancelled and not inspected.
-  // With truncate, the text read up to the cap is returned instead of nothing.
+  // With truncate, the text read up to the cap is returned instead of nothing, as { text, truncated }.
   async function readResponseTextWithinLimit(response, limit, { truncate = false } = {}) {
+    const result = (text, truncated = false) => (truncate ? { text, truncated } : text);
     const reader = response?.body?.getReader?.();
     if (!reader) {
       const text = await response.text();
       if (!textExceedsUtf8Bytes(text, limit)) {
-        return text;
+        return result(text);
       }
-      return truncate ? text.slice(0, Math.floor(limit / 3)) : "";
+      return truncate ? result(text.slice(0, Math.floor(limit / 3)), true) : "";
     }
     const decoder = new TextDecoder();
     let received = 0;
@@ -818,7 +827,7 @@
     for (;;) {
       const { done, value } = await reader.read();
       if (done) {
-        return text + decoder.decode();
+        return result(text + decoder.decode());
       }
       const size = value?.byteLength || 0;
       if (received + size > limit) {
@@ -827,10 +836,15 @@
           return "";
         }
         const room = Math.max(0, limit - received);
-        return text + decoder.decode(value.subarray(0, room), { stream: true });
+        return result(text + decoder.decode(value.subarray(0, room), { stream: true }), true);
       }
       received += size;
       text += decoder.decode(value, { stream: true });
+      if (truncate && received >= limit) {
+        // Full: return now rather than wait for a chunk that would only be cut away.
+        reader.cancel().catch(() => {});
+        return result(text, true);
+      }
     }
   }
 

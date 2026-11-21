@@ -932,3 +932,62 @@ function createStreamedResponse(url, chunks, headers, onCancel) {
   await flushPromises();
   assert.equal(reported(unpaired), false, "unpaired surrogates count as 3 bytes each toward the cap");
 }
+
+{
+  // A script cut at the 32 MB cap: a field crossing the cut is not used, and a full read returns at once.
+  const encoder = new TextEncoder();
+  const cap = 32 * 1024 * 1024;
+  const scriptUrl = "https://abs.twimg.com/responsive-web/client-web/main.cut1234.js";
+  function runCutScript(chunksFor, label) {
+    const authorizations = [];
+    const requested = [];
+    const harness = createHarness({
+      locationHref: "https://x.com/someone/status/323456789",
+      scripts: [{ src: scriptUrl, textContent: "" }],
+      windowOverrides: {
+        fetch(input, init = {}) {
+          const url = typeof input === "string" ? input : input?.url || "";
+          requested.push(url);
+          if (url === scriptUrl) {
+            const chunks = chunksFor();
+            let index = 0;
+            return Promise.resolve({
+              ...createFakeResponse(url, "", { "content-type": "application/javascript" }),
+              body: {
+                getReader() {
+                  return {
+                    read() {
+                      return index < chunks.length ? Promise.resolve({ done: false, value: chunks[index++] }) : new Promise(() => {});
+                    },
+                    async cancel() {}
+                  };
+                }
+              }
+            });
+          }
+          if (url.includes("/i/api/graphql/")) {
+            authorizations.push(init.headers?.authorization || "");
+            return Promise.resolve(createFakeResponse(url, {}, { "content-type": "application/json" }));
+          }
+          return Promise.reject(new Error(`unexpected ${label} request`));
+        }
+      }
+    });
+    activateSniffer(harness);
+    return { authorizations, requested };
+  }
+  const head = encoder.encode('e={queryId:"CutQuery",operationName:"TweetResultByRestId",metadata:{featureSwitches:[],fieldToggles:[]}};' + " ".repeat(5000));
+
+  const bearerChunk = encoder.encode('t="Bearer AAAAFullRead";');
+  const full = runCutScript(() => [head, bearerChunk, new Uint8Array(cap - head.length - bearerChunk.length).fill(32)], "full");
+  await flushPromises();
+  await flushPromises();
+  assert.ok(full.requested.some(url => url.includes("/i/api/graphql/CutQuery/")), "a script read exactly to the cap is used without waiting");
+  assert.equal(full.authorizations[0], "Bearer AAAAFullRead");
+
+  const crossing = runCutScript(() => [head, new Uint8Array(cap - head.length - 10).fill(32), encoder.encode("Bearer AAAAHalfOfAToken")], "crossing");
+  await flushPromises();
+  await flushPromises();
+  assert.ok(crossing.authorizations.length > 0, "the query is still sent");
+  assert.equal(crossing.authorizations.includes("Bearer AAA"), false, "a token cut at the cap is not used");
+}
