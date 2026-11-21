@@ -503,16 +503,40 @@ function handleHistoryStateUpdated(details) {
   if (previousUrl) {
     return clearTopLevelNavigationState(details.tabId, { detachSubtitles: true });
   }
-  // A restarted worker does not know the previous address. Memory is cleared at once as before, but the saved
-  // list is dropped only if it belongs to another page; a same-page update (tracking parameters, a hash)
-  // leaves it for the restore.
+  // A restarted worker does not know the previous address. Memory is cleared at once as before, and any restore
+  // or write still running for the earlier page is invalidated. The saved list is then checked against this
+  // address: a same-page update (tracking parameters, a hash) restores it, another page drops it.
+  const generation = advanceTabNavigationGeneration(details.tabId);
   const cleared = clearTopLevelNavigationState(details.tabId, { detachSubtitles: true, keepSnapshot: true });
-  return Promise.all([cleared, savedTabCandidateSnapshotPageUrl(details.tabId)]).then(([, savedPageUrl]) => {
-    if (!savedPageUrl || !details.url ||
-        normalizeBrowserPageIdentity(savedPageUrl) !== normalizeBrowserPageIdentity(details.url)) {
-      forgetTabCandidateSnapshot(details.tabId);
-    }
-  });
+  const checked = withTabSnapshotLock(details.tabId, () =>
+    settleSavedSnapshotAfterUnknownNavigation(details.tabId, details.url || "", generation));
+  return Promise.all([cleared, checked.catch(() => {})]).then(() => undefined);
+}
+
+async function settleSavedSnapshotAfterUnknownNavigation(tabId, url, generation) {
+  const storage = chrome.storage?.session;
+  if (!storage?.get || (tabNavigationGenerations.get(tabId) || 0) !== generation) {
+    return;
+  }
+  const key = tabCandidateSnapshotKey(tabId);
+  let snapshot = null;
+  try {
+    snapshot = (await storage.get(key))?.[key] || null;
+  } catch {
+    // Unreadable: drop it, as every unknown navigation did before.
+    await storage.remove?.(key);
+    return;
+  }
+  if (!snapshot || (tabNavigationGenerations.get(tabId) || 0) !== generation) {
+    return;
+  }
+  const samePage = Boolean(snapshot.pageUrl && url) &&
+    normalizeBrowserPageIdentity(snapshot.pageUrl) === normalizeBrowserPageIdentity(url);
+  if (!samePage) {
+    await storage.remove?.(key);
+    return;
+  }
+  await restoreTabCandidateSnapshot(storage, key, snapshot, new Map([[tabId, generation]]));
 }
 
 chrome.tabs.onRemoved.addListener(tabId => {
@@ -10110,6 +10134,10 @@ async function writeTabCandidateSnapshot(tabId) {
   if (tabCandidateSnapshotRestorePromise) {
     await tabCandidateSnapshotRestorePromise.catch(() => {});
   }
+  await withTabSnapshotLock(tabId, () => writeTabCandidateSnapshotNow(storage, tabId, generation));
+}
+
+async function writeTabCandidateSnapshotNow(storage, tabId, generation) {
   let state = tabState.get(tabId);
   if (!state?.candidates?.length) {
     if ((tabNavigationGenerations.get(tabId) || 0) === generation) {
@@ -10165,14 +10193,32 @@ function candidatesWithoutRequestHeaders(candidates) {
     key === "requestHeaders" || key === "requestHeadersByOrigin" ? undefined : value));
 }
 
-async function savedTabCandidateSnapshotPageUrl(tabId) {
-  try {
-    const key = tabCandidateSnapshotKey(tabId);
-    const stored = await chrome.storage?.session?.get?.(key);
-    return String(stored?.[key]?.pageUrl || "");
-  } catch {
-    return "";
+function advanceTabNavigationGeneration(tabId) {
+  const normalizedTabId = Number(tabId);
+  const generation = (tabNavigationGenerations.get(normalizedTabId) || 0) + 1;
+  tabNavigationGenerations.set(normalizedTabId, generation);
+  const timer = tabCandidateSnapshotTimers.get(normalizedTabId);
+  if (timer) {
+    clearTimeout(timer);
+    tabCandidateSnapshotTimers.delete(normalizedTabId);
   }
+  return generation;
+}
+
+// Writes and checks of one tab's saved list run one at a time, so a check cannot delete a list written after it
+// looked, and a write cannot land between a check's read and its delete.
+const tabSnapshotLocks = new Map();
+function withTabSnapshotLock(tabId, task) {
+  const previous = tabSnapshotLocks.get(tabId) || Promise.resolve();
+  const run = previous.then(task);
+  const tail = run.catch(() => {});
+  tabSnapshotLocks.set(tabId, tail);
+  tail.then(() => {
+    if (tabSnapshotLocks.get(tabId) === tail) {
+      tabSnapshotLocks.delete(tabId);
+    }
+  });
+  return run;
 }
 
 // Fills only what the live value lacks, level by level, so nested details such as a stored response size
@@ -10199,12 +10245,7 @@ function isPlainCandidateObject(value) {
 
 function forgetTabCandidateSnapshot(tabId) {
   const normalizedTabId = Number(tabId);
-  tabNavigationGenerations.set(normalizedTabId, (tabNavigationGenerations.get(normalizedTabId) || 0) + 1);
-  const timer = tabCandidateSnapshotTimers.get(normalizedTabId);
-  if (timer) {
-    clearTimeout(timer);
-    tabCandidateSnapshotTimers.delete(normalizedTabId);
-  }
+  advanceTabNavigationGeneration(normalizedTabId);
   try {
     chrome.storage?.session?.remove?.(tabCandidateSnapshotKey(normalizedTabId))?.catch?.(() => {});
   } catch {

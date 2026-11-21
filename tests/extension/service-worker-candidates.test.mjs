@@ -4324,6 +4324,56 @@ assert.equal(context.browserTranslationProviderConcurrency({ modelConfig: { work
   vm.runInContext("tabState.delete(1124); frameNavigationUrls.delete('1124:0');", context);
   await webNavigationHistoryListeners[0]({ tabId: 1124, frameId: 0, url: "https://example.test/show?id=8" });
   assert.equal("tabCandidates:1124" in sessionStore, false, "an update to another page drops the saved list");
+
+  // After a restart, a restore still checking the tab must not merge the old page into the next one.
+  tabUrls.set(1125, "https://example.test/show?id=7");
+  seedPage(1125, { url: "https://example.test/show?id=7", duration: 300 });
+  context.addPageMediaCandidate(1125, { url: "https://cdn.example.test/show-1125/old.m3u8", source: "fetch-url", kind: "hls", ext: "m3u8" });
+  await context.writeTabCandidateSnapshot(1125);
+  vm.runInContext("tabState.delete(1125); frameNavigationUrls.delete('1125:0');", context);
+  let releaseRestoreTabsGet;
+  const restoreTabsGetGate = new Promise(resolve => {
+    releaseRestoreTabsGet = resolve;
+  });
+  const restoreSeesUrl = tabUrls.get(1125);
+  chrome.tabs.get = async tabId => {
+    await restoreTabsGetGate;
+    return { id: tabId, title: "Show", url: tabId === 1125 ? restoreSeesUrl : tabUrls.get(tabId) };
+  };
+  vm.runInContext("tabCandidateSnapshotRestorePromise = restoreTabCandidateSnapshots();", context);
+  tabUrls.set(1125, "https://example.test/show?id=8");
+  const pendingUnknownNavigation = webNavigationHistoryListeners[0]({ tabId: 1125, frameId: 0, url: "https://example.test/show?id=8" });
+  seedPage(1125, { url: "https://example.test/show?id=8", duration: 200 });
+  context.addPageMediaCandidate(1125, { url: "https://cdn.example.test/show-1125/new.m3u8", source: "fetch-url", kind: "hls", ext: "m3u8" });
+  releaseRestoreTabsGet();
+  await vm.runInContext("tabCandidateSnapshotRestorePromise", context);
+  await pendingUnknownNavigation;
+  const afterLateRestore = JSON.parse(JSON.stringify(context.getState(1125).candidates.map(candidate => candidate.url)));
+  assert.deepEqual(afterLateRestore, ["https://cdn.example.test/show-1125/new.m3u8"],
+    "a late restore does not bring the previous page's media into the new page");
+  chrome.tabs.get = async tabId => (tabUrls.has(tabId) ? { id: tabId, title: "Show", url: tabUrls.get(tabId) } : null);
+
+  // The check of an old saved list cannot delete the new page's list written while subtitles detach.
+  tabUrls.set(1126, "https://example.test/show?id=7");
+  seedPage(1126, { url: "https://example.test/show?id=7", duration: 300 });
+  context.addPageMediaCandidate(1126, { url: "https://cdn.example.test/show-1126/old.m3u8", source: "fetch-url", kind: "hls", ext: "m3u8" });
+  await context.writeTabCandidateSnapshot(1126);
+  vm.runInContext("tabState.delete(1126); frameNavigationUrls.delete('1126:0');", context);
+  let releaseDetachFrames;
+  const originalGetAllFramesForDetach = chrome.webNavigation.getAllFrames;
+  chrome.webNavigation.getAllFrames = () => new Promise(resolve => {
+    releaseDetachFrames = resolve;
+  });
+  tabUrls.set(1126, "https://example.test/show?id=8");
+  const slowDetachNavigation = webNavigationHistoryListeners[0]({ tabId: 1126, frameId: 0, url: "https://example.test/show?id=8" });
+  seedPage(1126, { url: "https://example.test/show?id=8", duration: 200 });
+  context.addPageMediaCandidate(1126, { url: "https://cdn.example.test/show-1126/new.m3u8", source: "fetch-url", kind: "hls", ext: "m3u8" });
+  await context.writeTabCandidateSnapshot(1126);
+  releaseDetachFrames?.([{ frameId: 0 }]);
+  await slowDetachNavigation;
+  chrome.webNavigation.getAllFrames = originalGetAllFramesForDetach;
+  assert.equal(sessionStore["tabCandidates:1126"]?.pageUrl, "https://example.test/show?id=8",
+    "the new page's saved list survives the old list's check");
   chrome.tabs.sendMessage = originalHistorySendMessage;
   chrome.storage.session = originalSession;
   chrome.tabs.get = originalTabsGet;
