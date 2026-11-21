@@ -4205,6 +4205,55 @@ assert.equal(context.browserTranslationProviderConcurrency({ modelConfig: { work
   );
   assert.equal(context.getState(1117).candidates.length, 0, "a snapshot from another page must not be restored");
   assert.equal("tabCandidates:1117" in sessionStore, false, "a stale snapshot is dropped");
+  tabUrls.set(1120, "https://example.test/show?id=7");
+  seedPage(1120, { url: "https://example.test/show?id=7", duration: 300 });
+  context.addPageMediaCandidate(1120, {
+    url: "https://cdn.example.test/show-1120/master.m3u8",
+    source: "fetch-url",
+    kind: "hls",
+    ext: "m3u8"
+  });
+  await context.writeTabCandidateSnapshot(1120);
+  vm.runInContext("tabState.delete(1120);", context);
+  let releaseTabsGet;
+  const tabsGetGate = new Promise(resolve => {
+    releaseTabsGet = resolve;
+  });
+  chrome.tabs.get = async tabId => {
+    await tabsGetGate;
+    return tabUrls.has(tabId) ? { id: tabId, title: "Show", url: tabUrls.get(tabId) } : null;
+  };
+  const racingRestore = context.restoreTabCandidateSnapshots();
+  context.forgetTabCandidateSnapshot(1120);
+  releaseTabsGet();
+  await racingRestore;
+  assert.equal(context.getState(1120).candidates.length, 0,
+    "a reload while the snapshot is being checked must not bring back the old page's candidates");
+
+  tabUrls.set(1121, "https://example.test/show?id=7");
+  chrome.tabs.get = async tabId => (tabUrls.has(tabId) ? { id: tabId, title: "Show", url: tabUrls.get(tabId) } : null);
+  seedPage(1121, { url: "https://example.test/show?id=7", duration: 300 });
+  context.addPageMediaCandidate(1121, {
+    url: "https://cdn.example.test/show-1121/master.m3u8",
+    source: "fetch-url",
+    kind: "hls",
+    ext: "m3u8"
+  });
+  vm.runInContext(`tabState.get(1121).candidates[0].restoredOnlyField = "from-snapshot";`, context);
+  await context.writeTabCandidateSnapshot(1121);
+  vm.runInContext("tabState.delete(1121);", context);
+  seedPage(1121, { url: "https://example.test/show?id=7", duration: 300 });
+  context.addPageMediaCandidate(1121, {
+    url: "https://cdn.example.test/show-1121/master.m3u8",
+    source: "fetch-url",
+    kind: "hls",
+    ext: "m3u8"
+  });
+  await context.restoreTabCandidateSnapshots();
+  const merged = context.getState(1121).candidates.filter(candidate => candidate.url === "https://cdn.example.test/show-1121/master.m3u8");
+  assert.equal(merged.length, 1, "a live report and its snapshot copy stay one candidate");
+  assert.equal(vm.runInContext(`tabState.get(1121).candidates[0].restoredOnlyField`, context), "from-snapshot",
+    "fields only the snapshot knows are filled into the live candidate");
   chrome.storage.session = originalSession;
   chrome.tabs.get = originalTabsGet;
 }

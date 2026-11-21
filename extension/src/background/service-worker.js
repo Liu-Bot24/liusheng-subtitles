@@ -275,6 +275,7 @@ const TAB_CANDIDATE_SNAPSHOT_PREFIX = "tabCandidates:";
 const TAB_CANDIDATE_SNAPSHOT_DELAY_MS = 1000;
 const tabCandidateSnapshotTimers = new Map();
 let tabCandidateSnapshotRestorePromise = null;
+const tabNavigationGenerations = new Map();
 const serviceWorkerExecutionOwnerId = `service-worker:${createDurableRunToken()}`;
 
 try {
@@ -10074,6 +10075,7 @@ function candidatesWithoutRequestHeaders(candidates) {
 
 function forgetTabCandidateSnapshot(tabId) {
   const normalizedTabId = Number(tabId);
+  tabNavigationGenerations.set(normalizedTabId, (tabNavigationGenerations.get(normalizedTabId) || 0) + 1);
   const timer = tabCandidateSnapshotTimers.get(normalizedTabId);
   if (timer) {
     clearTimeout(timer);
@@ -10091,40 +10093,66 @@ async function restoreTabCandidateSnapshots() {
   if (!storage?.get) {
     return { restored: 0 };
   }
+  // Generations are taken before reading, so a navigation at any point after the read invalidates the copy.
+  const generationsAtRead = new Map(tabNavigationGenerations);
   const stored = await storage.get(null);
-  let restored = 0;
-  for (const [key, snapshot] of Object.entries(stored || {})) {
-    if (!key.startsWith(TAB_CANDIDATE_SNAPSHOT_PREFIX)) {
-      continue;
-    }
-    const tabId = Number(key.slice(TAB_CANDIDATE_SNAPSHOT_PREFIX.length));
-    const tab = Number.isInteger(tabId) ? await chrome.tabs.get(tabId).catch(() => null) : null;
-    const samePage = Boolean(tab?.url && snapshot?.pageUrl) &&
-      normalizeBrowserPageIdentity(tab.url) === normalizeBrowserPageIdentity(snapshot.pageUrl);
-    if (!samePage || !Array.isArray(snapshot.candidates)) {
-      await storage.remove?.(key);
-      continue;
-    }
-    const state = getState(tabId);
-    const known = new Set(state.candidates.map(candidateFingerprint));
-    const missing = snapshot.candidates.filter(candidate => candidate?.url && !known.has(candidateFingerprint(candidate)));
-    state.candidates = pruneCandidatesForRetention([...state.candidates, ...missing], MAX_CANDIDATES_PER_TAB);
-    state.candidateFingerprints = new Set(state.candidates.map(candidateFingerprint));
-    if (!state.page?.url) {
-      state.page = snapshot.page || {};
-    }
-    if (!state.context || !Object.keys(state.context).length) {
-      state.context = snapshot.context || {};
-    }
-    if (state.mediaFrameId === null && snapshot.mediaFrameId !== null && snapshot.mediaFrameId !== undefined) {
-      state.mediaFrameId = snapshot.mediaFrameId;
-      state.mediaDocumentId = snapshot.mediaDocumentId || "";
-    }
-    if (!frameNavigationUrls.has(frameNavigationKey(tabId, 0))) {
-      frameNavigationUrls.set(frameNavigationKey(tabId, 0), tab.url);
-    }
-    restored += missing.length ? 1 : 0;
-    scheduleSidepanelStatusChange(tabId);
+  const entries = Object.entries(stored || {}).filter(([key]) => key.startsWith(TAB_CANDIDATE_SNAPSHOT_PREFIX));
+  const results = await Promise.all(entries.map(([key, snapshot]) =>
+    restoreTabCandidateSnapshot(storage, key, snapshot, generationsAtRead).catch(() => false)));
+  return { restored: results.filter(Boolean).length };
+}
+
+async function restoreTabCandidateSnapshot(storage, key, snapshot, generationsAtRead) {
+  const tabId = Number(key.slice(TAB_CANDIDATE_SNAPSHOT_PREFIX.length));
+  const generation = generationsAtRead.get(tabId) || 0;
+  const tab = Number.isInteger(tabId) ? await chrome.tabs.get(tabId).catch(() => null) : null;
+  if ((tabNavigationGenerations.get(tabId) || 0) !== generation) {
+    // The tab navigated or closed while this snapshot was being checked; the snapshot is obsolete.
+    return false;
   }
-  return { restored };
+  const samePage = Boolean(tab?.url && snapshot?.pageUrl) &&
+    normalizeBrowserPageIdentity(tab.url) === normalizeBrowserPageIdentity(snapshot.pageUrl);
+  if (!samePage || !Array.isArray(snapshot.candidates)) {
+    await storage.remove?.(key);
+    return false;
+  }
+  const state = getState(tabId);
+  const snapshotByFingerprint = new Map(snapshot.candidates
+    .filter(candidate => candidate?.url)
+    .map(candidate => [candidateFingerprint(candidate), candidate]));
+  // Live reports win; the snapshot only fills fields that a fresh but thinner report has not supplied.
+  state.candidates = state.candidates.map(candidate => {
+    const saved = snapshotByFingerprint.get(candidateFingerprint(candidate));
+    if (!saved) {
+      return candidate;
+    }
+    const merged = { ...candidate };
+    for (const [field, value] of Object.entries(saved)) {
+      if (merged[field] === undefined || merged[field] === null || merged[field] === "") {
+        merged[field] = value;
+      }
+    }
+    return merged;
+  });
+  const known = new Set(state.candidates.map(candidateFingerprint));
+  const missing = [...snapshotByFingerprint.entries()]
+    .filter(([fingerprint]) => !known.has(fingerprint))
+    .map(([, candidate]) => candidate);
+  state.candidates = pruneCandidatesForRetention([...state.candidates, ...missing], MAX_CANDIDATES_PER_TAB);
+  state.candidateFingerprints = new Set(state.candidates.map(candidateFingerprint));
+  if (!state.page?.url) {
+    state.page = snapshot.page || {};
+  }
+  if (!state.context || !Object.keys(state.context).length) {
+    state.context = snapshot.context || {};
+  }
+  if (state.mediaFrameId === null && snapshot.mediaFrameId !== null && snapshot.mediaFrameId !== undefined) {
+    state.mediaFrameId = snapshot.mediaFrameId;
+    state.mediaDocumentId = snapshot.mediaDocumentId || "";
+  }
+  if (!frameNavigationUrls.has(frameNavigationKey(tabId, 0))) {
+    frameNavigationUrls.set(frameNavigationKey(tabId, 0), tab.url);
+  }
+  scheduleSidepanelStatusChange(tabId);
+  return missing.length > 0;
 }
