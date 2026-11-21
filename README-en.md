@@ -102,4 +102,4 @@ Thanks to [cat-catch](https://github.com/xifangczy/cat-catch) for browser media-
 
 ## License
 
-This project is released under the [MIT License](LICENSE).
+This project is released under the [MIT License](LICENSE). Third-party components shipped in the extension keep their own licenses: the FFmpeg WebAssembly build is licensed under GPL version 2 or later, and Mediabunny under MPL-2.0. License texts and source locations are in the [third-party notices](extension/THIRD_PARTY_NOTICES.md).

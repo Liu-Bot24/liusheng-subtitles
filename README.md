@@ -106,4 +106,4 @@ API 密钥、模型配置和字幕缓存保存在本机浏览器中。插件不�
 
 ## 许可证
 
-本项目使用 [MIT License](LICENSE) 开源。
+本项目使用 [MIT License](LICENSE) 开源。扩展内附带的第三方组件使用各自的许可证：其中的 FFmpeg（WebAssembly 版）按 GPL 第 2 版或更高版本授权，Mediabunny 按 MPL-2.0 授权。许可证全文和对应源码地址见 [第三方声明](extension/THIRD_PARTY_NOTICES.md)。
