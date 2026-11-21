@@ -6934,7 +6934,7 @@ const editedSubtitlesSurviveReopenState = await vm.runInContext(`
       };
       if (vttOnlyLoads > 0) {
         vttOnlyLoads -= 1;
-        return { cues: cuesFromTranscript(transcript), source: "vtt", transcript: null };
+        return { cues: cuesFromTranscript(transcript), source: "vtt", transcript: null, transcriptFailed: true };
       }
       return { cues: cuesFromTranscript(transcript), source: "transcript", transcript };
     };
@@ -6969,6 +6969,18 @@ const editedSubtitlesSurviveReopenState = await vm.runInContext(`
       await renderSubtitles("job-edit-reopen", { ...job, translation: { ...job.translation, segmentCount: 2 } });
       const afterVttFallback = subtitleCues[0]?.text;
 
+      // Same task signature on every refresh: the fallback must not lock the panel onto VTT.
+      const signedJob = { translation: { ...job.translation, transcriptHash: "stable-hash" } };
+      const previousDisplayMode = subtitleDisplayMode;
+      subtitleDisplayMode = "translated";
+      reopenPanel();
+      vttOnlyLoads = 1;
+      await renderSubtitles("job-edit-reopen", signedJob);
+      const signedAfterFallback = subtitleCues[0]?.text;
+      await renderSubtitles("job-edit-reopen", signedJob);
+      const signedAfterRefresh = subtitleCues[0]?.text;
+      subtitleDisplayMode = previousDisplayMode;
+
       FuguangSubtitleFormat.parseSubtitleImportText = () => ({
         transcript: {
           source: [{ start: 0, end: 1, text: "imported line" }],
@@ -6998,6 +7010,8 @@ const editedSubtitlesSurviveReopenState = await vm.runInContext(`
         savedMarkerHasBase: Boolean(savedMarker?.baseSignature),
         afterReopen,
         afterVttFallback,
+        signedAfterFallback,
+        signedAfterRefresh,
         importMarker,
         afterImportReopen,
         afterRetranslation
@@ -7020,6 +7034,8 @@ assert.deepEqual(JSON.parse(JSON.stringify(editedSubtitlesSurviveReopenState)), 
   savedMarkerHasBase: true,
   afterReopen: "用户改过的译文",
   afterVttFallback: "用户改过的译文",
+  signedAfterFallback: "任务原译文",
+  signedAfterRefresh: "用户改过的译文",
   importMarker: null,
   afterImportReopen: "任务原译文",
   afterRetranslation: "重新翻译后的译文"

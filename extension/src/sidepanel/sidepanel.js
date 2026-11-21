@@ -760,6 +760,8 @@ let currentTranscript = null;
 let jobTranscriptBase = null;
 // The task whose saved edits were already looked up against its transcript in this panel session.
 let savedEditsCheckedJobId = "";
+// Task whose last transcript request failed and fell back to VTT; its transcript is requested again.
+let transcriptLoadFailedJobId = "";
 let currentSubtitleCacheEntry = null;
 let subtitleDisplayMode = DEFAULTS.subtitleDisplayMode;
 let subtitleOverlayEnabled = DEFAULTS.subtitleOverlayEnabled;
@@ -2526,7 +2528,12 @@ async function renderSubtitles(jobId, job = null) {
   const requestTabKey = activeTabKey(activeTab);
   const requestCurrentJobId = currentJobId || "";
   const signature = subtitleSignature(jobId, job);
-  const needsTranscriptRetry = subtitleDisplayModeRequiresTranscript(subtitleDisplayMode) && subtitleCues.length && subtitleCueSource !== "transcript";
+  // A VTT fallback is retried while the mode needs the transcript, and also after a failed transcript
+  // request while saved edits for this task have not been looked up: they are found only through it.
+  const savedEditsPending = savedEditsCheckedJobId !== String(jobId || "") &&
+    transcriptLoadFailedJobId === String(jobId || "");
+  const needsTranscriptRetry = subtitleCues.length && subtitleCueSource !== "transcript" &&
+    (subtitleDisplayModeRequiresTranscript(subtitleDisplayMode) || savedEditsPending);
   if (signature && renderedSubtitleSignature === signature && renderedSubtitleJobId === jobId && subtitleCues.length && !needsTranscriptRetry) {
     renderedSubtitleRevision = subtitleAttachmentRevision(jobId, job);
     startSubtitleFollow();
@@ -2554,6 +2561,7 @@ async function renderSubtitles(jobId, job = null) {
   if (!shouldApplySubtitleRenderLoad(requestId, requestTabKey, requestCurrentJobId)) {
     return;
   }
+  transcriptLoadFailedJobId = result.transcriptFailed ? String(jobId || "") : "";
   if (result.source === "transcript") {
     jobTranscriptBase = {
       jobId: String(jobId || ""),
@@ -2690,11 +2698,12 @@ async function loadSubtitleCues(jobId) {
       return { cues: transcriptCues, source: "transcript", transcript: transcriptResponse.transcript };
     }
   }
+  const transcriptFailed = !transcriptResponse.ok;
   const response = await send({ type: MESSAGE.GET_PRELOAD_VTT, jobId });
   if (!response.ok || !response.vtt) {
-    return { cues: [], source: "empty", transcript: null };
+    return { cues: [], source: "empty", transcript: null, transcriptFailed };
   }
-  return { cues: parseVtt(response.vtt), source: "vtt", transcript: null };
+  return { cues: parseVtt(response.vtt), source: "vtt", transcript: null, transcriptFailed };
 }
 
 function renderSubtitleCueList(options = {}) {
@@ -2960,6 +2969,7 @@ function clearSubtitles(text, jobId = "") {
   manualSubtitleOverride = null;
   jobTranscriptBase = null;
   savedEditsCheckedJobId = "";
+  transcriptLoadFailedJobId = "";
   attachedSubtitleTabId = 0;
   attachedSubtitleSignature = "";
   subtitleCues = [];
