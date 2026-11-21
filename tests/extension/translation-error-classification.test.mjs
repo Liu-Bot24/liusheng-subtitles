@@ -22,7 +22,9 @@ test("account and configuration failures are permanent whatever the wording", ()
     httpError(401, "Account suspended", "content_policy_violation"),
     httpError(402, "Payment required", "moderation_blocked"),
     httpError(404, "Model not found", "content_filter"),
-    httpError(403, "Your account has been disabled", "content_policy_violation")
+    httpError(403, "Your account has been disabled", "content_policy_violation"),
+    httpError(403, "Your account has been blocked", "account_blocked_by_risk_control"),
+    httpError(403, "Invalid API key provided")
   ]) {
     assert.equal(provider.browserTranslationErrorIsPermanent(error), true, error.message);
     assert.equal(provider.browserTranslationErrorIsContentPolicy(error), false, error.message);
@@ -36,7 +38,8 @@ test("moderation blocks are recognized by provider code or wording", () => {
     httpError(400, "Content Exists Risk"),
     httpError(400, "内容安全审核未通过"),
     httpError(403, "Forbidden: content safety policy violation"),
-    httpError(403, "Request blocked by your organization's content safety policy", "content_filter")
+    httpError(403, "Request blocked by your organization's content safety policy", "content_filter"),
+    httpError(403, "Content blocked by safety policy: the output contained an API key")
   ]) {
     assert.equal(provider.browserTranslationErrorIsContentPolicy(error), true, error.message);
     assert.equal(provider.browserTranslationErrorIsPermanent(error), false, error.message);

@@ -394,7 +394,20 @@ export const FuguangBrowserTranslationProvider = (() => {
   const BROWSER_TRANSLATION_ACCOUNT_STATUSES = new Set([401, 402, 404]);
   // Only explicit account, key or billing failures; words like "organization" or "policy" also appear in
   // moderation messages ("your organization's content safety policy").
-  const BROWSER_TRANSLATION_ACCOUNT_WORDING = /((?:account|organization|账号|账户).{0,60}(?:deactivat|disabled|banned|suspend|terminated|封禁|禁用|停用|冻结)|(?:deactivat|disabled|banned|suspend|terminated|封禁|禁用|停用|冻结).{0,30}(?:account|organization|账号|账户)|api[\s_-]?key|access key|billing|insufficient (?:balance|quota|credit)|quota exceeded|permission denied|does not have (?:access|permission)|not authorized to (?:use|access)|密钥|余额不足|欠费|没有权限|无权)/;
+  const BROWSER_TRANSLATION_ACCOUNT_STATE = "(?:deactivat|disabled|banned|blocked|locked|suspend|terminated|封禁|禁用|停用|冻结|锁定)";
+  const BROWSER_TRANSLATION_KEY_FAULT = "(?:invalid|incorrect|expired|revoked|not valid|missing|无效|错误|过期|失效)";
+  const BROWSER_TRANSLATION_ACCOUNT_WORDING = new RegExp([
+    `(?:account|账号|账户).{0,60}${BROWSER_TRANSLATION_ACCOUNT_STATE}`,
+    "(?:deactivat|disabled|banned|suspend|terminated|封禁|禁用|停用|冻结).{0,30}(?:account|账号|账户)",
+    "organization.{0,40}(?:deactivat|disabled|suspend|terminated)",
+    `(?:api[\\s_-]?key|access key|密钥).{0,30}${BROWSER_TRANSLATION_KEY_FAULT}`,
+    `${BROWSER_TRANSLATION_KEY_FAULT}.{0,20}(?:api[\\s_-]?key|access key|密钥)`,
+    "billing.{0,20}(?:not active|inactive|required|issue|problem|limit|overdue)",
+    "insufficient (?:balance|quota|credit)|quota exceeded|permission denied|does not have (?:access|permission)",
+    "not authorized to (?:use|access)|余额不足|欠费|没有权限|无权"
+  ].join("|"));
+  // Provider error codes that name the account, key or billing win over a "risk" or "policy" part.
+  const BROWSER_TRANSLATION_ACCOUNT_CODE = /(account|api[_-]?key|invalid[_-]?key|billing|quota|insufficient|arrearage|permission|unauthorized)/;
 
   function browserTranslationErrorStatus(error) {
     return error && typeof error === "object" ? Number(error.status || 0) || 0 : 0;
@@ -415,15 +428,20 @@ export const FuguangBrowserTranslationProvider = (() => {
       return false;
     }
     const message = browserTranslationErrorMessageText(error);
-    if (BROWSER_TRANSLATION_ACCOUNT_WORDING.test(message)) {
+    if (browserTranslationProviderCodeIsAccount(error) || BROWSER_TRANSLATION_ACCOUNT_WORDING.test(message)) {
       return true;
     }
     return !browserTranslationProviderCodeIsContentPolicy(error) && !browserTranslationMessageIsContentPolicy(message);
   }
 
+  function browserTranslationProviderCodeIsAccount(error) {
+    const code = error && typeof error === "object" ? String(error.providerCode || "").toLowerCase() : "";
+    return Boolean(code) && BROWSER_TRANSLATION_ACCOUNT_CODE.test(code);
+  }
+
   function browserTranslationProviderCodeIsContentPolicy(error) {
     const code = error && typeof error === "object" ? String(error.providerCode || "").toLowerCase() : "";
-    return Boolean(code) && /(content[_-]?(?:filter|policy|moderation)|moderation|data[_-]?inspection|sensitive|safety|risk)/.test(code);
+    return Boolean(code) && !BROWSER_TRANSLATION_ACCOUNT_CODE.test(code) && /(content[_-]?(?:filter|policy|moderation)|moderation|data[_-]?inspection|sensitive|safety|risk)/.test(code);
   }
 
   // Account and configuration failures (401/402/404, or a 403 worded about the account) win over any
