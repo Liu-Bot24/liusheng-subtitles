@@ -68,3 +68,31 @@ test("the no-speech check reads the quality numbers normalized segments actually
     0
   );
 });
+
+test("a missing quality value is not read as confident speech", () => {
+  const nulls = normalizeOne({ start: 0, end: 3.5, text: "对对对", no_speech_prob: null, avg_logprob: null });
+  assert.equal(nulls.length, 0);
+  const empty = normalizeOne({ start: 0, end: 3.5, text: "对对对", no_speech_prob: "", avg_logprob: "" });
+  assert.equal(empty.length, 0);
+});
+
+test("a mostly confident repeat is kept even when a few occurrences are weak", () => {
+  // Spread over more than ten minutes so the medium-frequency rule applies, not only the high-count one.
+  const clear = { noSpeechProbability: 0.01, avgLogProbability: -0.1 };
+  const segments = [];
+  for (let index = 0; index < 8; index += 1) {
+    const start = index * 100;
+    segments.push({ start, end: start + 1.5, text: "Thank you so much", asrQuality: { ...clear } });
+    segments.push({ start: start + 10, end: start + 11.5, text: `different line ${index}`, asrQuality: { ...clear } });
+  }
+  let weakened = 0;
+  for (const segment of segments) {
+    if (segment.text === "Thank you so much" && weakened < 2) {
+      segment.asrQuality = { noSpeechProbability: 0.9, avgLogProbability: -1.5 };
+      segment.end = segment.start + 4;
+      weakened += 1;
+    }
+  }
+  const output = postprocess.filterAsrDistributedRepeatedRuns(segments);
+  assert.equal(output.filter(segment => segment.text === "Thank you so much").length, 8);
+});

@@ -1046,10 +1046,16 @@ export const FuguangBrowserAsrPostprocess = (() => {
     return NaN;
   }
   
+  // A null or empty quality value means the recognizer did not report it; Number() would turn it into 0,
+  // which reads as "certainly speech" for no-speech probability.
   function optionalAsrNumber(payload, keys) {
     for (const key of keys) {
       if (Object.prototype.hasOwnProperty.call(payload || {}, key)) {
-        const value = Number(payload[key]);
+        const raw = payload[key];
+        if (raw === null || raw === undefined || (typeof raw === "string" && !raw.trim()) || typeof raw === "boolean") {
+          continue;
+        }
+        const value = Number(raw);
         if (Number.isFinite(value)) {
           return value;
         }
@@ -1249,14 +1255,15 @@ export const FuguangBrowserAsrPostprocess = (() => {
     if (span < ASR_DISTRIBUTED_REPEAT_MIN_SPAN_SECONDS) {
       return false;
     }
+    // Frequent repetition alone is not proof: choruses, slogans and drills repeat too. Keep the line when
+    // the recognizer itself reports most occurrences as clear speech, whichever rule below would apply.
+    const confident = sorted.filter(segment => isAsrConfidentSpeechSegment(segment));
+    if (confident.length / sorted.length >= 0.5) {
+      return false;
+    }
     const suspicious = sorted.filter(segment => isAsrSuspiciousDistributedRepeatOccurrence(segment));
     if (sorted.length >= ASR_DISTRIBUTED_REPEAT_HIGH_COUNT && span >= ASR_DISTRIBUTED_REPEAT_HIGH_SPAN_SECONDS) {
-      // Frequent repetition alone is not proof: choruses, slogans and drills repeat too. Keep the line when
-      // the recognizer itself reports most occurrences as clear speech.
-      const confident = sorted.filter(segment => isAsrConfidentSpeechSegment(segment));
-      if (confident.length / sorted.length < 0.5) {
-        return true;
-      }
+      return true;
     }
     if (sorted.length >= ASR_DISTRIBUTED_REPEAT_MEDIUM_COUNT && span >= ASR_DISTRIBUTED_REPEAT_MEDIUM_SPAN_SECONDS) {
       const weak = sorted.filter(segment => isAsrWeakDistributedRepeatOccurrence(segment));
