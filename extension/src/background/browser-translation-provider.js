@@ -171,7 +171,7 @@ export const FuguangBrowserTranslationProvider = (() => {
       )
     });
     if (!response.ok) {
-      throw translationResponseError(payload.error?.message || payload.message || `翻译模型返回 HTTP ${response.status}`, response);
+      throw translationResponseError(payload.error?.message || payload.message || `翻译模型返回 HTTP ${response.status}`, response, payload);
     }
     const content = payload.choices?.[0]?.message?.content || "";
     if (
@@ -232,14 +232,15 @@ export const FuguangBrowserTranslationProvider = (() => {
       semanticRequestPath: joinSemanticRequestPath(options.semanticRequestPath, "anthropic")
     });
     if (!response.ok) {
-      throw translationResponseError(payload.error?.message || payload.message || `翻译模型返回 HTTP ${response.status}`, response);
+      throw translationResponseError(payload.error?.message || payload.message || `翻译模型返回 HTTP ${response.status}`, response, payload);
     }
     return (payload.content || []).map(item => item.text || "").join("\n");
   }
 
-  function translationResponseError(message, response) {
+  function translationResponseError(message, response, payload = null) {
     const error = new Error(message);
     error.status = Number(response?.status || 0) || 0;
+    error.providerCode = String(payload?.error?.code || payload?.error?.type || payload?.code || "");
     if (browserTranslationHttpStatusIsDeliveryAmbiguous(error.status)) {
       error.code = BROWSER_TRANSLATION_DELIVERY_AMBIGUOUS;
     } else if (browserTranslationHttpErrorIsBatchSizeRepairable(error.status, message)) {
@@ -386,12 +387,52 @@ export const FuguangBrowserTranslationProvider = (() => {
     return Boolean(signal?.aborted || error?.[BROWSER_TRANSLATION_ABORT_ERROR_BRAND] === true);
   }
 
-  function browserTranslationErrorIsPermanent(error) {
-    const message = String(error?.message || error || "").toLowerCase();
-    if (browserTranslationErrorIsContentPolicy(message) || browserTranslationErrorIsRateLimited(message)) {
+  // Classification order: provider error code, then HTTP status, then message wording as a last resort.
+  // 401/402/404 are account or configuration failures whatever the wording. 403 is also used by some
+  // gateways for moderation blocks, so it counts as moderation only when worded that way and the wording
+  // does not point at the account itself.
+  const BROWSER_TRANSLATION_ACCOUNT_STATUSES = new Set([401, 402, 404]);
+  const BROWSER_TRANSLATION_ACCOUNT_WORDING = /(account|api[\s_-]?key|permission|organization|billing|deactivat|disabled|banned|suspend|账号|账户|密钥|权限|封禁|禁用|停用)/;
+
+  function browserTranslationErrorStatus(error) {
+    return error && typeof error === "object" ? Number(error.status || 0) || 0 : 0;
+  }
+
+  function browserTranslationErrorMessageText(errorOrMessage) {
+    return (errorOrMessage && typeof errorOrMessage === "object"
+      ? String(errorOrMessage.message || "")
+      : String(errorOrMessage || "")).toLowerCase();
+  }
+
+  function browserTranslationErrorIsAccountFailure(error) {
+    const status = browserTranslationErrorStatus(error);
+    if (BROWSER_TRANSLATION_ACCOUNT_STATUSES.has(status)) {
+      return true;
+    }
+    if (status !== 403) {
       return false;
     }
-    return /(401|403|404|unauthorized|forbidden|invalid api key|api key|invalid key|authentication|quota|不存在的模型|模型不存在)/.test(message);
+    const message = browserTranslationErrorMessageText(error);
+    return BROWSER_TRANSLATION_ACCOUNT_WORDING.test(message) || !browserTranslationMessageIsContentPolicy(message);
+  }
+
+  function browserTranslationProviderCodeIsContentPolicy(error) {
+    const code = error && typeof error === "object" ? String(error.providerCode || "").toLowerCase() : "";
+    return Boolean(code) && /(content[_-]?(?:filter|policy|moderation)|moderation|data[_-]?inspection|sensitive|safety|risk)/.test(code);
+  }
+
+  function browserTranslationErrorIsPermanent(error) {
+    if (browserTranslationProviderCodeIsContentPolicy(error)) {
+      return false;
+    }
+    if (browserTranslationErrorIsAccountFailure(error)) {
+      return true;
+    }
+    if (browserTranslationErrorIsContentPolicy(error) || browserTranslationErrorIsRateLimited(error)) {
+      return false;
+    }
+    const message = String(error?.message || error || "").toLowerCase();
+    return /(401|403|404|unauthorized|forbidden|invalid api key|api key|invalid key|authentication|quota|insufficient balance|余额不足|不存在的模型|模型不存在)/.test(message);
   }
 
   function browserTranslationErrorIsDeliveryAmbiguous(error) {
@@ -444,8 +485,18 @@ export const FuguangBrowserTranslationProvider = (() => {
     return /(429|rate limit|too many requests|请求过多|限流|频率限制)/.test(String(message || "").toLowerCase());
   }
 
-  function browserTranslationErrorIsContentPolicy(message) {
-    return /(content (?:policy|safety|filter|moderation)|safety policy|policy violation|moderation|moderated|violat(?:e|ion)|sensitive content|blocked content|内容.{0,8}(?:安全|审核|审查|违规|过滤)|审核|审查|违规|敏感内容|内容安全|内容过滤)/.test(String(message || "").toLowerCase());
+  function browserTranslationErrorIsContentPolicy(errorOrMessage) {
+    if (browserTranslationProviderCodeIsContentPolicy(errorOrMessage)) {
+      return true;
+    }
+    if (browserTranslationErrorIsAccountFailure(errorOrMessage) || browserTranslationErrorStatus(errorOrMessage) === 429) {
+      return false;
+    }
+    return browserTranslationMessageIsContentPolicy(browserTranslationErrorMessageText(errorOrMessage));
+  }
+
+  function browserTranslationMessageIsContentPolicy(message) {
+    return /(content (?:policy|safety|filter|moderation|management policy)|content[_-]filter|safety policy|policy violation|moderation|moderated|violat(?:e|ion)s? (?:of )?(?:our |the )?(?:usage |content )?polic|inappropriate content|sensitive (?:content|information)|content exists risk|data[_-]?inspection|blocked content|内容.{0,8}(?:安全|审核|审查|违规|过滤)|审核|审查|敏感内容|内容安全|内容过滤|包含.{0,6}违规)/.test(String(message || "").toLowerCase());
   }
 
   function parseModelJson(content) {

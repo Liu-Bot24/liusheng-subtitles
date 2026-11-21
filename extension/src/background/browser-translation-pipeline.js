@@ -224,7 +224,7 @@ export const FuguangBrowserTranslationPipeline = (() => {
       throw error;
     }
     if (sourceSegments.length <= 1) {
-      if (autoSplitDepth > 0 || browserTranslationErrorIsContentPolicy(error?.message || error)) {
+      if (autoSplitDepth > 0 || browserTranslationErrorIsContentPolicy(error)) {
         return attachBrowserTranslationFailures([], [
           createBrowserTranslationFailure(sourceSegments[0], error)
         ]);
@@ -332,7 +332,7 @@ export const FuguangBrowserTranslationPipeline = (() => {
       return true;
     }
     return !browserTranslationErrorIsRepairable(error)
-      && !browserTranslationErrorIsContentPolicy(error?.message || error);
+      && !browserTranslationErrorIsContentPolicy(error);
   }
 
   function splitBrowserTranslationQueueTask(task) {
