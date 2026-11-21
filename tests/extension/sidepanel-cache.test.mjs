@@ -1792,6 +1792,13 @@ const builtInAsrSaveState = await vm.runInContext(`
     asrProfiles = normalizeStoredProfiles("asr", [{ id: "groq_whisper", apiKey: "groq-key" }]);
     elements.asrProfileId.value = "groq_whisper";
     renderSelectedProfile("asr");
+    const readOnly = {
+      name: elements.asrProfileName.disabled,
+      baseUrl: elements.asrBaseUrl.disabled,
+      model: elements.asrModel.disabled,
+      vadHidden: elements.asrVadFilterField.hidden,
+      apiKey: elements.asrApiKey.disabled
+    };
     elements.asrBaseUrl.value = "https://changed.example/v1";
     elements.asrModel.value = "changed-model";
     elements.asrVadFilter.value = "on";
@@ -1803,7 +1810,8 @@ const builtInAsrSaveState = await vm.runInContext(`
       model: profile?.model,
       vadFilter: profile?.vadFilter,
       apiKey: profile?.apiKey,
-      storedProfile
+      storedProfile,
+      readOnly
     };
   })()
 `, context);
@@ -1816,6 +1824,29 @@ assert.deepEqual(JSON.parse(JSON.stringify(builtInAsrSaveState.storedProfile)), 
   id: "groq_whisper",
   apiKey: "groq-key"
 });
+assert.deepEqual(
+  JSON.parse(JSON.stringify(builtInAsrSaveState.readOnly)),
+  { name: true, baseUrl: true, model: true, vadHidden: true, apiKey: false },
+  "built-in ASR settings that are not saved must not look editable"
+);
+
+const settingsSaveFailureState = await vm.runInContext(`
+  (async () => {
+    const originalLocalSet = chrome.storage.local.set;
+    chrome.storage.local.set = async () => {
+      throw new Error("QUOTA_BYTES quota exceeded");
+    };
+    try {
+      elements.message.textContent = "";
+      await saveSettings();
+      return elements.message.textContent;
+    } finally {
+      chrome.storage.local.set = originalLocalSet;
+    }
+  })()
+`, context);
+
+assert.match(settingsSaveFailureState, /设置没有保存成功/, "a failed settings write must be reported instead of claiming success");
 
 const llmProfileTemplateState = await vm.runInContext(`
   (() => {
@@ -6804,3 +6835,78 @@ assert.equal(
   0,
   "a verified empty audio cache must not fall back to the extracted chunk total and re-enable ASR"
 );
+
+const editedSubtitlesSurviveReopenState = await vm.runInContext(`
+  (async () => {
+    const originalPutSubtitleCacheEntry = putSubtitleCacheEntry;
+    const originalGetSubtitleCacheEntryForCurrentPage = getSubtitleCacheEntryForCurrentPage;
+    const originalAttachCurrentSubtitlesToPage = attachCurrentSubtitlesToPage;
+    const originalLoadSubtitleCues = loadSubtitleCues;
+    let savedEntry = null;
+    let taskTranslation = "任务原译文";
+    const job = { translation: { segmentCount: 1, chunksDone: 1, chunksFailed: 0, vttPath: "browser-memory" } };
+    putSubtitleCacheEntry = async entry => {
+      savedEntry = JSON.parse(JSON.stringify(entry));
+    };
+    getSubtitleCacheEntryForCurrentPage = async () => ({ key: savedEntry?.id || "", entry: savedEntry });
+    attachCurrentSubtitlesToPage = async () => {};
+    loadSubtitleCues = async () => {
+      const transcript = {
+        source: [{ start: 0, end: 1, text: "original line" }],
+        translated: [{ start: 0, end: 1, text: taskTranslation }],
+        chunkStatuses: []
+      };
+      return { cues: cuesFromTranscript(transcript), source: "transcript", transcript };
+    };
+    function reopenPanel() {
+      manualSubtitleOverride = null;
+      renderedSubtitleJobId = "";
+      renderedSubtitleSignature = "";
+      subtitleCues = [];
+      currentTranscript = null;
+      currentSubtitleCacheEntry = null;
+      jobTranscriptBase = null;
+    }
+    try {
+      activeTab = { id: 1, url: "https://example.test/edit-reopen", title: "Edit page" };
+      currentJobId = "job-edit-reopen";
+      reopenPanel();
+      await renderSubtitles("job-edit-reopen", job);
+      await new Promise(resolve => setTimeout(resolve, 0));
+      subtitleCues[0].text = "用户改过的译文";
+      currentTranscript.translated[0].text = "用户改过的译文";
+      await persistSubtitleEdits();
+      const savedMarker = savedEntry?.userEdits ? { ...savedEntry.userEdits } : null;
+
+      reopenPanel();
+      await renderSubtitles("job-edit-reopen", job);
+      const afterReopen = subtitleCues[0]?.text;
+
+      taskTranslation = "重新翻译后的译文";
+      reopenPanel();
+      await renderSubtitles("job-edit-reopen", job);
+      const afterRetranslation = subtitleCues[0]?.text;
+      stopSubtitleFollow();
+      return {
+        savedMarkerJobId: savedMarker?.jobId || "",
+        savedMarkerHasBase: Boolean(savedMarker?.baseSignature),
+        afterReopen,
+        afterRetranslation
+      };
+    } finally {
+      putSubtitleCacheEntry = originalPutSubtitleCacheEntry;
+      getSubtitleCacheEntryForCurrentPage = originalGetSubtitleCacheEntryForCurrentPage;
+      attachCurrentSubtitlesToPage = originalAttachCurrentSubtitlesToPage;
+      loadSubtitleCues = originalLoadSubtitleCues;
+      manualSubtitleOverride = null;
+      jobTranscriptBase = null;
+    }
+  })()
+`, context);
+
+assert.deepEqual(JSON.parse(JSON.stringify(editedSubtitlesSurviveReopenState)), {
+  savedMarkerJobId: "job-edit-reopen",
+  savedMarkerHasBase: true,
+  afterReopen: "用户改过的译文",
+  afterRetranslation: "重新翻译后的译文"
+}, "edits saved for a task must come back when the panel reopens, until the task's own subtitles change");

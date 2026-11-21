@@ -281,6 +281,7 @@ const I18N = {
     backgroundClearFailed: "后台没有完成字幕状态清理。",
     noSavedCacheAndDisplayCleared: "当前页面没有已保存的字幕缓存，已清除当前显示。",
     settingsSaved: "设置已保存。新任务会使用当前配置。",
+    settingsSaveFailed: "设置没有保存成功：{error}",
     profileAdded: "已新增档案，请按需要修改并保存。",
     profileDeleted: "已删除当前档案。保存设置后会更新本机存储。",
     unnamedProfile: "未命名档案",
@@ -571,6 +572,7 @@ const I18N = {
     backgroundClearFailed: "The background service did not clear subtitle state.",
     noSavedCacheAndDisplayCleared: "No saved subtitle cache was found; current display was cleared.",
     settingsSaved: "Settings saved. New tasks will use this configuration.",
+    settingsSaveFailed: "Settings were not saved: {error}",
     profileAdded: "Profile added. Edit it as needed, then save.",
     profileDeleted: "Deleted the current profile. Save settings to update local storage.",
     unnamedProfile: "Untitled profile",
@@ -753,6 +755,7 @@ let asrRetryRequestInFlight = false;
 let translationRetryRequestInFlight = false;
 let subtitleCues = [];
 let currentTranscript = null;
+let jobTranscriptBase = null;
 let currentSubtitleCacheEntry = null;
 let subtitleDisplayMode = DEFAULTS.subtitleDisplayMode;
 let subtitleOverlayEnabled = DEFAULTS.subtitleOverlayEnabled;
@@ -1497,11 +1500,14 @@ function renderSelectedProfile(kind) {
     elements.asrVadFilter.value = normalizeAsrVadFilterMode(profile.vadFilter);
     elements.asrApiKey.value = profile.apiKey || "";
     updateApiKeyHelpLink("asr", profile);
-    elements.asrBaseUrl.disabled = false;
+    // Built-in ASR profiles keep their fixed service settings (only the key is saved), so those fields are
+    // shown read-only; the VAD option has no effect on these services and is hidden.
+    elements.asrProfileName.disabled = builtInTemplate;
+    elements.asrBaseUrl.disabled = builtInTemplate;
     elements.asrApiKey.disabled = false;
     setFieldHidden(elements.asrModelField, usesXaiAsr);
-    setFieldHidden(elements.asrVadFilterField, usesXaiAsr);
-    elements.asrModel.disabled = usesXaiAsr;
+    setFieldHidden(elements.asrVadFilterField, usesXaiAsr || builtInTemplate);
+    elements.asrModel.disabled = usesXaiAsr || builtInTemplate;
     updateAsrVadFilterAvailability();
     if (elements.funAsrLongFileHint) {
       elements.funAsrLongFileHint.hidden = !usesFunAsr;
@@ -1628,17 +1634,18 @@ async function saveSettings() {
   renderProfileOptions(elements.llmProfileId, llmProfiles, selectedLlmProfileId);
   currentAsrProfileId = elements.asrProfileId.value;
   currentLlmProfileId = elements.llmProfileId.value;
-  await chrome.storage.sync.set({
-    subtitleFontSize: clampSetting(elements.subtitleFontSize.value, 18, 48, DEFAULTS.subtitleFontSize),
-    subtitleOverlayEnabled,
-    subtitleDisplayMode,
-    subtitleBackgroundOpacity: clampSetting(
-      elements.subtitleBackgroundOpacity.value,
-      0,
-      95,
-      DEFAULTS.subtitleBackgroundOpacity
-    )
-  });
+  try {
+    await writeSettingsToStorage();
+  } catch (error) {
+    setSettingsMessage(t("settingsSaveFailed", { error: formatRuntimeError(error?.message || String(error)) }));
+    return;
+  }
+  setSettingsMessage(t("settingsSaved"));
+}
+
+async function writeSettingsToStorage() {
+  // Model profiles and keys live in local storage and are written first; display preferences sync across
+  // devices and may fail independently (quota, sync disabled), which must not lose the profiles.
   await chrome.storage.local.set({
     modelSettingsVersion: MODEL_SETTINGS_VERSION,
     selectedAsrProfileId: currentAsrProfileId || DEFAULT_ASR_PROFILE_ID,
@@ -1652,7 +1659,17 @@ async function saveSettings() {
     chunkMinutes: Math.round(clampSetting(elements.chunkMinutes.value, 1, 60, DEFAULTS.chunkMinutes))
   });
   await chrome.storage.local.remove(["asrApiKey", "llmApiKey", "asrBaseUrl", "asrModel", "llmBaseUrl", "llmModel", "llmProviderType", "asrWorkers"]).catch(() => {});
-  setSettingsMessage(t("settingsSaved"));
+  await chrome.storage.sync.set({
+    subtitleFontSize: clampSetting(elements.subtitleFontSize.value, 18, 48, DEFAULTS.subtitleFontSize),
+    subtitleOverlayEnabled,
+    subtitleDisplayMode,
+    subtitleBackgroundOpacity: clampSetting(
+      elements.subtitleBackgroundOpacity.value,
+      0,
+      95,
+      DEFAULTS.subtitleBackgroundOpacity
+    )
+  });
 }
 
 async function saveSourceLanguageSetting() {
@@ -2496,7 +2513,7 @@ async function renderSubtitles(jobId, job = null) {
   }
   const requestId = ++subtitleLoadRequestId;
   pendingSubtitleSignature = pendingKey;
-  const pending = loadSubtitleCues(jobId);
+  const pending = loadSubtitleCuesWithUserEdits(jobId, renderedSubtitleJobId !== jobId);
   pendingSubtitlePromise = pending;
   let result;
   try {
@@ -2509,6 +2526,15 @@ async function renderSubtitles(jobId, job = null) {
   }
   if (!shouldApplySubtitleRenderLoad(requestId, requestTabKey, requestCurrentJobId)) {
     return;
+  }
+  if (result.source === "transcript") {
+    jobTranscriptBase = { jobId: String(jobId || ""), signature: result.baseSignature || jobTranscriptSignature(result.transcript) };
+    if (result.editedEntry) {
+      applyUserEditedCacheEntry(jobId, result.editedEntry);
+      startSubtitleFollow();
+      await attachCurrentSubtitlesToPage();
+      return;
+    }
   }
   const cues = result.cues;
   const preserveExistingPresentation = renderedSubtitleJobId === jobId && subtitleCues.length > 0;
@@ -2527,6 +2553,63 @@ async function renderSubtitles(jobId, job = null) {
   if (result.source === "transcript") {
     cacheCurrentSubtitles().catch(() => {});
   }
+}
+
+// The task transcript is the source the user's edits were made on. Edits stay authoritative while that
+// source is unchanged; a re-translation or re-ASR produces a new source and replaces them.
+function jobTranscriptSignature(transcript) {
+  if (!transcript || typeof transcript !== "object") {
+    return "";
+  }
+  return textContentSignature(JSON.stringify({ source: transcript.source || [], translated: transcript.translated || [] }));
+}
+
+// Saved edits are looked up only when this panel shows the job for the first time; within one panel
+// session the in-memory override already keeps them.
+async function loadSubtitleCuesWithUserEdits(jobId, checkSavedEdits) {
+  const result = await loadSubtitleCues(jobId);
+  if (result?.source !== "transcript" || !checkSavedEdits) {
+    return result;
+  }
+  const baseSignature = jobTranscriptSignature(result.transcript);
+  const editedEntry = await userEditedCacheEntryForJob(jobId, baseSignature);
+  return { ...result, baseSignature, editedEntry };
+}
+
+async function userEditedCacheEntryForJob(jobId, baseSignature) {
+  if (!jobId || !baseSignature) {
+    return null;
+  }
+  const { entry } = await getSubtitleCacheEntryForCurrentPage().catch(() => ({ entry: null }));
+  const edits = entry?.userEdits;
+  return edits && edits.jobId === String(jobId) && edits.baseSignature === baseSignature && entry.transcript
+    ? entry
+    : null;
+}
+
+function applyUserEditedCacheEntry(jobId, entry) {
+  const cues = cuesFromTranscript(entry.transcript);
+  currentTranscript = entry.transcript;
+  currentSubtitleCacheEntry = entry;
+  cachedSubtitleLoadedKey = entry.id || "";
+  subtitleCueSource = "transcript";
+  subtitleCues = cues;
+  renderedSubtitleJobId = jobId || renderedSubtitleJobId;
+  activeCueIndex = -1;
+  markManualSubtitleOverride(`edited:${entry.updatedAt || Date.now()}:${cues.length}`);
+  renderedSubtitleSignature = manualSubtitleOverride?.signature || renderedSubtitleSignature;
+  renderSubtitleCueList();
+}
+
+function currentUserEditsMarker(entryJobId) {
+  const jobId = String(entryJobId || "");
+  if (!jobId || jobTranscriptBase?.jobId !== jobId || !jobTranscriptBase.signature) {
+    return null;
+  }
+  if (!manualSubtitleOverrideMatches(jobId)) {
+    return null;
+  }
+  return { jobId, baseSignature: jobTranscriptBase.signature };
 }
 
 function shouldApplySubtitleRenderLoad(requestId, requestTabKey, requestCurrentJobId) {
@@ -2818,6 +2901,7 @@ function clearSubtitles(text, jobId = "") {
   renderedSubtitleSignature = "";
   renderedSubtitleRevision = 0;
   manualSubtitleOverride = null;
+  jobTranscriptBase = null;
   attachedSubtitleTabId = 0;
   attachedSubtitleSignature = "";
   subtitleCues = [];
@@ -3907,6 +3991,10 @@ async function cacheCurrentSubtitles() {
   const entry = await buildSubtitleCacheEntry(transcript, transcript?.metadata || {});
   if (!entry.id) {
     return;
+  }
+  const userEdits = currentUserEditsMarker(entry.jobId);
+  if (userEdits) {
+    entry.userEdits = userEdits;
   }
   await putSubtitleCacheEntry(entry);
   currentSubtitleCacheEntry = entry;
