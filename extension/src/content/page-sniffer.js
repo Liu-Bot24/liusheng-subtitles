@@ -1,5 +1,5 @@
 (() => {
-  const PAGE_SNIFFER_REVISION = "20261122-address-bound-activation";
+  const PAGE_SNIFFER_REVISION = "20261122-capped-site-reads";
   // The service worker sets this flag right before re-injecting the sniffer for a page the user opened the
   // extension on. Site API probes (which run with the user's site session) only start after that.
   // A flag may name the address it was issued for; it then only counts while the page is still there.
@@ -160,7 +160,9 @@
         const url = this.responseURL || this.__fuguangUrl;
         inspectUrl(url, "xhr-url");
         if (typeof this.response === "string") {
-          inspectText(this.response, url, "xhr-body");
+          if (!isStreamingContentType(this.getResponseHeader?.("content-type") || "")) {
+            inspectText(this.response, url, "xhr-body");
+          }
         } else if (this.response && typeof this.response === "object") {
           if (this.response instanceof ArrayBuffer) {
             inspectBinaryResponse(this.response, url, "xhr-body", this.getResponseHeader?.("content-type") || "", this.getResponseHeader?.("content-length") || "");
@@ -296,8 +298,8 @@
       if (!response || response.ok === false || !stillCurrent()) {
         return;
       }
-      const text = await response.text();
-      if (!stillCurrent()) {
+      const text = await readResponseTextWithinLimit(response, MAX_TEXT_RESPONSE_INSPECTION_BYTES);
+      if (!text || !stillCurrent()) {
         return;
       }
       const json = originalJsonParse(text);
@@ -362,7 +364,7 @@
       if (response.ok === false) {
         return "";
       }
-      return response.text();
+      return await readResponseTextWithinLimit(response, MAX_TEXT_RESPONSE_INSPECTION_BYTES);
     } catch {
       return "";
     }
@@ -445,7 +447,11 @@
       if (response.ok === false) {
         return "";
       }
-      const payload = originalJsonParse(await response.text());
+      const text = await readResponseTextWithinLimit(response, MAX_TEXT_RESPONSE_INSPECTION_BYTES);
+      if (!text) {
+        return "";
+      }
+      const payload = originalJsonParse(text);
       return String(payload?.guest_token || "");
     } catch {
       return "";
@@ -506,7 +512,7 @@
         if (response.ok === false) {
           continue;
         }
-        const manifestText = await response.text();
+        const manifestText = await readResponseTextWithinLimit(response, MAX_TEXT_RESPONSE_INSPECTION_BYTES);
         if (!stillCurrent()) {
           return;
         }
@@ -554,10 +560,11 @@
       if (!response.ok) {
         return;
       }
-      const json = await response.json();
-      if ((routeKey && routeKey !== readBilibiliRouteKey()) || !stillCurrent()) {
+      const text = await readResponseTextWithinLimit(response, MAX_TEXT_RESPONSE_INSPECTION_BYTES);
+      if (!text || (routeKey && routeKey !== readBilibiliRouteKey()) || !stillCurrent()) {
         return;
       }
+      const json = originalJsonParse(text);
       postBilibiliPlayurlMedia(json?.data || json?.result || {});
       if (stillCurrent()) {
         window.__fuguangLastBilibiliPlayurlProbe = { key, ok: true, at: Date.now() };
@@ -608,7 +615,11 @@
       if (!response.ok || (routeKey && routeKey !== readBilibiliRouteKey())) {
         return ids;
       }
-      const json = await response.json();
+      const text = await readResponseTextWithinLimit(response, MAX_TEXT_RESPONSE_INSPECTION_BYTES);
+      if (!text) {
+        return ids;
+      }
+      const json = originalJsonParse(text);
       const data = json?.data || {};
       const responseBvid = String(data.bvid || "");
       if (responseBvid && responseBvid.toLowerCase() !== ids.bvid.toLowerCase()) {
@@ -791,7 +802,7 @@
     const reader = response?.body?.getReader?.();
     if (!reader) {
       const text = await response.text();
-      return text.length > limit ? "" : text;
+      return textExceedsUtf8Bytes(text, limit) ? "" : text;
     }
     const decoder = new TextDecoder();
     let received = 0;
@@ -810,15 +821,40 @@
     }
   }
 
-  function shouldInspectTextResponse(url, contentType, contentLength = "") {
-    const normalized = contentType.toLowerCase();
-    // Streaming bodies never finish, so a cloned reader would buffer them for the page's lifetime.
-    if (
-      normalized.includes("event-stream") ||
+  // Streaming bodies never finish, so a cloned reader would buffer them for the page's lifetime.
+  function isStreamingContentType(contentType) {
+    const normalized = String(contentType || "").toLowerCase();
+    return normalized.includes("event-stream") ||
       normalized.includes("ndjson") ||
       normalized.includes("jsonl") ||
-      normalized.includes("multipart/")
-    ) {
+      normalized.includes("multipart/");
+  }
+
+  // The cap is in UTF-8 bytes, as on the network; a string of N characters takes N to 3N bytes.
+  function textExceedsUtf8Bytes(text, limit) {
+    if (text.length > limit) {
+      return true;
+    }
+    if (text.length * 3 <= limit) {
+      return false;
+    }
+    let bytes = 0;
+    for (let index = 0; index < text.length; index += 1) {
+      const code = text.charCodeAt(index);
+      bytes += code < 0x80 ? 1 : code < 0x800 ? 2 : code >= 0xd800 && code <= 0xdbff ? 4 : 3;
+      if (code >= 0xd800 && code <= 0xdbff) {
+        index += 1;
+      }
+      if (bytes > limit) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function shouldInspectTextResponse(url, contentType, contentLength = "") {
+    const normalized = contentType.toLowerCase();
+    if (isStreamingContentType(normalized)) {
       return false;
     }
     const length = Number(contentLength);
@@ -1018,17 +1054,25 @@
     seen.add(value);
     inspectStructuredMediaObject(value, source);
     inspectXTwitterTweetMedia(value, source);
-    const children = Array.isArray(value) ? value : Object.values(value);
-    for (const item of children) {
+    // Children are visited in place, without first copying a wide object's values.
+    if (Array.isArray(value)) {
+      for (let index = 0; index < value.length && budget.nodes > 0; index += 1) {
+        inspectObject(value[index], source, depth + 1, seen, budget);
+      }
+      return;
+    }
+    for (const key in value) {
       if (budget.nodes <= 0) {
         return;
       }
-      inspectObject(item, source, depth + 1, seen, budget);
+      if (Object.prototype.hasOwnProperty.call(value, key)) {
+        inspectObject(value[key], source, depth + 1, seen, budget);
+      }
     }
   }
 
   function inspectText(text, baseUrl, source) {
-    if (!text || typeof text !== "string" || text.length > MAX_TEXT_RESPONSE_INSPECTION_BYTES) {
+    if (!text || typeof text !== "string" || textExceedsUtf8Bytes(text, MAX_TEXT_RESPONSE_INSPECTION_BYTES)) {
       return;
     }
     if (text.slice(0, 7).toUpperCase() === "#EXTM3U") {

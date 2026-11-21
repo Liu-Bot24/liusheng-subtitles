@@ -91,7 +91,7 @@ const source = fs.readFileSync(new URL("../../extension/src/content/page-sniffer
     pageFetch,
     "re-activating the sniffer must not remove a page-installed fetch wrapper"
   );
-  assert.equal(harness.context.window.__fuguangPageSnifferRevision, "20261122-address-bound-activation");
+  assert.equal(harness.context.window.__fuguangPageSnifferRevision, "20261122-capped-site-reads");
   assert.doesNotThrow(() => vm.runInContext(`
     JSON.parse('{"value":1}', (_key, value) =>
       value && value.value === 1
@@ -768,4 +768,107 @@ async function flushPromises() {
   await Promise.resolve();
   await Promise.resolve();
   await new Promise(resolve => setTimeout(resolve, 0));
+}
+
+function createStreamedResponse(url, chunks, headers, onCancel) {
+  return {
+    ...createFakeResponse(url, "", headers),
+    body: {
+      getReader() {
+        let index = 0;
+        return {
+          async read() {
+            return index < chunks.length ? { done: false, value: chunks[index++] } : { done: true, value: undefined };
+          },
+          async cancel() {
+            onCancel();
+          }
+        };
+      }
+    }
+  };
+}
+
+{
+  // Site lookups read through the same capped reader as page traffic.
+  const encoder = new TextEncoder();
+  const padding = encoder.encode(" ".repeat(9 * 1024 * 1024));
+  const audioUrl = "https://upos-sz-mirror.example.test/oversized-1-30232.m4s";
+  let bilibiliCancelled = false;
+  const bilibili = createHarness({
+    locationHref: "https://www.bilibili.com/video/BV1Oversized",
+    fetchResponses(url) {
+      if (String(url).includes("/x/player/playurl?")) {
+        const tail = encoder.encode(JSON.stringify({ code: 0, data: { dash: { duration: 120, audio: [{ baseUrl: audioUrl, mimeType: "audio/mp4", id: 30232 }] } } }));
+        return createStreamedResponse(url, [encoder.encode("{\"pad\":\""), padding, encoder.encode("\",\"x\":"), tail, encoder.encode("}")],
+          { "content-type": "application/json" }, () => { bilibiliCancelled = true; });
+      }
+      return null;
+    },
+    windowOverrides: { __INITIAL_STATE__: { videoData: { bvid: "BV1Oversized", aid: 1, cid: 2, pages: [{ page: 1, cid: 2 }] } } }
+  });
+  activateSniffer(bilibili);
+  await flushPromises();
+  assert.equal(bilibiliCancelled, true, "an oversized Bilibili response is cancelled");
+  assert.equal(bilibili.messages.some(message => message.media?.url === audioUrl), false,
+    "media beyond the read cap of a Bilibili lookup is not reported");
+
+  const masterUrl = "https://video.twimg.com/amplify_video/1/pl/oversized.m3u8";
+  let xCancelled = false;
+  const x = createHarness({
+    locationHref: "https://x.com/someone/status/123456789",
+    scripts: [{ src: "", textContent: 'e={queryId:"OversizedQuery",operationName:"TweetResultByRestId",metadata:{featureSwitches:[],fieldToggles:[]}};t="Bearer AAAAOversized"' }],
+    fetchResponses(url) {
+      if (String(url).includes("/i/api/graphql/OversizedQuery/")) {
+        const tail = encoder.encode(JSON.stringify({ video_info: { variants: [{ content_type: "application/x-mpegURL", url: masterUrl }] } }));
+        return createStreamedResponse(url, [encoder.encode("{\"pad\":\""), padding, encoder.encode("\",\"x\":"), tail, encoder.encode("}")],
+          { "content-type": "application/json" }, () => { xCancelled = true; });
+      }
+      return null;
+    }
+  });
+  activateSniffer(x);
+  await flushPromises();
+  await flushPromises();
+  assert.equal(xCancelled, true, "an oversized X GraphQL response is cancelled");
+  assert.equal(x.messages.some(message => message.media?.url === masterUrl), false,
+    "media beyond the read cap of an X lookup is not reported");
+}
+
+{
+  // XHR bodies: the cap counts UTF-8 bytes, and streaming responses are not scanned.
+  const manifestUrl = "https://cdn.example.test/xhr/master.m3u8";
+  function sendXhr(harness, { body, contentType }) {
+    const xhr = new harness.context.XMLHttpRequest();
+    const listeners = [];
+    xhr.addEventListener = (type, callback) => {
+      if (type === "load") {
+        listeners.push(callback);
+      }
+    };
+    xhr.responseURL = "https://example.test/api";
+    xhr.response = body;
+    xhr.getResponseHeader = name => (String(name).toLowerCase() === "content-type" ? contentType : "");
+    xhr.send();
+    listeners.forEach(callback => callback());
+  }
+  const reported = harness => harness.messages.some(message => message.media?.url === manifestUrl);
+
+  const normal = createHarness({ locationHref: "https://example.test/watch" });
+  vm.runInContext(source, normal.context, { filename: "page-sniffer.js" });
+  sendXhr(normal, { body: JSON.stringify({ src: manifestUrl }), contentType: "application/json" });
+  await flushPromises();
+  assert.equal(reported(normal), true, "an ordinary XHR body is still scanned");
+
+  const wide = createHarness({ locationHref: "https://example.test/watch" });
+  vm.runInContext(source, wide.context, { filename: "page-sniffer.js" });
+  sendXhr(wide, { body: `${"字".repeat(3 * 1024 * 1024)} ${manifestUrl}`, contentType: "text/plain" });
+  await flushPromises();
+  assert.equal(reported(wide), false, "an XHR body over the cap in UTF-8 bytes is not scanned");
+
+  const streaming = createHarness({ locationHref: "https://example.test/watch" });
+  vm.runInContext(source, streaming.context, { filename: "page-sniffer.js" });
+  sendXhr(streaming, { body: `data: {"src":"${manifestUrl}"}\n\n`, contentType: "text/event-stream" });
+  await flushPromises();
+  assert.equal(reported(streaming), false, "a streaming XHR body is not scanned");
 }
