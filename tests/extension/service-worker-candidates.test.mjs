@@ -4135,6 +4135,117 @@ assert.equal(context.browserTranslationProviderConcurrency({ modelConfig: { work
 }
 
 {
+  const tabId = 1115;
+  seedPage(tabId, { url: "https://example.test/podcast", duration: 600 });
+  const episodeUrl = "https://cdn.example.test/show/episode-0.mp3";
+  context.addPageMediaCandidate(tabId, { url: episodeUrl, source: "fetch-url", kind: "audio", ext: "mp3" });
+  for (let index = 1; index <= 120; index += 1) {
+    context.addPageMediaCandidate(tabId, {
+      url: `https://cdn${index}.example.test/show/episode-${index}.mp3`,
+      source: "fetch-url",
+      kind: "audio",
+      ext: "mp3"
+    });
+  }
+  const state = context.getState(tabId);
+  assert.equal(state.candidates.some(candidate => candidate.url === episodeUrl), false, "the flood should prune the first episode");
+  assert.equal(state.candidateFingerprints.size, state.candidates.length, "fingerprints must track the retained list");
+  context.addPageMediaCandidate(tabId, { url: episodeUrl, source: "media-element", kind: "audio", ext: "mp3", duration: 600 });
+  assert.ok(
+    context.getState(tabId).candidates.some(candidate => candidate.url === episodeUrl),
+    "a pruned candidate reported again must come back"
+  );
+}
+
+{
+  const sessionStore = {};
+  const originalSession = chrome.storage.session;
+  const originalTabsGet = chrome.tabs.get;
+  chrome.storage.session = {
+    async get(keys) {
+      return keys === null ? { ...sessionStore } : {};
+    },
+    async set(values) {
+      Object.assign(sessionStore, structuredClone(values));
+    },
+    async remove(keys) {
+      for (const key of [].concat(keys)) {
+        delete sessionStore[key];
+      }
+    }
+  };
+  const tabUrls = new Map([[1116, "https://example.test/show?id=7"], [1117, "https://example.test/show?id=9"]]);
+  chrome.tabs.get = async tabId => (tabUrls.has(tabId) ? { id: tabId, title: "Show", url: tabUrls.get(tabId) } : null);
+  for (const tabId of [1116, 1117]) {
+    seedPage(tabId, { url: "https://example.test/show?id=7", duration: 300 });
+    context.addPageMediaCandidate(tabId, {
+      url: `https://cdn.example.test/show-${tabId}/master.m3u8`,
+      source: "fetch-url",
+      kind: "hls",
+      ext: "m3u8"
+    });
+    await context.writeTabCandidateSnapshot(tabId);
+  }
+  vm.runInContext("tabState.delete(1116); tabState.delete(1117);", context);
+
+  await context.restoreTabCandidateSnapshots();
+  assert.ok(
+    context.getState(1116).candidates.some(candidate => candidate.url === "https://cdn.example.test/show-1116/master.m3u8"),
+    "a restarted worker must restore media discovered earlier on the same page"
+  );
+  assert.equal(context.getState(1117).candidates.length, 0, "a snapshot from another page must not be restored");
+  assert.equal("tabCandidates:1117" in sessionStore, false, "a stale snapshot is dropped");
+  chrome.storage.session = originalSession;
+  chrome.tabs.get = originalTabsGet;
+}
+
+{
+  const tabId = 1118;
+  context.updateTabContext(tabId, {
+    href: "https://example.test/episode",
+    hasMedia: true,
+    duration: 1440,
+    elementWidth: 1280,
+    elementHeight: 720
+  }, 0);
+  context.updateTabContext(tabId, { hasMedia: true, duration: 30, elementWidth: 300, elementHeight: 250 }, 7);
+  assert.equal(context.getState(tabId).context.duration, 1440, "a smaller frame's player must not replace the page duration");
+  context.updateTabContext(tabId, { hasMedia: true, duration: 1441, elementWidth: 1280, elementHeight: 720 }, 0);
+  assert.equal(context.getState(tabId).context.duration, 1441, "the primary player keeps updating the page duration");
+  const unknownTabId = 1119;
+  context.updateTabContext(unknownTabId, { hasMedia: true, duration: null, elementWidth: 1280, elementHeight: 720 }, 0);
+  context.updateTabContext(unknownTabId, { hasMedia: true, duration: 30, elementWidth: 300, elementHeight: 250 }, 7);
+  assert.equal(context.getState(unknownTabId).context.duration, 30, "another frame may fill a duration that is still unknown");
+}
+
+{
+  const tabId = 1114;
+  const pageUrl = "https://example.test/watch?v=keep";
+  await webNavigationCommittedListeners[0]({ tabId, frameId: 0, url: pageUrl });
+  seedPage(tabId, { url: pageUrl, duration: 120 });
+  context.addPageMediaCandidate(tabId, {
+    url: "https://cdn.example.test/keep/master.m3u8",
+    source: "fetch-url",
+    kind: "hls",
+    ext: "m3u8",
+    href: pageUrl
+  });
+  const originalSendMessage = chrome.tabs.sendMessage;
+  chrome.tabs.sendMessage = async () => ({ ok: true });
+
+  await webNavigationHistoryListeners[0]({ tabId, frameId: 0, url: `${pageUrl}&utm_source=share#t=30` });
+  assert.equal(
+    context.getState(tabId).candidates.length,
+    1,
+    "a history update that keeps the page identity must not discard discovered media"
+  );
+
+  await webNavigationHistoryListeners[0]({ tabId, frameId: 0, url: "https://example.test/watch?v=other" });
+  assert.equal(context.getState(tabId).candidates.length, 0, "a history update to another page must reset the tab");
+  chrome.tabs.sendMessage = originalSendMessage;
+}
+
+{
   const tabId = 1113;
   seedPage(tabId, { url: "https://www.bilibili.com/video/BVOld", duration: 441 });
   context.addPageMediaCandidate(tabId, {

@@ -1266,6 +1266,15 @@ export const FuguangBrowserMediaCandidates = (() => {
   }
   
   function isLikelyDirectPlayableMedia(candidate, contentType, urlInfo) {
+    // MPEG-TS responses are playlist segments; one segment never carries the page player's full length.
+    if (
+      candidate.ext === "ts" ||
+      /\.ts$/i.test(urlInfo.pathname || "") ||
+      contentType === "video/mp2t" ||
+      contentType === "video/mp2ts"
+    ) {
+      return false;
+    }
     if (contentType.startsWith("audio/") || contentType.startsWith("video/")) {
       return true;
     }

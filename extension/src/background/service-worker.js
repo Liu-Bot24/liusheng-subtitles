@@ -268,6 +268,13 @@ let browserJobLedgerMaintenancePromise = null;
 let browserVttAttachmentGeneration = Date.now() * 1000;
 
 const tabState = new Map();
+// Discovered media lives in memory, but MV3 stops idle workers and pages do not re-report manifests they
+// already loaded. Each tab's candidate list is mirrored to session storage (memory only, extension-only) so
+// a restarted worker sees the same sources for the same page.
+const TAB_CANDIDATE_SNAPSHOT_PREFIX = "tabCandidates:";
+const TAB_CANDIDATE_SNAPSHOT_DELAY_MS = 1000;
+const tabCandidateSnapshotTimers = new Map();
+let tabCandidateSnapshotRestorePromise = null;
 const serviceWorkerExecutionOwnerId = `service-worker:${createDurableRunToken()}`;
 
 try {
@@ -281,6 +288,7 @@ enableSidePanelAction();
 scheduleBrowserAudioCacheMaintenance();
 runMediaHeaderRuleRecovery({ force: true }).catch(() => {});
 browserJobRecoveryPromise = recoverBrowserJobIndex().catch(() => ({ recovered: 0 }));
+tabCandidateSnapshotRestorePromise = restoreTabCandidateSnapshots().catch(() => ({ restored: 0 }));
 
 chrome.action.onClicked.addListener(tab => {
   if (!tab?.id) {
@@ -404,7 +412,24 @@ chrome.webRequest.onErrorOccurred.addListener(
   { urls: ["<all_urls>"] }
 );
 
+// Last committed or history-updated URL per frame, so a history update that keeps the same page identity
+// (replaceState, tracking or hash changes) does not discard the media already discovered on that page.
+const frameNavigationUrls = new Map();
+
+function frameNavigationKey(tabId, frameId) {
+  return `${tabId}:${frameId}`;
+}
+
+function historyUpdateKeepsPageIdentity(details) {
+  const key = frameNavigationKey(details.tabId, details.frameId);
+  const previousUrl = frameNavigationUrls.get(key);
+  frameNavigationUrls.set(key, details.url || "");
+  return Boolean(previousUrl && details.url) &&
+    normalizeBrowserPageIdentity(previousUrl) === normalizeBrowserPageIdentity(details.url);
+}
+
 chrome.webNavigation.onCommitted.addListener(details => {
+  frameNavigationUrls.set(frameNavigationKey(details.tabId, details.frameId), details.url || "");
   if (details.frameId === 0) {
     return clearTopLevelNavigationState(details.tabId, { detachSubtitles: true });
   }
@@ -412,6 +437,9 @@ chrome.webNavigation.onCommitted.addListener(details => {
 });
 
 chrome.webNavigation.onHistoryStateUpdated?.addListener(details => {
+  if (historyUpdateKeepsPageIdentity(details)) {
+    return undefined;
+  }
   if (details.frameId === 0) {
     return clearTopLevelNavigationState(details.tabId, { detachSubtitles: true });
   }
@@ -420,6 +448,12 @@ chrome.webNavigation.onHistoryStateUpdated?.addListener(details => {
 
 chrome.tabs.onRemoved.addListener(tabId => {
   tabState.delete(tabId);
+  forgetTabCandidateSnapshot(tabId);
+  for (const key of [...frameNavigationUrls.keys()]) {
+    if (key.startsWith(`${tabId}:`)) {
+      frameNavigationUrls.delete(key);
+    }
+  }
 });
 
 async function clearTopLevelNavigationState(tabId, { detachSubtitles = false } = {}) {
@@ -428,6 +462,7 @@ async function clearTopLevelNavigationState(tabId, { detachSubtitles = false } =
     invalidateManualVttAttachment(state);
   }
   tabState.delete(tabId);
+  forgetTabCandidateSnapshot(tabId);
   scheduleSidepanelStatusChange(tabId);
   if (detachSubtitles) {
     await broadcastMessageToFrames(tabId, { type: MESSAGE.DETACH_PRELOAD_VTT });
@@ -504,6 +539,9 @@ chrome.runtime.onConnect?.addListener?.(port => {
 
 async function handleMessage(message, sender) {
   requestBrowserAudioCacheMaintenance().catch(() => {});
+  if (tabCandidateSnapshotRestorePromise) {
+    await tabCandidateSnapshotRestorePromise;
+  }
   switch (message?.type) {
     case MESSAGE.GET_STATUS:
       return getStatus(message.tabId);
@@ -9753,6 +9791,12 @@ function updateTabContext(tabId, context, frameId = 0, documentId = "") {
   const currentArea = (current.elementWidth || current.videoWidth || 0) * (current.elementHeight || current.videoHeight || 0);
   const shouldReplaceMedia = context.hasMedia && (!current.hasMedia || incomingArea >= currentArea);
   const shouldUpdateTime = context.hasMedia && (shouldReplaceMedia || state.mediaFrameId === incomingFrameId || current.frameId === incomingFrameId);
+  // The page duration decides how much of a manifest is extracted, so only the frame that owns the primary
+  // player may change it. Other frames (ads, previews) only fill a duration that is still unknown.
+  const ownsPageDuration = shouldUpdateTime || (!context.hasMedia && !current.hasMedia && isMainFrame);
+  const duration = ownsPageDuration
+    ? pickFinite(context.duration, current.duration)
+    : pickFinite(current.duration, context.duration);
   if (shouldReplaceMedia) {
     state.mediaFrameId = incomingFrameId;
     state.mediaDocumentId = incomingDocumentId;
@@ -9764,7 +9808,7 @@ function updateTabContext(tabId, context, frameId = 0, documentId = "") {
     description: isMainFrame ? context.description || current.description || "" : current.description || "",
     language: isMainFrame ? context.language || current.language || "" : current.language || "",
     hasMedia: current.hasMedia || Boolean(context.hasMedia),
-    duration: pickFinite(context.duration, current.duration),
+    duration,
     currentTime: shouldUpdateTime ? pickNonNegativeFinite(context.currentTime, current.currentTime) : current.currentTime,
     videoWidth: shouldReplaceMedia ? context.videoWidth || current.videoWidth || null : current.videoWidth || context.videoWidth || null,
     videoHeight: shouldReplaceMedia ? context.videoHeight || current.videoHeight || null : current.videoHeight || context.videoHeight || null,
@@ -9856,13 +9900,17 @@ function addCandidate(tabId, candidate) {
       }
       return mergeCandidate(item, safeCandidate);
     });
+    state.candidateFingerprints = new Set(state.candidates.map(candidateFingerprint));
     scheduleSidepanelStatusChange(tabId);
+    scheduleTabCandidateSnapshot(tabId);
     return;
   }
-  state.candidateFingerprints.add(fingerprint);
   state.candidates.unshift(safeCandidate);
   state.candidates = pruneCandidatesForRetention(state.candidates, MAX_CANDIDATES_PER_TAB);
+  // The fingerprint set must describe exactly the retained list; a pruned candidate reported again is new.
+  state.candidateFingerprints = new Set(state.candidates.map(candidateFingerprint));
   scheduleSidepanelStatusChange(tabId);
+  scheduleTabCandidateSnapshot(tabId);
 }
 
 function sanitizeCandidateRequestHeaders(candidate = {}) {
@@ -9951,4 +9999,116 @@ function getState(tabId) {
     });
   }
   return tabState.get(tabId);
+}
+
+function tabCandidateSnapshotKey(tabId) {
+  return `${TAB_CANDIDATE_SNAPSHOT_PREFIX}${tabId}`;
+}
+
+function scheduleTabCandidateSnapshot(tabId) {
+  const normalizedTabId = Number(tabId);
+  if (!Number.isInteger(normalizedTabId) || normalizedTabId < 0 || tabCandidateSnapshotTimers.has(normalizedTabId)) {
+    return;
+  }
+  const timer = setTimeout(() => {
+    tabCandidateSnapshotTimers.delete(normalizedTabId);
+    writeTabCandidateSnapshot(normalizedTabId).catch(() => {});
+  }, TAB_CANDIDATE_SNAPSHOT_DELAY_MS);
+  tabCandidateSnapshotTimers.set(normalizedTabId, timer);
+}
+
+async function writeTabCandidateSnapshot(tabId) {
+  const storage = chrome.storage?.session;
+  const state = tabState.get(tabId);
+  if (!storage?.set) {
+    return;
+  }
+  if (!state?.candidates?.length) {
+    await storage.remove?.(tabCandidateSnapshotKey(tabId));
+    return;
+  }
+  const context = state.context || {};
+  await storage.set({
+    [tabCandidateSnapshotKey(tabId)]: {
+      pageUrl: state.page?.url || context.href || "",
+      page: state.page || {},
+      context: {
+        href: context.href || "",
+        title: context.title || "",
+        description: context.description || "",
+        language: context.language || "",
+        hasMedia: Boolean(context.hasMedia),
+        duration: context.duration ?? null,
+        videoWidth: context.videoWidth || null,
+        videoHeight: context.videoHeight || null,
+        elementWidth: context.elementWidth || null,
+        elementHeight: context.elementHeight || null,
+        poster: context.poster || "",
+        currentSrc: context.currentSrc || "",
+        frameId: context.frameId ?? null,
+        documentId: context.documentId || ""
+      },
+      mediaFrameId: state.mediaFrameId ?? null,
+      mediaDocumentId: state.mediaDocumentId || "",
+      candidates: state.candidates,
+      savedAt: Date.now()
+    }
+  });
+}
+
+function forgetTabCandidateSnapshot(tabId) {
+  const normalizedTabId = Number(tabId);
+  const timer = tabCandidateSnapshotTimers.get(normalizedTabId);
+  if (timer) {
+    clearTimeout(timer);
+    tabCandidateSnapshotTimers.delete(normalizedTabId);
+  }
+  try {
+    chrome.storage?.session?.remove?.(tabCandidateSnapshotKey(normalizedTabId))?.catch?.(() => {});
+  } catch {
+    // Session storage is a recovery aid; losing it only means the page must be re-scanned.
+  }
+}
+
+async function restoreTabCandidateSnapshots() {
+  const storage = chrome.storage?.session;
+  if (!storage?.get) {
+    return { restored: 0 };
+  }
+  const stored = await storage.get(null);
+  let restored = 0;
+  for (const [key, snapshot] of Object.entries(stored || {})) {
+    if (!key.startsWith(TAB_CANDIDATE_SNAPSHOT_PREFIX)) {
+      continue;
+    }
+    const tabId = Number(key.slice(TAB_CANDIDATE_SNAPSHOT_PREFIX.length));
+    const tab = Number.isInteger(tabId) ? await chrome.tabs.get(tabId).catch(() => null) : null;
+    const samePage = Boolean(tab?.url && snapshot?.pageUrl) &&
+      normalizeBrowserPageIdentity(tab.url) === normalizeBrowserPageIdentity(snapshot.pageUrl);
+    if (!samePage || !Array.isArray(snapshot.candidates)) {
+      await storage.remove?.(key);
+      continue;
+    }
+    const state = getState(tabId);
+    const known = new Set(state.candidates.map(candidateFingerprint));
+    const missing = snapshot.candidates.filter(candidate => candidate?.url && !known.has(candidateFingerprint(candidate)));
+    state.candidates = pruneCandidatesForRetention([...state.candidates, ...missing], MAX_CANDIDATES_PER_TAB);
+    state.candidateFingerprints = new Set(state.candidates.map(candidateFingerprint));
+    if (!state.page?.url) {
+      state.page = snapshot.page || {};
+    }
+    if (!state.context || !Object.keys(state.context).length) {
+      state.context = snapshot.context || {};
+    }
+    if (state.mediaFrameId === null && snapshot.mediaFrameId !== null && snapshot.mediaFrameId !== undefined) {
+      state.mediaFrameId = snapshot.mediaFrameId;
+      state.mediaDocumentId = snapshot.mediaDocumentId || "";
+    }
+    if (!frameNavigationUrls.has(frameNavigationKey(tabId, 0))) {
+      frameNavigationUrls.set(frameNavigationKey(tabId, 0), tab.url);
+    }
+    restored += missing.length ? 1 : 0;
+    scheduleSidepanelStatusChange(tabId);
+  }
+  return { restored };
 }
