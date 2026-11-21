@@ -1,8 +1,11 @@
 (() => {
-  const PAGE_SNIFFER_REVISION = "20261122-route-bound-site-probes";
+  const PAGE_SNIFFER_REVISION = "20261122-address-bound-activation";
   // The service worker sets this flag right before re-injecting the sniffer for a page the user opened the
   // extension on. Site API probes (which run with the user's site session) only start after that.
-  const activationRequested = window.__fuguangPageSnifferActivationPending === true;
+  // A flag may name the address it was issued for; it then only counts while the page is still there.
+  const pendingActivation = window.__fuguangPageSnifferActivationPending;
+  const activationRequested = pendingActivation === true ||
+    Boolean(pendingActivation && typeof pendingActivation === "object" && pendingActivation.href === String(location.href || ""));
   delete window.__fuguangPageSnifferActivationPending;
   if (
     window.__fuguangPageSnifferRevision === PAGE_SNIFFER_REVISION &&
@@ -284,7 +287,7 @@
     }
     window.__fuguangLastXTwitterTweetProbe = { key, ok: false, at: Date.now() };
     try {
-      const operation = await resolveXTwitterTweetResultOperation();
+      const operation = await resolveXTwitterTweetResultOperation(stillCurrent);
       const bearer = operation.bearer || X_TWITTER_BEARER_FALLBACK;
       if (!operation.queryId || !bearer || !stillCurrent()) {
         return;
@@ -300,6 +303,9 @@
       const json = originalJsonParse(text);
       inspectObject(json, "x-twitter-player-json");
       await probeXTwitterHlsManifests(collectXTwitterHlsUrls(json), stillCurrent);
+      if (!stillCurrent()) {
+        return;
+      }
       window.__fuguangLastXTwitterTweetProbe = { key, ok: true, at: Date.now() };
     } catch {
       // X/Twitter probing is a targeted enrichment layer; normal sniffing still runs.
@@ -317,7 +323,7 @@
     }
   }
 
-  async function resolveXTwitterTweetResultOperation() {
+  async function resolveXTwitterTweetResultOperation(stillCurrent = () => true) {
     const inlineText = [...(document.scripts || [])].map(script => script.textContent || "").join("\n");
     const inlineOperation = extractXTwitterOperationConfig(inlineText, "TweetResultByRestId");
     const inlineBearer = extractXTwitterBearerToken(inlineText);
@@ -326,6 +332,9 @@
     }
     const scriptTexts = [];
     for (const src of xTwitterScriptUrls()) {
+      if (!stillCurrent()) {
+        return {};
+      }
       const text = await fetchXTwitterScriptText(src);
       if (text) {
         scriptTexts.push(text);
@@ -550,7 +559,9 @@
         return;
       }
       postBilibiliPlayurlMedia(json?.data || json?.result || {});
-      window.__fuguangLastBilibiliPlayurlProbe = { key, ok: true, at: Date.now() };
+      if (stillCurrent()) {
+        window.__fuguangLastBilibiliPlayurlProbe = { key, ok: true, at: Date.now() };
+      }
     } catch {
       // Bilibili fallback is opportunistic; normal network sniffing remains active.
     }

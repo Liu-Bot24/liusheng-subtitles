@@ -445,22 +445,24 @@ chrome.webNavigation.onCompleted?.addListener?.(details => {
   if (details?.frameId !== 0 || !details.documentId || !sidepanelIsWatchingTab(details.tabId)) {
     return;
   }
-  activateLoadedDocument(details.tabId, details.documentId).catch(() => {});
+  activateLoadedDocument(details.tabId, details.documentId, details.url || "").catch(() => {});
 });
 
 // Only the document that just finished loading is activated: the injections target its documentId, so they
 // fail instead of landing in a later page, and the panel subscription is re-checked before each step.
-async function activateLoadedDocument(tabId, documentId) {
+async function activateLoadedDocument(tabId, documentId, href) {
   const target = { tabId, documentIds: [documentId] };
-  if (!sidepanelIsWatchingTab(tabId)) {
+  if (!href || !sidepanelIsWatchingTab(tabId)) {
     return;
   }
+  // The flag names the loaded address, so a same-document route change before the sniffer runs voids it.
   await chrome.scripting.executeScript({
     target,
     world: "MAIN",
     injectImmediately: true,
-    func: () => {
-      window.__fuguangPageSnifferActivationPending = true;
+    args: [href],
+    func: activationHref => {
+      window.__fuguangPageSnifferActivationPending = { href: activationHref };
     }
   });
   if (!sidepanelIsWatchingTab(tabId)) {

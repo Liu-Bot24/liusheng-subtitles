@@ -91,7 +91,7 @@ const source = fs.readFileSync(new URL("../../extension/src/content/page-sniffer
     pageFetch,
     "re-activating the sniffer must not remove a page-installed fetch wrapper"
   );
-  assert.equal(harness.context.window.__fuguangPageSnifferRevision, "20261122-route-bound-site-probes");
+  assert.equal(harness.context.window.__fuguangPageSnifferRevision, "20261122-address-bound-activation");
   assert.doesNotThrow(() => vm.runInContext(`
     JSON.parse('{"value":1}', (_key, value) =>
       value && value.value === 1
@@ -580,6 +580,25 @@ const source = fs.readFileSync(new URL("../../extension/src/content/page-sniffer
     requestsOnActivatedRoute,
     "delayed probes must not reach a route the extension was never opened on"
   );
+}
+{
+  const requestedUrls = [];
+  const harness = createHarness({
+    locationHref: "https://www.bilibili.com/video/BV1RouteB",
+    fetchResponses(url) {
+      requestedUrls.push(String(url));
+      return null;
+    },
+    windowOverrides: {
+      __INITIAL_STATE__: { videoData: { bvid: "BV1RouteB", aid: 2, cid: 22 } },
+      __fuguangPageSnifferActivationPending: { href: "https://www.bilibili.com/video/BV1RouteA" }
+    }
+  });
+  vm.runInContext(source, harness.context, { filename: "page-sniffer.js" });
+  await flushPromises();
+  assert.equal(requestedUrls.some(url => url.includes("api.bilibili.com")), false,
+    "an activation issued for another address is ignored");
+  assert.equal("__fuguangPageSnifferActivationPending" in harness.context.window, false, "the flag is consumed");
 }
 function activateSniffer(harness) {
   harness.context.window.__fuguangPageSnifferActivationPending = true;
