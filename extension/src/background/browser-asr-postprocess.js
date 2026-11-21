@@ -4,6 +4,17 @@ export const FuguangBrowserAsrPostprocess = (() => {
   const ASR_VAD_BACKED_HALLUCINATION_NO_SPEECH_PROBABILITY = 0.35;
   const ASR_HALLUCINATION_NO_SPEECH_PROBABILITY = 0.6;
   const ASR_HALLUCINATION_LOG_PROBABILITY = -1.0;
+  const ASR_NO_SPEECH_PROBABILITY_KEYS = ["no_speech_prob", "noSpeechProbability"];
+  const ASR_AVG_LOG_PROBABILITY_KEYS = [
+    "avg_logprob",
+    "avgLogProbability",
+    "avg_log_probability",
+    "avg_log_prob",
+    "average_logprob",
+    "average_log_probability",
+    "logprob",
+    "log_prob"
+  ];
   const ASR_REPEATED_RUN_MIN_COUNT = 4;
   const ASR_REPEATED_RUN_MIN_TEXT_CHARS = 6;
   const ASR_REPEATED_RUN_MIN_NON_LATIN_TEXT_CHARS = 3;
@@ -1173,7 +1184,7 @@ export const FuguangBrowserAsrPostprocess = (() => {
     if (veryLongWord && (duration >= 10 || lowProbabilityCount > 0)) {
       return true;
     }
-    const noSpeechProbability = optionalAsrNumber(segment?.rawSegment || segment, ["no_speech_prob", "noSpeechProbability"]);
+    const noSpeechProbability = asrSegmentQualityNumber(segment, ASR_NO_SPEECH_PROBABILITY_KEYS);
     if (noSpeechProbability !== null && noSpeechProbability >= ASR_HALLUCINATION_NO_SPEECH_PROBABILITY) {
       if (isAsrSuspiciousWordTimingSegment(segment)) {
         return true;
@@ -1240,7 +1251,12 @@ export const FuguangBrowserAsrPostprocess = (() => {
     }
     const suspicious = sorted.filter(segment => isAsrSuspiciousDistributedRepeatOccurrence(segment));
     if (sorted.length >= ASR_DISTRIBUTED_REPEAT_HIGH_COUNT && span >= ASR_DISTRIBUTED_REPEAT_HIGH_SPAN_SECONDS) {
-      return true;
+      // Frequent repetition alone is not proof: choruses, slogans and drills repeat too. Keep the line when
+      // the recognizer itself reports most occurrences as clear speech.
+      const confident = sorted.filter(segment => isAsrConfidentSpeechSegment(segment));
+      if (confident.length / sorted.length < 0.5) {
+        return true;
+      }
     }
     if (sorted.length >= ASR_DISTRIBUTED_REPEAT_MEDIUM_COUNT && span >= ASR_DISTRIBUTED_REPEAT_MEDIUM_SPAN_SECONDS) {
       const weak = sorted.filter(segment => isAsrWeakDistributedRepeatOccurrence(segment));
@@ -1264,7 +1280,7 @@ export const FuguangBrowserAsrPostprocess = (() => {
     if (isAsrWeakWordEvidenceSegment(segment)) {
       return true;
     }
-    const noSpeechProbability = optionalAsrNumber(segment?.rawSegment || segment, ["no_speech_prob", "noSpeechProbability"]);
+    const noSpeechProbability = asrSegmentQualityNumber(segment, ASR_NO_SPEECH_PROBABILITY_KEYS);
     return duration >= 3
       && noSpeechProbability !== null
       && noSpeechProbability >= ASR_HALLUCINATION_NO_SPEECH_PROBABILITY;
@@ -1319,10 +1335,31 @@ export const FuguangBrowserAsrPostprocess = (() => {
       return false;
     }
     const kind = asrLowInformationTextKind(segment?.text);
-    if (kind === "low_information" && duration >= ASR_LOW_INFORMATION_SINGLE_MIN_SPAN_SECONDS) {
+    if (
+      kind === "low_information" &&
+      duration >= ASR_LOW_INFORMATION_SINGLE_MIN_SPAN_SECONDS &&
+      !isAsrConfidentSpeechSegment(segment)
+    ) {
       return true;
     }
     return isAsrSingleRepeatedPhraseHallucination(segment, duration);
+  }
+
+  // True only when the recognizer reported quality numbers and they describe clear speech. Without such
+  // numbers the text-pattern rules stay in charge.
+  function isAsrConfidentSpeechSegment(segment) {
+    const noSpeechProbability = asrSegmentQualityNumber(segment, ASR_NO_SPEECH_PROBABILITY_KEYS);
+    const avgLogProbability = asrSegmentQualityNumber(segment, ASR_AVG_LOG_PROBABILITY_KEYS);
+    if (noSpeechProbability === null && avgLogProbability === null) {
+      return false;
+    }
+    if (noSpeechProbability !== null && noSpeechProbability >= ASR_HALLUCINATION_NO_SPEECH_PROBABILITY) {
+      return false;
+    }
+    if (avgLogProbability !== null && avgLogProbability <= ASR_HALLUCINATION_LOG_PROBABILITY) {
+      return false;
+    }
+    return !isAsrWeakWordEvidenceSegment(segment);
   }
 
   function isAsrSingleRepeatedPhraseHallucination(segment, duration = asrSegmentDuration(segment)) {
