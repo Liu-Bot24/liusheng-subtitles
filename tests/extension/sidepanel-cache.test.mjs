@@ -6708,6 +6708,49 @@ assert.deepEqual(JSON.parse(JSON.stringify(tabSwitchRestoreState)), {
   statusRequests: [2, 1, 1]
 });
 
+const navigationDuringSubtitleLoadState = await vm.runInContext(`
+  (async () => {
+    const originalLoadSubtitleCues = loadSubtitleCues;
+    const originalAttach = attachCurrentSubtitlesToPage;
+    const originalRefreshStatus = refreshStatus;
+    const originalGetEntry = getSubtitleCacheEntryForCurrentPage;
+    let resolveLoad;
+    let attachCalls = 0;
+    loadSubtitleCues = () => new Promise(resolve => {
+      resolveLoad = resolve;
+    });
+    attachCurrentSubtitlesToPage = async () => {
+      attachCalls += 1;
+    };
+    refreshStatus = async () => {};
+    getSubtitleCacheEntryForCurrentPage = async () => ({ key: "", entry: null });
+    try {
+      activeTab = { id: 1, windowId: 1, url: "https://example.test/watch/old", title: "Old" };
+      currentJobId = "job-old-page";
+      manualSubtitleOverride = null;
+      renderedSubtitleJobId = "";
+      renderedSubtitleSignature = "";
+      subtitleCues = [];
+      currentTranscript = null;
+      const rendering = renderSubtitles("job-old-page", { translation: { segmentCount: 1, chunksDone: 1, chunksFailed: 0, vttPath: "browser-memory" } });
+      chrome.tabs.onUpdated.emit(1, { url: "https://other.example/new-page" });
+      const transcript = { source: [{ start: 0, end: 1, text: "old" }], translated: [{ start: 0, end: 1, text: "旧页面字幕" }], chunkStatuses: [] };
+      resolveLoad({ cues: cuesFromTranscript(transcript), source: "transcript", transcript });
+      await rendering;
+      return { attachCalls, cueCount: subtitleCues.length };
+    } finally {
+      loadSubtitleCues = originalLoadSubtitleCues;
+      attachCurrentSubtitlesToPage = originalAttach;
+      refreshStatus = originalRefreshStatus;
+      getSubtitleCacheEntryForCurrentPage = originalGetEntry;
+      currentJobId = "";
+    }
+  })()
+`, context);
+
+assert.deepEqual(JSON.parse(JSON.stringify(navigationDuringSubtitleLoadState)), { attachCalls: 0, cueCount: 0 },
+  "subtitles that finish loading after the tab moved to another address are neither shown nor attached");
+
 
 const subtitleAttachmentOriginState = await vm.runInContext(`
   (async () => {

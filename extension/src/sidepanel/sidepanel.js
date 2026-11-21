@@ -990,6 +990,9 @@ function bindTabLifecycleListeners() {
     if (Number(tabId) !== Number(activeTab?.id) || (!changeInfo?.url && changeInfo?.status !== "complete")) {
       return;
     }
+    if (changeInfo?.url && changeInfo.url !== activeTab?.url) {
+      invalidatePendingSubtitleLoads();
+    }
     queueStatusRefresh();
   });
   tabLifecycleListenersBound = true;
@@ -2634,6 +2637,14 @@ function currentUserEditsMarker(entryJobId) {
     return null;
   }
   return { jobId, baseSignature: jobTranscriptBase.signature };
+}
+
+// The tab moved to another address: subtitles still being loaded for the previous page must not be shown
+// or attached there. The queued status refresh then loads whatever belongs to the new page.
+function invalidatePendingSubtitleLoads() {
+  subtitleLoadRequestId += 1;
+  pendingSubtitlePromise = null;
+  pendingSubtitleSignature = "";
 }
 
 function shouldApplySubtitleRenderLoad(requestId, requestTabKey, requestCurrentJobId) {
