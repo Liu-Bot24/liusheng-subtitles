@@ -17634,8 +17634,17 @@ assert.equal(context.shouldRetryBrowserAsrClipRequestError({
 {
   const originalExecuteScript = chrome.scripting.executeScript;
   const injections = [];
+  let unsubscribeDuringInjection = null;
   chrome.scripting.executeScript = async injection => {
-    injections.push({ tabId: injection.target?.tabId, files: injection.files || null, func: Boolean(injection.func) });
+    injections.push({
+      tabId: injection.target?.tabId,
+      documentIds: injection.target?.documentIds || null,
+      files: injection.files || null,
+      func: Boolean(injection.func)
+    });
+    if (injection.func && unsubscribeDuringInjection) {
+      unsubscribeDuringInjection();
+    }
     return [];
   };
   const incoming = [];
@@ -17649,13 +17658,13 @@ assert.equal(context.shouldRetryBrowserAsrClipRequestError({
     runtimeConnectListeners[0](port);
     incoming[0]({ type: "FUGUANG_SIDEPANEL_SUBSCRIBE", tabId: 1130 });
     for (const listener of webNavigationCompletedListeners) {
-      listener({ tabId: 1131, frameId: 0, url: "https://www.bilibili.com/video/BV1Other" });
-      listener({ tabId: 1130, frameId: 3, url: "https://example.test/frame" });
+      listener({ tabId: 1131, frameId: 0, documentId: "doc-other", url: "https://www.bilibili.com/video/BV1Other" });
+      listener({ tabId: 1130, frameId: 3, documentId: "doc-frame", url: "https://example.test/frame" });
     }
     await new Promise(resolve => setTimeout(resolve, 0));
     assert.equal(injections.length, 0, "tabs the panel is not showing, and subframes, are not activated");
     for (const listener of webNavigationCompletedListeners) {
-      listener({ tabId: 1130, frameId: 0, url: "https://www.bilibili.com/video/BV1Reload" });
+      listener({ tabId: 1130, frameId: 0, documentId: "doc-reload", url: "https://www.bilibili.com/video/BV1Reload" });
     }
     await new Promise(resolve => setTimeout(resolve, 0));
     await new Promise(resolve => setTimeout(resolve, 0));
@@ -17664,6 +17673,20 @@ assert.equal(context.shouldRetryBrowserAsrClipRequestError({
         injections.some(item => item.tabId === 1130 && item.files?.includes("src/content/page-sniffer.js")),
       "a reload of the tab the panel shows activates the new document"
     );
+    assert.ok(injections.every(item => item.documentIds?.[0] === "doc-reload"),
+      "activation targets only the document that finished loading");
+
+    injections.length = 0;
+    unsubscribeDuringInjection = () => {
+      incoming[0]({ type: "FUGUANG_SIDEPANEL_SUBSCRIBE", tabId: 999 });
+    };
+    for (const listener of webNavigationCompletedListeners) {
+      listener({ tabId: 1130, frameId: 0, documentId: "doc-second", url: "https://www.bilibili.com/video/BV1Second" });
+    }
+    await new Promise(resolve => setTimeout(resolve, 0));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(injections.some(item => item.files?.includes("src/content/page-sniffer.js")), false,
+      "if the panel stops showing the tab mid-activation, the sniffer is not activated");
   } finally {
     chrome.scripting.executeScript = originalExecuteScript;
   }

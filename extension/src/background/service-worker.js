@@ -442,11 +442,45 @@ chrome.webNavigation.onCommitted.addListener(details => {
 // document at the same address, while the panel is still showing that tab, the new document is activated
 // here so its site lookups keep working for the page the user has the extension open on.
 chrome.webNavigation.onCompleted?.addListener?.(details => {
-  if (details?.frameId !== 0 || !sidepanelIsWatchingTab(details.tabId)) {
+  if (details?.frameId !== 0 || !details.documentId || !sidepanelIsWatchingTab(details.tabId)) {
     return;
   }
-  activatePage(details.tabId).catch(() => {});
+  activateLoadedDocument(details.tabId, details.documentId).catch(() => {});
 });
+
+// Only the document that just finished loading is activated: the injections target its documentId, so they
+// fail instead of landing in a later page, and the panel subscription is re-checked before each step.
+async function activateLoadedDocument(tabId, documentId) {
+  const target = { tabId, documentIds: [documentId] };
+  if (!sidepanelIsWatchingTab(tabId)) {
+    return;
+  }
+  await chrome.scripting.executeScript({
+    target,
+    world: "MAIN",
+    injectImmediately: true,
+    func: () => {
+      window.__fuguangPageSnifferActivationPending = true;
+    }
+  });
+  if (!sidepanelIsWatchingTab(tabId)) {
+    await chrome.scripting.executeScript({
+      target,
+      world: "MAIN",
+      injectImmediately: true,
+      func: () => {
+        delete window.__fuguangPageSnifferActivationPending;
+      }
+    }).catch(() => {});
+    return;
+  }
+  await chrome.scripting.executeScript({
+    target,
+    world: "MAIN",
+    injectImmediately: true,
+    files: ["src/content/page-sniffer.js"]
+  });
+}
 
 function sidepanelIsWatchingTab(tabId) {
   for (const subscribedTabId of sidepanelStatusPorts.values()) {
