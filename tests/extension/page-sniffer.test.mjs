@@ -872,3 +872,63 @@ function createStreamedResponse(url, chunks, headers, onCancel) {
   await flushPromises();
   assert.equal(reported(streaming), false, "a streaming XHR body is not scanned");
 }
+
+{
+  // An X client script over 8 MB keeps the query configuration found near its start.
+  const encoder = new TextEncoder();
+  const scriptUrl = "https://abs.twimg.com/responsive-web/client-web/main.big1234.js";
+  const masterUrl = "https://video.twimg.com/amplify_video/2/pl/big-script.m3u8";
+  const requested = [];
+  const x = createHarness({
+    locationHref: "https://x.com/someone/status/223456789",
+    scripts: [{ src: scriptUrl, textContent: "" }],
+    fetchResponses(url) {
+      requested.push(String(url));
+      if (url === scriptUrl) {
+        const head = encoder.encode('e={queryId:"BigScriptQuery",operationName:"TweetResultByRestId",metadata:{featureSwitches:[],fieldToggles:[]}};t="Bearer AAAABigScript";');
+        return createStreamedResponse(url, [head, encoder.encode(" ".repeat(9 * 1024 * 1024))], { "content-type": "application/javascript" }, () => {});
+      }
+      if (String(url).includes("/i/api/graphql/BigScriptQuery/")) {
+        return createFakeResponse(url, { video_info: { variants: [{ content_type: "application/x-mpegURL", url: masterUrl }] } }, { "content-type": "application/json" });
+      }
+      return null;
+    }
+  });
+  activateSniffer(x);
+  await flushPromises();
+  await flushPromises();
+  assert.ok(requested.some(url => url.includes("/i/api/graphql/BigScriptQuery/")),
+    "the query id from a large script is used");
+  assert.ok(x.messages.some(message => message.media?.url === masterUrl), "the status media is found");
+}
+
+{
+  const manifestUrl = "https://cdn.example.test/xhr2/master.m3u8";
+  function sendXhr(harness, { body, contentType }) {
+    const xhr = new harness.context.XMLHttpRequest();
+    const listeners = [];
+    xhr.addEventListener = (type, callback) => {
+      if (type === "load") {
+        listeners.push(callback);
+      }
+    };
+    xhr.responseURL = "https://example.test/api";
+    xhr.response = body;
+    xhr.getResponseHeader = name => (String(name).toLowerCase() === "content-type" ? contentType : "");
+    xhr.send();
+    listeners.forEach(callback => callback());
+  }
+  const reported = harness => harness.messages.some(message => message.media?.url === manifestUrl);
+
+  const ndjson = createHarness({ locationHref: "https://example.test/watch" });
+  vm.runInContext(source, ndjson.context, { filename: "page-sniffer.js" });
+  sendXhr(ndjson, { body: { src: manifestUrl }, contentType: "application/x-ndjson" });
+  await flushPromises();
+  assert.equal(reported(ndjson), false, "a streaming XHR body parsed as JSON is not scanned");
+
+  const unpaired = createHarness({ locationHref: "https://example.test/watch" });
+  vm.runInContext(source, unpaired.context, { filename: "page-sniffer.js" });
+  sendXhr(unpaired, { body: `${"\ud800".repeat(2900 * 1024)} ${manifestUrl}`, contentType: "text/plain" });
+  await flushPromises();
+  assert.equal(reported(unpaired), false, "unpaired surrogates count as 3 bytes each toward the cap");
+}

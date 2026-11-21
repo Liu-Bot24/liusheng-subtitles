@@ -29,6 +29,9 @@
   const MAX_FMP4_BINARY_INSPECTIONS = 80;
   const MAX_FMP4_BINARY_INSPECTION_BYTES = 768 * 1024;
   const MAX_TEXT_RESPONSE_INSPECTION_BYTES = 8 * 1024 * 1024;
+  // X's client scripts are read only for their query configuration, which sits early in the file. They are
+  // read up to this size and cut there, never discarded, so a large bundle keeps its configuration.
+  const MAX_X_SCRIPT_READ_BYTES = 32 * 1024 * 1024;
   const MAX_OBJECT_INSPECTION_NODES = 50_000;
   const X_TWITTER_TWEET_RESULT_FALLBACK = {
     queryId: "SgZWKwvBiOKrSC0QeOGvXw",
@@ -159,10 +162,11 @@
       safelyInspect(() => {
         const url = this.responseURL || this.__fuguangUrl;
         inspectUrl(url, "xhr-url");
+        if (isStreamingContentType(this.getResponseHeader?.("content-type") || "")) {
+          return;
+        }
         if (typeof this.response === "string") {
-          if (!isStreamingContentType(this.getResponseHeader?.("content-type") || "")) {
-            inspectText(this.response, url, "xhr-body");
-          }
+          inspectText(this.response, url, "xhr-body");
         } else if (this.response && typeof this.response === "object") {
           if (this.response instanceof ArrayBuffer) {
             inspectBinaryResponse(this.response, url, "xhr-body", this.getResponseHeader?.("content-type") || "", this.getResponseHeader?.("content-length") || "");
@@ -364,7 +368,7 @@
       if (response.ok === false) {
         return "";
       }
-      return await readResponseTextWithinLimit(response, MAX_TEXT_RESPONSE_INSPECTION_BYTES);
+      return await readResponseTextWithinLimit(response, MAX_X_SCRIPT_READ_BYTES, { truncate: true });
     } catch {
       return "";
     }
@@ -798,11 +802,15 @@
 
   // Content-Length can be missing or describe the compressed size, so the cap is enforced on the bytes
   // actually read; a body that grows past it is cancelled and not inspected.
-  async function readResponseTextWithinLimit(response, limit) {
+  // With truncate, the text read up to the cap is returned instead of nothing.
+  async function readResponseTextWithinLimit(response, limit, { truncate = false } = {}) {
     const reader = response?.body?.getReader?.();
     if (!reader) {
       const text = await response.text();
-      return textExceedsUtf8Bytes(text, limit) ? "" : text;
+      if (!textExceedsUtf8Bytes(text, limit)) {
+        return text;
+      }
+      return truncate ? text.slice(0, Math.floor(limit / 3)) : "";
     }
     const decoder = new TextDecoder();
     let received = 0;
@@ -812,11 +820,16 @@
       if (done) {
         return text + decoder.decode();
       }
-      received += value?.byteLength || 0;
-      if (received > limit) {
+      const size = value?.byteLength || 0;
+      if (received + size > limit) {
         reader.cancel().catch(() => {});
-        return "";
+        if (!truncate) {
+          return "";
+        }
+        const room = Math.max(0, limit - received);
+        return text + decoder.decode(value.subarray(0, room), { stream: true });
       }
+      received += size;
       text += decoder.decode(value, { stream: true });
     }
   }
@@ -841,9 +854,17 @@
     let bytes = 0;
     for (let index = 0; index < text.length; index += 1) {
       const code = text.charCodeAt(index);
-      bytes += code < 0x80 ? 1 : code < 0x800 ? 2 : code >= 0xd800 && code <= 0xdbff ? 4 : 3;
-      if (code >= 0xd800 && code <= 0xdbff) {
+      if (code < 0x80) {
+        bytes += 1;
+      } else if (code < 0x800) {
+        bytes += 2;
+      } else if (code >= 0xd800 && code <= 0xdbff && index + 1 < text.length &&
+          text.charCodeAt(index + 1) >= 0xdc00 && text.charCodeAt(index + 1) <= 0xdfff) {
+        // A real surrogate pair is one 4-byte character; an unpaired surrogate is encoded as 3 bytes.
+        bytes += 4;
         index += 1;
+      } else {
+        bytes += 3;
       }
       if (bytes > limit) {
         return true;
