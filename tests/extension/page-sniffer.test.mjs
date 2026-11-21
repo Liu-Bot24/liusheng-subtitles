@@ -448,6 +448,42 @@ const source = fs.readFileSync(new URL("../../extension/src/content/page-sniffer
     media.some(item => item.url === "https://video.twimg.com/amplify_video/2059183631126667264/pl/mp4a/128000/8gx0bryi1XnA-oNu.m3u8" && item.role === "audio"),
     "X GraphQL probe should fetch the HLS master and expose the audio rendition"
   );
+  {
+    // Route change while the guest token is still being fetched: the probe for the old status stops.
+    let releaseGuest;
+    const guestGate = new Promise(resolve => {
+      releaseGuest = resolve;
+    });
+    const routedUrls = [];
+    const routed = createHarness({
+      locationHref: "https://x.com/jaynitx/status/2059183692569071878",
+      scripts: [{ src: mainScriptUrl, textContent: "" }],
+      fetchResponses(url) {
+        routedUrls.push(String(url));
+        if (url === mainScriptUrl) {
+          return createFakeResponse(url, mainScript, { "content-type": "application/javascript" });
+        }
+        if (String(url).includes("guest/activate")) {
+          return guestGate.then(() => createFakeResponse(url, { guest_token: "1" }, { "content-type": "application/json" }));
+        }
+        if (String(url).includes("/i/api/graphql/")) {
+          return createFakeResponse(url, tweetJson, { "content-type": "application/json" });
+        }
+        return null;
+      }
+    });
+    activateSniffer(routed);
+    await flushPromises();
+    await flushPromises();
+    routed.context.location.href = "https://x.com/someone/status/1111111111111111111";
+    routed.context.location.pathname = "/someone/status/1111111111111111111";
+    releaseGuest();
+    await flushPromises();
+    await flushPromises();
+    assert.ok(routedUrls.some(url => url.includes("guest/activate")), "the guest token step was reached");
+    assert.equal(routedUrls.some(url => url.includes("/i/api/graphql/")), false,
+      "a probe started on one status must not query X after the page moved to another route");
+  }
 }
 
 {

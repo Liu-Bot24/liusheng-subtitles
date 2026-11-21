@@ -112,6 +112,7 @@
   // Opening the extension authorizes site lookups for the page address it was opened on. The delayed retries
   // below must not carry that over to another route the page navigates to in the meantime.
   let siteApiProbeActivatedHref = activationRequested ? String(location.href || "") : "";
+  let siteApiProbeActivation = activationRequested ? 1 : 0;
   const seenPerformanceUrls = new Set();
   const timers = [];
   const contextTimer = setInterval(reportPageContext, 1200);
@@ -224,6 +225,7 @@
     if (options?.activate === true) {
       siteApiProbesEnabled = true;
       siteApiProbeActivatedHref = String(location.href || "");
+      siteApiProbeActivation += 1;
       // Opening the extension re-reports everything already seen, in case the worker lost its copy.
       seenPerformanceUrls.clear();
       lastDocumentMarkupSignature = "";
@@ -256,10 +258,21 @@
       siteApiProbeActivatedHref === String(location.href || "");
   }
 
+  // Each probe remembers the address and activation it started under. Every later step re-checks both, so
+  // a probe begun on one route never sends or reports anything after the page moved to another route, even
+  // if that route has since been activated too.
+  function siteApiProbeGuard() {
+    const href = String(location.href || "");
+    const activation = siteApiProbeActivation;
+    return () => siteApiProbesAllowedHere() && siteApiProbeActivation === activation &&
+      String(location.href || "") === href;
+  }
+
   async function probeXTwitterTweetMedia() {
     if (!siteApiProbesAllowedHere()) {
       return;
     }
+    const stillCurrent = siteApiProbeGuard();
     const statusId = readXTwitterStatusId();
     if (!statusId) {
       return;
@@ -273,17 +286,20 @@
     try {
       const operation = await resolveXTwitterTweetResultOperation();
       const bearer = operation.bearer || X_TWITTER_BEARER_FALLBACK;
-      if (!operation.queryId || !bearer || !siteApiProbesAllowedHere()) {
+      if (!operation.queryId || !bearer || !stillCurrent()) {
         return;
       }
-      const response = await fetchXTwitterTweetResult(statusId, operation, bearer);
-      if (!response || response.ok === false || !siteApiProbesAllowedHere()) {
+      const response = await fetchXTwitterTweetResult(statusId, operation, bearer, stillCurrent);
+      if (!response || response.ok === false || !stillCurrent()) {
         return;
       }
       const text = await response.text();
+      if (!stillCurrent()) {
+        return;
+      }
       const json = originalJsonParse(text);
       inspectObject(json, "x-twitter-player-json");
-      await probeXTwitterHlsManifests(collectXTwitterHlsUrls(json));
+      await probeXTwitterHlsManifests(collectXTwitterHlsUrls(json), stillCurrent);
       window.__fuguangLastXTwitterTweetProbe = { key, ok: true, at: Date.now() };
     } catch {
       // X/Twitter probing is a targeted enrichment layer; normal sniffing still runs.
@@ -368,7 +384,7 @@
     return [...list.matchAll(/"([^"]+)"/g)].map(match => match[1]);
   }
 
-  async function fetchXTwitterTweetResult(statusId, operation, bearer) {
+  async function fetchXTwitterTweetResult(statusId, operation, bearer, stillCurrent = () => true) {
     const query = new URLSearchParams({
       variables: JSON.stringify({
         tweetId: statusId,
@@ -385,6 +401,9 @@
       const guestToken = await activateXTwitterGuestToken(bearer);
       if (guestToken) {
         headers["x-guest-token"] = guestToken;
+      }
+      if (!stillCurrent()) {
+        return null;
       }
     }
     return originalFetch.call(window, url, {
@@ -468,9 +487,9 @@
     return [...output];
   }
 
-  async function probeXTwitterHlsManifests(urls) {
+  async function probeXTwitterHlsManifests(urls, stillCurrent = siteApiProbesAllowedHere) {
     for (const url of Array.isArray(urls) ? urls.slice(0, 4) : []) {
-      if (!siteApiProbesAllowedHere()) {
+      if (!stillCurrent()) {
         return;
       }
       try {
@@ -478,7 +497,11 @@
         if (response.ok === false) {
           continue;
         }
-        inspectText(await response.text(), response.url || url, "x-twitter-hls-master");
+        const manifestText = await response.text();
+        if (!stillCurrent()) {
+          return;
+        }
+        inspectText(manifestText, response.url || url, "x-twitter-hls-master");
       } catch {
         // A single stale HLS URL should not block other candidates.
       }
@@ -489,12 +512,13 @@
     if (!siteApiProbesAllowedHere()) {
       return;
     }
+    const stillCurrent = siteApiProbeGuard();
     const routeKey = readBilibiliRouteKey();
     const ids = await resolveBilibiliVideoIds();
     if (!ids.bvid || !ids.cid) {
       return;
     }
-    if ((routeKey && routeKey !== readBilibiliRouteKey()) || !siteApiProbesAllowedHere()) {
+    if ((routeKey && routeKey !== readBilibiliRouteKey()) || !stillCurrent()) {
       return;
     }
     const key = `${ids.bvid}:${ids.cid}`;
@@ -522,7 +546,7 @@
         return;
       }
       const json = await response.json();
-      if ((routeKey && routeKey !== readBilibiliRouteKey()) || !siteApiProbesAllowedHere()) {
+      if ((routeKey && routeKey !== readBilibiliRouteKey()) || !stillCurrent()) {
         return;
       }
       postBilibiliPlayurlMedia(json?.data || json?.result || {});
@@ -962,10 +986,14 @@
   }
 
   function inspectObject(value, source, depth = 0, seen = new WeakSet(), budget = { nodes: MAX_OBJECT_INSPECTION_NODES }) {
-    if (!value || depth > MAX_DEPTH || budget.nodes <= 0) {
+    if (budget.nodes <= 0) {
       return;
     }
+    // Every visited item counts, including empty ones, so a huge array of nulls cannot run past the budget.
     budget.nodes -= 1;
+    if (!value || depth > MAX_DEPTH) {
+      return;
+    }
     if (typeof value === "string") {
       inspectText(value, location.href, source);
       return;
