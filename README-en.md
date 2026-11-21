@@ -32,7 +32,7 @@ After opening a video page, Liusheng Subtitles shows available media sources in 
 - Switch between translated text, original text, and bilingual display.
 - Show subtitles as a page overlay or in the side-panel subtitle list.
 - Edit translated cues, adjust subtitle timing, and delete incorrect subtitle segments.
-- Import SRT, VTT, ASS/SSA, and extension JSON subtitle files.
+- Import SRT, VTT, ASS/SSA, and JSON files that contain source and translated subtitles.
 - Export subtitles as SRT.
 - Cache subtitles locally so the same page can load existing subtitles later.
 - Support OpenAI Whisper, Groq Whisper, xAI Grok, Fun-ASR, and custom ASR endpoints.
@@ -86,7 +86,7 @@ If a task is interrupted, use **Continue** or **Retry Failed**. To translate aga
 
 ## Privacy
 
-API keys, model profiles, and subtitle caches are stored in the local browser. The extension does not send web videos, subtitle caches, or API keys to the Liusheng Subtitles developer's server. Audio and subtitle text are sent only to the ASR and translation services configured by the user.
+API keys, model profiles, and subtitle caches are stored in the local browser. The extension does not send web videos, subtitle caches, or API keys to the Liusheng Subtitles developer's server. Audio and subtitle text are sent only to the ASR and translation services configured by the user; translation requests also include the page address, title, description, and similar page details as context. Subtitle caches record the original page and media addresses from when the task ran.
 
 See [Privacy Notice](docs/PRIVACY.md) for details.
 
