@@ -471,6 +471,39 @@ const source = fs.readFileSync(new URL("../../extension/src/content/page-sniffer
     await flushPromises();
     assert.equal(clones, 0, `${item.label} bodies must not be cloned and buffered for inspection`);
   }
+  {
+    // No Content-Length: the cap must apply to the bytes actually read from the stream.
+    const encoder = new TextEncoder();
+    const chunks = [encoder.encode(" ".repeat(9 * 1024 * 1024)), encoder.encode(body)];
+    let cancelled = false;
+    const streamed = createFakeResponse("https://example.test/unbounded.json", body, { "content-type": "application/json" });
+    streamed.clone = () => ({
+      ...createFakeResponse("https://example.test/unbounded.json", body, { "content-type": "application/json" }),
+      body: {
+        getReader() {
+          let index = 0;
+          return {
+            async read() {
+              return index < chunks.length ? { done: false, value: chunks[index++] } : { done: true, value: undefined };
+            },
+            async cancel() {
+              cancelled = true;
+            }
+          };
+        }
+      }
+    });
+    const harness = createHarness({ locationHref: "https://example.test/watch", fetchResponse: streamed });
+    vm.runInContext(source, harness.context, { filename: "page-sniffer.js" });
+    await harness.context.window.fetch("https://example.test/unbounded.json");
+    await flushPromises();
+    assert.equal(cancelled, true, "a body that grows past the cap is cancelled");
+    assert.equal(
+      harness.messages.some(message => message.media?.url === manifestUrl),
+      false,
+      "media addresses beyond the read cap are not scanned"
+    );
+  }
   const normal = createFakeResponse("https://example.test/api.json", body, { "content-type": "application/json", "content-length": String(body.length) });
   const harness = createHarness({ locationHref: "https://example.test/watch", fetchResponse: normal });
   vm.runInContext(source, harness.context, { filename: "page-sniffer.js" });
@@ -591,6 +624,7 @@ function createHarness({
     URL,
     URLSearchParams,
     Headers,
+    TextDecoder,
     JSON,
     Number,
     String,

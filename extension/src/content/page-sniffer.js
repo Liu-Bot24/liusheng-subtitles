@@ -737,9 +737,7 @@
   function inspectResponse(response) {
     const contentType = response.headers?.get("content-type") || "";
     if (shouldInspectTextResponse(response.url, contentType, response.headers?.get("content-length") || "")) {
-      response
-        .clone()
-        .text()
+      readResponseTextWithinLimit(response.clone(), MAX_TEXT_RESPONSE_INSPECTION_BYTES)
         .then(text => inspectText(text, response.url, "fetch-body"))
         .catch(() => {});
     }
@@ -749,6 +747,31 @@
         .arrayBuffer()
         .then(buffer => inspectBinaryResponse(buffer, response.url, "fetch-body", contentType, response.headers?.get("content-length") || ""))
         .catch(() => {});
+    }
+  }
+
+  // Content-Length can be missing or describe the compressed size, so the cap is enforced on the bytes
+  // actually read; a body that grows past it is cancelled and not inspected.
+  async function readResponseTextWithinLimit(response, limit) {
+    const reader = response?.body?.getReader?.();
+    if (!reader) {
+      const text = await response.text();
+      return text.length > limit ? "" : text;
+    }
+    const decoder = new TextDecoder();
+    let received = 0;
+    let text = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) {
+        return text + decoder.decode();
+      }
+      received += value?.byteLength || 0;
+      if (received > limit) {
+        reader.cancel().catch(() => {});
+        return "";
+      }
+      text += decoder.decode(value, { stream: true });
     }
   }
 
@@ -956,15 +979,17 @@
     seen.add(value);
     inspectStructuredMediaObject(value, source);
     inspectXTwitterTweetMedia(value, source);
-    if (Array.isArray(value)) {
-      value.forEach(item => inspectObject(item, source, depth + 1, seen, budget));
-      return;
+    const children = Array.isArray(value) ? value : Object.values(value);
+    for (const item of children) {
+      if (budget.nodes <= 0) {
+        return;
+      }
+      inspectObject(item, source, depth + 1, seen, budget);
     }
-    Object.values(value).forEach(item => inspectObject(item, source, depth + 1, seen, budget));
   }
 
   function inspectText(text, baseUrl, source) {
-    if (!text) {
+    if (!text || typeof text !== "string" || text.length > MAX_TEXT_RESPONSE_INSPECTION_BYTES) {
       return;
     }
     if (text.slice(0, 7).toUpperCase() === "#EXTM3U") {
