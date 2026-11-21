@@ -758,6 +758,8 @@ let translationRetryRequestInFlight = false;
 let subtitleCues = [];
 let currentTranscript = null;
 let jobTranscriptBase = null;
+// The task whose saved edits were already looked up against its transcript in this panel session.
+let savedEditsCheckedJobId = "";
 let currentSubtitleCacheEntry = null;
 let subtitleDisplayMode = DEFAULTS.subtitleDisplayMode;
 let subtitleOverlayEnabled = DEFAULTS.subtitleOverlayEnabled;
@@ -2527,7 +2529,7 @@ async function renderSubtitles(jobId, job = null) {
   }
   const requestId = ++subtitleLoadRequestId;
   pendingSubtitleSignature = pendingKey;
-  const pending = loadSubtitleCuesWithUserEdits(jobId, !(renderedSubtitleJobId === jobId && subtitleCues.length > 0));
+  const pending = loadSubtitleCuesWithUserEdits(jobId, savedEditsCheckedJobId !== String(jobId || ""));
   pendingSubtitlePromise = pending;
   let result;
   try {
@@ -2547,6 +2549,9 @@ async function renderSubtitles(jobId, job = null) {
       signature: result.baseSignature || jobTranscriptSignature(result.transcript),
       transcript: null
     };
+    if (result.savedEditsChecked) {
+      savedEditsCheckedJobId = String(jobId || "");
+    }
     if (result.editedEntry) {
       applyUserEditedCacheEntry(jobId, result.editedEntry);
       startSubtitleFollow();
@@ -2594,7 +2599,7 @@ async function loadSubtitleCuesWithUserEdits(jobId, checkSavedEdits) {
   }
   const baseSignature = jobTranscriptSignature(result.transcript);
   const editedEntry = await userEditedCacheEntryForJob(jobId, baseSignature);
-  return { ...result, baseSignature, editedEntry };
+  return { ...result, baseSignature, editedEntry, savedEditsChecked: true };
 }
 
 async function userEditedCacheEntryForJob(jobId, baseSignature) {
@@ -2937,6 +2942,7 @@ function clearSubtitles(text, jobId = "") {
   renderedSubtitleRevision = 0;
   manualSubtitleOverride = null;
   jobTranscriptBase = null;
+  savedEditsCheckedJobId = "";
   attachedSubtitleTabId = 0;
   attachedSubtitleSignature = "";
   subtitleCues = [];

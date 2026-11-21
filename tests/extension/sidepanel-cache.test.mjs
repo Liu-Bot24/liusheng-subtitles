@@ -6913,12 +6913,17 @@ const editedSubtitlesSurviveReopenState = await vm.runInContext(`
     };
     getSubtitleCacheEntryForCurrentPage = async () => ({ key: savedEntry?.id || "", entry: savedEntry });
     attachCurrentSubtitlesToPage = async () => {};
+    let vttOnlyLoads = 0;
     loadSubtitleCues = async () => {
       const transcript = {
         source: [{ start: 0, end: 1, text: "original line" }],
         translated: [{ start: 0, end: 1, text: taskTranslation }],
         chunkStatuses: []
       };
+      if (vttOnlyLoads > 0) {
+        vttOnlyLoads -= 1;
+        return { cues: cuesFromTranscript(transcript), source: "vtt", transcript: null };
+      }
       return { cues: cuesFromTranscript(transcript), source: "transcript", transcript };
     };
     function reopenPanel() {
@@ -6929,6 +6934,7 @@ const editedSubtitlesSurviveReopenState = await vm.runInContext(`
       currentTranscript = null;
       currentSubtitleCacheEntry = null;
       jobTranscriptBase = null;
+      savedEditsCheckedJobId = "";
     }
     try {
       activeTab = { id: 1, url: "https://example.test/edit-reopen", title: "Edit page" };
@@ -6944,6 +6950,12 @@ const editedSubtitlesSurviveReopenState = await vm.runInContext(`
       reopenPanel();
       await renderSubtitles("job-edit-reopen", job);
       const afterReopen = subtitleCues[0]?.text;
+
+      reopenPanel();
+      vttOnlyLoads = 1;
+      await renderSubtitles("job-edit-reopen", job);
+      await renderSubtitles("job-edit-reopen", { ...job, translation: { ...job.translation, segmentCount: 2 } });
+      const afterVttFallback = subtitleCues[0]?.text;
 
       FuguangSubtitleFormat.parseSubtitleImportText = () => ({
         transcript: {
@@ -6973,6 +6985,7 @@ const editedSubtitlesSurviveReopenState = await vm.runInContext(`
         savedMarkerJobId: savedMarker?.jobId || "",
         savedMarkerHasBase: Boolean(savedMarker?.baseSignature),
         afterReopen,
+        afterVttFallback,
         importMarker,
         afterImportReopen,
         afterRetranslation
@@ -6994,6 +7007,7 @@ assert.deepEqual(JSON.parse(JSON.stringify(editedSubtitlesSurviveReopenState)), 
   savedMarkerJobId: "job-edit-reopen",
   savedMarkerHasBase: true,
   afterReopen: "用户改过的译文",
+  afterVttFallback: "用户改过的译文",
   importMarker: null,
   afterImportReopen: "任务原译文",
   afterRetranslation: "重新翻译后的译文"
