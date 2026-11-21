@@ -18,7 +18,11 @@ test("account and configuration failures are permanent whatever the wording", ()
     httpError(401, "Incorrect API key provided"),
     httpError(402, "Insufficient balance"),
     httpError(404, "The model does not exist"),
-    httpError(403, "Your account was flagged for policy violation and has been deactivated")
+    httpError(403, "Your account was flagged for policy violation and has been deactivated"),
+    httpError(401, "Account suspended", "content_policy_violation"),
+    httpError(402, "Payment required", "moderation_blocked"),
+    httpError(404, "Model not found", "content_filter"),
+    httpError(403, "Your account has been disabled", "content_policy_violation")
   ]) {
     assert.equal(provider.browserTranslationErrorIsPermanent(error), true, error.message);
     assert.equal(provider.browserTranslationErrorIsContentPolicy(error), false, error.message);

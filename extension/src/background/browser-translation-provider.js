@@ -413,7 +413,10 @@ export const FuguangBrowserTranslationProvider = (() => {
       return false;
     }
     const message = browserTranslationErrorMessageText(error);
-    return BROWSER_TRANSLATION_ACCOUNT_WORDING.test(message) || !browserTranslationMessageIsContentPolicy(message);
+    if (BROWSER_TRANSLATION_ACCOUNT_WORDING.test(message)) {
+      return true;
+    }
+    return !browserTranslationProviderCodeIsContentPolicy(error) && !browserTranslationMessageIsContentPolicy(message);
   }
 
   function browserTranslationProviderCodeIsContentPolicy(error) {
@@ -421,12 +424,14 @@ export const FuguangBrowserTranslationProvider = (() => {
     return Boolean(code) && /(content[_-]?(?:filter|policy|moderation)|moderation|data[_-]?inspection|sensitive|safety|risk)/.test(code);
   }
 
+  // Account and configuration failures (401/402/404, or a 403 worded about the account) win over any
+  // moderation code or wording, so they are never split into many paid retries.
   function browserTranslationErrorIsPermanent(error) {
-    if (browserTranslationProviderCodeIsContentPolicy(error)) {
-      return false;
-    }
     if (browserTranslationErrorIsAccountFailure(error)) {
       return true;
+    }
+    if (browserTranslationProviderCodeIsContentPolicy(error)) {
+      return false;
     }
     if (browserTranslationErrorIsContentPolicy(error) || browserTranslationErrorIsRateLimited(error)) {
       return false;
@@ -486,11 +491,11 @@ export const FuguangBrowserTranslationProvider = (() => {
   }
 
   function browserTranslationErrorIsContentPolicy(errorOrMessage) {
-    if (browserTranslationProviderCodeIsContentPolicy(errorOrMessage)) {
-      return true;
-    }
     if (browserTranslationErrorIsAccountFailure(errorOrMessage) || browserTranslationErrorStatus(errorOrMessage) === 429) {
       return false;
+    }
+    if (browserTranslationProviderCodeIsContentPolicy(errorOrMessage)) {
+      return true;
     }
     return browserTranslationMessageIsContentPolicy(browserTranslationErrorMessageText(errorOrMessage));
   }
