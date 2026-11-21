@@ -1168,6 +1168,9 @@ export const FuguangBrowserMediaCandidates = (() => {
     if (candidate.duration) {
       return true;
     }
+    if (isMpegTsSegmentCandidate(candidate)) {
+      return false;
+    }
     if (candidate.source === "media-element") {
       return true;
     }

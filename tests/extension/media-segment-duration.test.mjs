@@ -16,3 +16,17 @@ test("whole recordings keep their page duration", () => {
   assert.equal(candidates.isMpegTsSegmentCandidate({ url: "file:///D:/videos/recording.ts", ext: "ts" }), false);
   assert.equal(candidates.isMpegTsSegmentCandidate({ url: "https://cdn.example.test/video.mp4", source: "webrequest" }), false);
 });
+
+test("segments get no page duration in the candidate list, Bilibili CDN included", () => {
+  const state = {
+    candidates: [
+      { url: "https://upos-sz-mirror.bilivideo.com/upgcxcode/seg-3.ts", source: "webrequest", kind: "media", ext: "ts" },
+      { url: "https://cdn.example.test/hls/seg-3.ts", source: "webrequest", kind: "media", ext: "ts" }
+    ],
+    context: { duration: 660, hasMedia: true },
+    page: { url: "https://www.bilibili.com/video/BV1x" }
+  };
+  for (const candidate of candidates.getGroupedCandidatesForState(state)) {
+    assert.equal(candidate.duration, null, candidate.url);
+  }
+});
