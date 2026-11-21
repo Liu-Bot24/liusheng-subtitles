@@ -122,6 +122,7 @@ var MANIFEST_EXTENSIONS = FuguangBrowserMediaCandidates.MANIFEST_EXTENSIONS;
 var candidateFingerprint = FuguangBrowserMediaCandidates.candidateFingerprint;
 var candidatesReferToSamePreloadTarget = FuguangBrowserMediaCandidates.candidatesReferToSamePreloadTarget;
 var classifyUrl = FuguangBrowserMediaCandidates.classifyUrl;
+var isMpegTsSegmentCandidate = FuguangBrowserMediaCandidates.isMpegTsSegmentCandidate;
 var compactRequestHeaders = FuguangBrowserMediaCandidates.compactRequestHeaders;
 var compactResponseHeaders = FuguangBrowserMediaCandidates.compactResponseHeaders;
 var firstUsefulTitle = FuguangBrowserMediaCandidates.firstUsefulTitle;
@@ -1708,7 +1709,9 @@ async function extractCandidateAudioInBrowserNow(record) {
       mime: candidate.contentType || candidate.mime || "",
       pageUrl,
       initiator: candidate.initiator || "",
-      duration: pickFinite(candidate.duration, record.metadata?.duration),
+      duration: isMpegTsSegmentCandidate(candidate)
+        ? pickFinite(candidate.duration)
+        : pickFinite(candidate.duration, record.metadata?.duration),
       mseFragments: candidate.mseFragments || candidate.sourcePlan?.ffmpegInput?.fragments || [],
       dashFragments: candidate.dashFragments || [],
       chunkSeconds: record.modelConfig.chunkSeconds,

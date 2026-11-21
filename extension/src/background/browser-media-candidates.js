@@ -1265,14 +1265,31 @@ export const FuguangBrowserMediaCandidates = (() => {
       (initiator.startsWith("http") && currentPageUrl.startsWith("http"));
   }
   
+  // MPEG-TS responses are playlist segments; one segment never carries the page player's full length.
+  function isMpegTsResource(candidate, contentType = "", pathname = "") {
+    const type = String(contentType || candidate?.contentType || candidate?.mime || "").toLowerCase();
+    let path = String(pathname || "");
+    if (!path) {
+      try {
+        path = new URL(String(candidate?.url || "")).pathname;
+      } catch {
+        path = "";
+      }
+    }
+    return candidate?.ext === "ts" || /\.ts$/i.test(path) || type === "video/mp2t" || type === "video/mp2ts";
+  }
+
+  // A network-captured .ts segment must not borrow the page duration. A .ts file the page plays directly
+  // in a media element, or a local file, is a whole recording and keeps it.
+  function isMpegTsSegmentCandidate(candidate) {
+    if (!candidate || candidate.source === "media-element" || /^file:/i.test(String(candidate.url || ""))) {
+      return false;
+    }
+    return isMpegTsResource(candidate);
+  }
+
   function isLikelyDirectPlayableMedia(candidate, contentType, urlInfo) {
-    // MPEG-TS responses are playlist segments; one segment never carries the page player's full length.
-    if (
-      candidate.ext === "ts" ||
-      /\.ts$/i.test(urlInfo.pathname || "") ||
-      contentType === "video/mp2t" ||
-      contentType === "video/mp2ts"
-    ) {
+    if (isMpegTsResource(candidate, contentType, urlInfo.pathname)) {
       return false;
     }
     if (contentType.startsWith("audio/") || contentType.startsWith("video/")) {
@@ -1697,6 +1714,7 @@ export const FuguangBrowserMediaCandidates = (() => {
     isGenericBinaryContentType,
     isIgnoredMediaUrl,
     isMediaContentType,
+    isMpegTsSegmentCandidate,
     mergeCandidate,
     pickFinite,
     pruneCandidatesForRetention,
