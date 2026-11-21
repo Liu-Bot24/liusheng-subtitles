@@ -17543,3 +17543,30 @@ assert.equal(context.shouldRetryBrowserAsrClipRequestError({
     chrome.alarms.clear = originalAlarmClear;
   }
 }
+
+{
+  const originalAlarmCreate = chrome.alarms.create;
+  const originalAlarmGet = chrome.alarms.get;
+  const created = [];
+  let stored = null;
+  chrome.alarms.create = async (name, options) => {
+    created.push(name);
+    stored = { name, periodInMinutes: options.periodInMinutes, scheduledTime: created.length };
+  };
+  chrome.alarms.get = async name => (stored && stored.name === name ? { ...stored } : undefined);
+  try {
+    for (let start = 0; start < 3; start += 1) {
+      context.scheduleBrowserAudioCacheMaintenance();
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }
+    assert.deepEqual(created, ["fuguang-audio-cache-cleanup"],
+      "worker restarts must keep the existing cleanup alarm instead of restarting its countdown");
+    stored = null;
+    context.scheduleBrowserAudioCacheMaintenance();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(created.length, 2, "a cleared cleanup alarm must be created again");
+  } finally {
+    chrome.alarms.create = originalAlarmCreate;
+    chrome.alarms.get = originalAlarmGet;
+  }
+}

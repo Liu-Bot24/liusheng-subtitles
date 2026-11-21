@@ -7439,14 +7439,23 @@ function scheduleBrowserAudioCacheMaintenance() {
         recoverExpiredBrowserJobLease(jobId).catch(() => {});
       }
     });
-    const created = chrome.alarms?.create?.(WEB_FFMPEG_AUDIO_CACHE_CLEANUP_ALARM, {
-      delayInMinutes: WEB_FFMPEG_AUDIO_CACHE_CLEANUP_INTERVAL_MINUTES,
-      periodInMinutes: WEB_FFMPEG_AUDIO_CACHE_CLEANUP_INTERVAL_MINUTES
-    });
-    created?.catch?.(() => {});
+    ensureBrowserAudioCacheCleanupAlarm().catch(() => {});
   } catch {
     // Cache cleanup is opportunistic; manual clearing must keep working even if alarms are unavailable.
   }
+}
+
+// Creating an alarm that already exists replaces it and restarts its countdown. The service worker starts
+// many times an hour, so recreating it on every start would keep the hourly cleanup from ever firing.
+async function ensureBrowserAudioCacheCleanupAlarm() {
+  const existing = await chrome.alarms?.get?.(WEB_FFMPEG_AUDIO_CACHE_CLEANUP_ALARM);
+  if (existing && Number(existing.periodInMinutes) === WEB_FFMPEG_AUDIO_CACHE_CLEANUP_INTERVAL_MINUTES) {
+    return;
+  }
+  await chrome.alarms?.create?.(WEB_FFMPEG_AUDIO_CACHE_CLEANUP_ALARM, {
+    delayInMinutes: WEB_FFMPEG_AUDIO_CACHE_CLEANUP_INTERVAL_MINUTES,
+    periodInMinutes: WEB_FFMPEG_AUDIO_CACHE_CLEANUP_INTERVAL_MINUTES
+  });
 }
 
 async function requestBrowserJobLedgerMaintenance(now = Date.now()) {
