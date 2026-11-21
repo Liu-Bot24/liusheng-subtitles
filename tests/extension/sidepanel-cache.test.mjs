@@ -1848,6 +1848,25 @@ const settingsSaveFailureState = await vm.runInContext(`
 
 assert.match(settingsSaveFailureState, /设置没有保存成功/, "a failed settings write must be reported instead of claiming success");
 
+const displaySettingsSaveFailureState = await vm.runInContext(`
+  (async () => {
+    const originalSyncSet = chrome.storage.sync.set;
+    chrome.storage.sync.set = async () => {
+      throw new Error("MAX_WRITE_OPERATIONS_PER_MINUTE");
+    };
+    try {
+      elements.message.textContent = "";
+      await saveSettings();
+      return elements.message.textContent;
+    } finally {
+      chrome.storage.sync.set = originalSyncSet;
+    }
+  })()
+`, context);
+
+assert.match(displaySettingsSaveFailureState, /模型配置已保存.*字幕显示设置没有保存成功/,
+  "when only the synced display settings fail, the message says the model settings were saved");
+
 const llmProfileTemplateState = await vm.runInContext(`
   (() => {
     llmProfiles = normalizeStoredProfiles("llm", [

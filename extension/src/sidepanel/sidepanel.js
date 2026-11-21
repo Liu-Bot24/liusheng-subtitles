@@ -282,6 +282,7 @@ const I18N = {
     noSavedCacheAndDisplayCleared: "当前页面没有已保存的字幕缓存，已清除当前显示。",
     settingsSaved: "设置已保存。新任务会使用当前配置。",
     settingsSaveFailed: "设置没有保存成功：{error}",
+    settingsDisplaySaveFailed: "模型配置已保存，新任务会使用当前配置；字幕显示设置没有保存成功：{error}",
     profileAdded: "已新增档案，请按需要修改并保存。",
     profileDeleted: "已删除当前档案。保存设置后会更新本机存储。",
     unnamedProfile: "未命名档案",
@@ -573,6 +574,7 @@ const I18N = {
     noSavedCacheAndDisplayCleared: "No saved subtitle cache was found; current display was cleared.",
     settingsSaved: "Settings saved. New tasks will use this configuration.",
     settingsSaveFailed: "Settings were not saved: {error}",
+    settingsDisplaySaveFailed: "Model settings were saved and new tasks will use them, but subtitle display settings were not saved: {error}",
     profileAdded: "Profile added. Edit it as needed, then save.",
     profileDeleted: "Deleted the current profile. Save settings to update local storage.",
     unnamedProfile: "Untitled profile",
@@ -1637,7 +1639,8 @@ async function saveSettings() {
   try {
     await writeSettingsToStorage();
   } catch (error) {
-    setSettingsMessage(t("settingsSaveFailed", { error: formatRuntimeError(error?.message || String(error)) }));
+    const key = error?.displaySettingsOnly ? "settingsDisplaySaveFailed" : "settingsSaveFailed";
+    setSettingsMessage(t(key, { error: formatRuntimeError(error?.message || String(error)) }));
     return;
   }
   setSettingsMessage(t("settingsSaved"));
@@ -1659,6 +1662,14 @@ async function writeSettingsToStorage() {
     chunkMinutes: Math.round(clampSetting(elements.chunkMinutes.value, 1, 60, DEFAULTS.chunkMinutes))
   });
   await chrome.storage.local.remove(["asrApiKey", "llmApiKey", "asrBaseUrl", "asrModel", "llmBaseUrl", "llmModel", "llmProviderType", "asrWorkers"]).catch(() => {});
+  await writeDisplaySettingsToSyncStorage().catch(error => {
+    const failure = error instanceof Error ? error : new Error(String(error));
+    failure.displaySettingsOnly = true;
+    throw failure;
+  });
+}
+
+async function writeDisplaySettingsToSyncStorage() {
   await chrome.storage.sync.set({
     subtitleFontSize: clampSetting(elements.subtitleFontSize.value, 18, 48, DEFAULTS.subtitleFontSize),
     subtitleOverlayEnabled,
