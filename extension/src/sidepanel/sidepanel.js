@@ -794,6 +794,8 @@ let taskDetailsExpanded = false;
 let taskDetailsManuallyCollapsed = false;
 let renderedCandidateSignature = "";
 let lastActivatedTabKey = "";
+// The latest address Chrome reported for the active tab; until refreshActiveTab catches up, activeTab is stale.
+let activeTabLatestNavigation = null;
 let elapsedTicker = 0;
 const clearedSubtitleJobIds = new Set();
 const retryingChunks = new Set();
@@ -986,11 +988,16 @@ function bindTabLifecycleListeners() {
     if (activeTab?.windowId && activeInfo?.windowId && Number(activeInfo.windowId) !== Number(activeTab.windowId)) {
       return;
     }
+    // Address changes of a tab are only tracked while it is the active one.
+    activeTabLatestNavigation = null;
     queueStatusRefresh();
   });
   chrome.tabs?.onUpdated?.addListener?.((tabId, changeInfo) => {
     if (Number(tabId) !== Number(activeTab?.id) || (!changeInfo?.url && changeInfo?.status !== "complete")) {
       return;
+    }
+    if (changeInfo?.url) {
+      activeTabLatestNavigation = { tabId: Number(tabId), url: String(changeInfo.url) };
     }
     if (changeInfo?.url && changeInfo.url !== activeTab?.url) {
       invalidatePendingSubtitleLoads();
@@ -1111,6 +1118,10 @@ async function refreshActiveTab() {
       clearSubtitles(t("subtitlePlaceholder"));
       renderEmptyJob(t("tabChangedReading"));
     }
+  }
+  if (activeTabLatestNavigation && (activeTabLatestNavigation.tabId !== Number(activeTab?.id) ||
+      activeTabLatestNavigation.url === String(activeTab?.url || ""))) {
+    activeTabLatestNavigation = null;
   }
   return activeTab;
 }
@@ -2652,8 +2663,14 @@ function invalidatePendingSubtitleLoads() {
   pendingSubtitleSignature = "";
 }
 
+function activeTabIsBehindNavigation() {
+  return Boolean(activeTabLatestNavigation && activeTab?.id !== undefined &&
+    activeTabLatestNavigation.tabId === Number(activeTab.id) &&
+    activeTabLatestNavigation.url !== String(activeTab.url || ""));
+}
+
 function shouldApplySubtitleRenderLoad(requestId, requestTabKey, requestCurrentJobId) {
-  if (requestId !== subtitleLoadRequestId) {
+  if (requestId !== subtitleLoadRequestId || activeTabIsBehindNavigation()) {
     return false;
   }
   if (!requestTabKey || activeTabKey(activeTab) !== requestTabKey) {
@@ -4294,6 +4311,7 @@ async function tryLoadCachedSubtitleForCurrentPage() {
 function shouldApplyCachedSubtitleLoad(requestTabKey, requestLoadId) {
   return Boolean(
     requestTabKey &&
+    !activeTabIsBehindNavigation() &&
     activeTabKey(activeTab) === requestTabKey &&
     subtitleLoadRequestId === requestLoadId &&
     !currentJobId &&

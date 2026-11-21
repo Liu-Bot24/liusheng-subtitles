@@ -6732,23 +6732,35 @@ const navigationDuringSubtitleLoadState = await vm.runInContext(`
       renderedSubtitleSignature = "";
       subtitleCues = [];
       currentTranscript = null;
-      const rendering = renderSubtitles("job-old-page", { translation: { segmentCount: 1, chunksDone: 1, chunksFailed: 0, vttPath: "browser-memory" } });
-      chrome.tabs.onUpdated.emit(1, { url: "https://other.example/new-page" });
+      const job = { translation: { segmentCount: 1, chunksDone: 1, chunksFailed: 0, vttPath: "browser-memory" } };
       const transcript = { source: [{ start: 0, end: 1, text: "old" }], translated: [{ start: 0, end: 1, text: "旧页面字幕" }], chunkStatuses: [] };
+      const rendering = renderSubtitles("job-old-page", job);
+      chrome.tabs.onUpdated.emit(1, { url: "https://other.example/new-page" });
       resolveLoad({ cues: cuesFromTranscript(transcript), source: "transcript", transcript });
       await rendering;
-      return { attachCalls, cueCount: subtitleCues.length };
+      const loadStartedBefore = { attachCalls, cueCount: subtitleCues.length };
+
+      // A refresh that began before the navigation starts its subtitle load only afterwards.
+      activeTab = { id: 1, windowId: 1, url: "https://example.test/watch/old", title: "Old" };
+      const lateRendering = renderSubtitles("job-old-page", job);
+      resolveLoad({ cues: cuesFromTranscript(transcript), source: "transcript", transcript });
+      await lateRendering;
+      return { loadStartedBefore, loadStartedAfter: { attachCalls, cueCount: subtitleCues.length } };
     } finally {
       loadSubtitleCues = originalLoadSubtitleCues;
       attachCurrentSubtitlesToPage = originalAttach;
       refreshStatus = originalRefreshStatus;
       getSubtitleCacheEntryForCurrentPage = originalGetEntry;
       currentJobId = "";
+      activeTabLatestNavigation = null;
     }
   })()
 `, context);
 
-assert.deepEqual(JSON.parse(JSON.stringify(navigationDuringSubtitleLoadState)), { attachCalls: 0, cueCount: 0 },
+assert.deepEqual(JSON.parse(JSON.stringify(navigationDuringSubtitleLoadState)), {
+  loadStartedBefore: { attachCalls: 0, cueCount: 0 },
+  loadStartedAfter: { attachCalls: 0, cueCount: 0 }
+},
   "subtitles that finish loading after the tab moved to another address are neither shown nor attached");
 
 
